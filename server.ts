@@ -5817,20 +5817,13 @@ async function startServer() {
   });
 
   const distPath = path.join(__dirname, 'dist');
-  const isProduction = process.env.NODE_ENV === 'production';
   const hasBuiltDist = fs.existsSync(path.join(distPath, 'index.html'));
 
-  if (isProduction && hasBuiltDist) {
+  if (hasBuiltDist) {
     app.use(express.static(distPath));
-    app.get('*', (_req, res, next) => {
+    app.get('*', (_req, res) => {
       const indexPath = path.join(distPath, 'index.html');
-      if (fs.existsSync(indexPath)) {
-        res.sendFile(indexPath, (err) => {
-          if (err) next(err);
-        });
-      } else {
-        next();
-      }
+      res.sendFile(indexPath);
     });
   } else {
     // In dev mode (AI Studio preview), ALWAYS mount Vite middlewares for live SPA execution
