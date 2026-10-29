@@ -3,7 +3,7 @@ services:
     name: sun-bingo
     env: node
     plan: free
-    buildCommand: npm install --include=dev && npm run build
+    buildCommand: npm install --include=dev --legacy-peer-deps && npm run build
     startCommand: npm run start
     healthCheckPath: /api/cron
     autoDeploy: true
