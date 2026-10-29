@@ -1,0 +1,6 @@
+{
+  "name": "Ezi Bingo (ኢዚ ቢንጎ)",
+  "description": "የኢትዮጵያ ቢንጎ ጨዋታ መተግበሪያ ከ16 አሸናፊ ቅጦች፣ ትክክለኛ የቢንጎ ማረጋገጫ፣ 75-ኳስ ሰሌዳ፣ ዋሌት እና የአድሚን ፓነል ጋር።",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

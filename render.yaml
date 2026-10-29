@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: sun-bingo
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22.23.4
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: SHARED_APP_URL
+        value: https://sun-bingo.onrender.com
+      - key: ADMIN_SECRET_PIN
+        value: 7788
+

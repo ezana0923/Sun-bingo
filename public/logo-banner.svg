@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 450" width="1200" height="450">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1838"/>
+      <stop offset="50%" stop-color="#132754"/>
+      <stop offset="100%" stop-color="#071024"/>
+    </linearGradient>
+    <linearGradient id="eziFill" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#7dd3fc"/>
+      <stop offset="30%" stop-color="#38bdf8"/>
+      <stop offset="70%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <linearGradient id="bingoFill" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#86efac"/>
+      <stop offset="30%" stop-color="#4ade80"/>
+      <stop offset="70%" stop-color="#16a34a"/>
+      <stop offset="100%" stop-color="#15803d"/>
+    </linearGradient>
+    <radialGradient id="dotGrad" cx="35%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#fde047"/>
+      <stop offset="45%" stop-color="#f59e0b"/>
+      <stop offset="85%" stop-color="#d97706"/>
+      <stop offset="100%" stop-color="#92400e"/>
+    </radialGradient>
+    <filter id="dropShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="450" rx="36" fill="url(#bgGrad)"/>
+
+  <g filter="url(#dropShadow)">
+    <!-- Ezi on Left -->
+    <g transform="translate(245, 305) skewX(-14)" text-anchor="middle" font-family="'Arial Black', 'Montserrat', 'Impact', sans-serif" font-weight="900">
+      <text x="0" y="0" font-size="235" letter-spacing="4" stroke="#ffffff" stroke-width="40" stroke-linejoin="round" paint-order="stroke fill" fill="#ffffff">Ezi</text>
+      <text x="10" y="6" font-size="235" letter-spacing="4" stroke="#0f296b" stroke-width="18" stroke-linejoin="round" paint-order="stroke fill" fill="#172554">Ezi</text>
+      <text x="0" y="0" font-size="235" letter-spacing="4" stroke="#1e3a8a" stroke-width="18" stroke-linejoin="round" paint-order="stroke fill" fill="url(#eziFill)">Ezi</text>
+      <text x="0" y="0" font-size="235" letter-spacing="4" stroke="#bae6fd" stroke-width="3.5" stroke-linejoin="round" paint-order="stroke fill" fill="url(#eziFill)">Ezi</text>
+    </g>
+
+    <!-- Bingo on Right -->
+    <g transform="translate(805, 305) skewX(-14)" text-anchor="middle" font-family="'Arial Black', 'Montserrat', 'Impact', sans-serif" font-weight="900">
+      <text x="0" y="0" font-size="225" letter-spacing="3" stroke="#ffffff" stroke-width="40" stroke-linejoin="round" paint-order="stroke fill" fill="#ffffff">Bingo</text>
+      <text x="10" y="6" font-size="225" letter-spacing="3" stroke="#064e3b" stroke-width="18" stroke-linejoin="round" paint-order="stroke fill" fill="#052e16">Bingo</text>
+      <text x="0" y="0" font-size="225" letter-spacing="3" stroke="#14532d" stroke-width="18" stroke-linejoin="round" paint-order="stroke fill" fill="url(#bingoFill)">Bingo</text>
+      <text x="0" y="0" font-size="225" letter-spacing="3" stroke="#bbf7d0" stroke-width="3.5" stroke-linejoin="round" paint-order="stroke fill" fill="url(#bingoFill)">Bingo</text>
+    </g>
+
+    <!-- Bottom Line + 2 Orange Dots -->
+    <g transform="translate(0, 385)">
+      <rect x="95" y="-8" width="465" height="16" rx="8" fill="#3b82f6"/>
+      <circle cx="592" cy="0" r="14" fill="url(#dotGrad)"/>
+      <circle cx="632" cy="0" r="14" fill="url(#dotGrad)"/>
+      <rect x="664" y="-8" width="465" height="16" rx="8" fill="#22c55e"/>
+    </g>
+  </g>
+</svg>

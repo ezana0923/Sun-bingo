@@ -1,0 +1,2891 @@
+{
+  "tokens": [
+    {
+      "token": "8328780488:AAExgv8-J7om5patsQpKziTZGXdzGNMSS24",
+      "botUsername": "Ezigamsbot",
+      "botFirstName": "Good bingo",
+      "appUrl": "https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app",
+      "offset": 622809334
+    },
+    {
+      "token": "8851914271:AAH7F5N-_-X5mnpV5JteGvvnyeGJd56zQuA",
+      "botUsername": "Sungamsbot",
+      "botFirstName": "Kidame",
+      "appUrl": "https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app",
+      "offset": 341832355
+    }
+  ],
+  "registeredPhones": [
+    [
+      2052547445,
+      "0984907051"
+    ],
+    [
+      7372523979,
+      "0942742684"
+    ],
+    [
+      5763356013,
+      "0914811647"
+    ],
+    [
+      8878763975,
+      "0711742684"
+    ],
+    [
+      7493091695,
+      "0914553414"
+    ]
+  ],
+  "bonusClaimed": [
+    2052547445,
+    7372523979,
+    5763356013,
+    8878763975,
+    7493091695
+  ],
+  "globalRegisteredPhone": null,
+  "globalWalletBalance": 2912,
+  "globalBonusBalance": 75,
+  "players": [
+    {
+      "id": "usr-2684-261",
+      "phone": "0942742684",
+      "name": "Player_2684",
+      "balance": 2922,
+      "bonusBalance": 15,
+      "referralEarnings": 10,
+      "referredCount": 1,
+      "isBlocked": false,
+      "updatedAt": "10/25/2026, 8:28:57 PM",
+      "chatId": 7372523979,
+      "passwordHash": "74748484"
+    },
+    {
+      "id": "usr-5104-011",
+      "phone": "0911445104",
+      "name": "Player_5104",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/9/2026, 5:28:59 AM"
+    },
+    {
+      "id": "usr-7051-390",
+      "phone": "0984907051",
+      "name": "Prince jo",
+      "chatId": 2052547445,
+      "balance": 915,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/9/2026, 9:31:35 AM"
+    },
+    {
+      "id": "usr-1647-098",
+      "phone": "0914811647",
+      "name": "Eby",
+      "chatId": 5763356013,
+      "balance": 515,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/9/2026, 7:36:51 AM"
+    },
+    {
+      "id": "usr-2684-513",
+      "phone": "0711742684",
+      "name": "@EzBinGoSupport",
+      "chatId": 8878763975,
+      "balance": 0,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/9/2026, 9:31:35 AM"
+    },
+    {
+      "id": "usr-0933-241",
+      "phone": "0911660933",
+      "name": "Player_0933",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/11/2026, 10:01:52 AM"
+    },
+    {
+      "id": "usr-9855-782",
+      "phone": "0997539855",
+      "name": "Princess",
+      "balance": 0,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/11/2026, 3:39:46 PM",
+      "passwordHash": "74748484"
+    },
+    {
+      "id": "usr-3414-188",
+      "phone": "0914553414",
+      "name": "Me",
+      "chatId": 7493091695,
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/11/2026, 3:32:21 PM"
+    },
+    {
+      "id": "usr-8566-123",
+      "phone": "0911478566",
+      "name": "Player_8566",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/11/2026, 4:36:25 PM"
+    },
+    {
+      "id": "usr-9892-820",
+      "phone": "0911469892",
+      "name": "Player_9892",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/11/2026, 10:00:28 PM"
+    },
+    {
+      "id": "usr-8014-462",
+      "phone": "0911768014",
+      "name": "Player_8014",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/11/2026, 10:01:32 PM"
+    },
+    {
+      "id": "usr-1894-413",
+      "phone": "0911731894",
+      "name": "Player_1894",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/12/2026, 1:57:23 PM"
+    },
+    {
+      "id": "usr-2684-080",
+      "phone": "0942722684",
+      "name": "Player_2684",
+      "balance": 57,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/12/2026, 2:18:14 PM",
+      "passwordHash": "74748484"
+    },
+    {
+      "id": "usr-2414-996",
+      "phone": "0911942414",
+      "name": "Player_2414",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/14/2026, 11:52:54 AM"
+    },
+    {
+      "id": "usr-4423-247",
+      "phone": "0911324423",
+      "name": "Player_4423",
+      "balance": 205,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/18/2026, 8:25:23 AM"
+    },
+    {
+      "id": "usr-9721-133",
+      "phone": "0911469721",
+      "name": "Player_9721",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/19/2026, 11:36:53 AM"
+    },
+    {
+      "id": "usr-3448-414",
+      "phone": "0911373448",
+      "name": "Player_3448",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/20/2026, 12:05:28 PM"
+    },
+    {
+      "id": "usr-5752-457",
+      "phone": "0911615752",
+      "name": "Player_5752",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/25/2026, 8:22:49 PM"
+    },
+    {
+      "id": "usr-3388-935",
+      "phone": "0911353388",
+      "name": "Player_3388",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/27/2026, 8:44:18 AM"
+    },
+    {
+      "id": "usr-6889-935",
+      "phone": "0911316889",
+      "name": "Player_6889",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/29/2026, 5:49:34 AM"
+    },
+    {
+      "id": "usr-8577-146",
+      "phone": "0911718577",
+      "name": "Player_8577",
+      "balance": 15,
+      "bonusBalance": 15,
+      "referralEarnings": 0,
+      "referredCount": 0,
+      "isBlocked": false,
+      "updatedAt": "10/29/2026, 8:48:18 AM"
+    }
+  ],
+  "transactions": [
+    {
+      "id": "tx-ref-1793098496451-906",
+      "userId": "usr-2684-261",
+      "userName": "Player_2684",
+      "userPhone": "0942742684",
+      "type": "referral",
+      "method": "System",
+      "amount": 10,
+      "referenceNumber": "INV-496451",
+      "status": "approved",
+      "timestamp": "10:54:56 AM",
+      "note": "የጓደኛ ግብዣ ሽልማት ለ 0911223344"
+    },
+    {
+      "id": "srv-tx-1792960137394",
+      "userId": "usr-2684-261",
+      "userName": "Player_2684",
+      "userPhone": "0942742684",
+      "chatId": 7372523979,
+      "type": "deposit",
+      "method": "CBE",
+      "amount": 1200,
+      "referenceNumber": "FT26108ABC99",
+      "status": "approved",
+      "timestamp": "10/25/2026, 8:28:57 PM"
+    },
+    {
+      "id": "webhook-tx-1792960117439",
+      "userId": "usr-2684-261",
+      "userName": "Player_2684",
+      "userPhone": "0942742684",
+      "chatId": 7372523979,
+      "type": "deposit",
+      "method": "Telebirr",
+      "amount": 500,
+      "referenceNumber": "DCO77889912",
+      "fullSmsText": "የ 500.00 ብር ክፍያ ከ 0942742684 ተቀብለዋል። የግብይት ቁጥር DCO77889912 ነው። ቀሪ ሂሳብዎ 4,120.00 ብር ነው።",
+      "status": "approved",
+      "timestamp": "10/25/2026, 8:28:37 PM"
+    },
+    {
+      "id": "srv-win-676698-145-1792311923065",
+      "userId": "usr-4423-247",
+      "userName": "Player_4423",
+      "userPhone": "0911324423",
+      "type": "win",
+      "method": "Wallet",
+      "amount": 200,
+      "referenceNumber": "WIN-FAST-RND-676698-#145",
+      "fullSmsText": "Bingo Win Prize +200.00 ETB (Cartela #145)",
+      "status": "approved",
+      "timestamp": "10/18/2026, 8:25:23 AM"
+    },
+    {
+      "id": "srv-win-962069-145-1791982121079",
+      "userId": "usr-2684-261",
+      "userName": "Player_2684",
+      "userPhone": "0942742684",
+      "type": "win",
+      "method": "Wallet",
+      "amount": 56,
+      "referenceNumber": "WIN-FAST-RND-962069-#145",
+      "fullSmsText": "Bingo Win Prize +56.00 ETB (Cartela #145)",
+      "status": "approved",
+      "timestamp": "10/14/2026, 12:48:41 PM"
+    },
+    {
+      "id": "srv-win-653257-289-1791981978291",
+      "userId": "usr-2684-261",
+      "userName": "Player_2684",
+      "userPhone": "0942742684",
+      "type": "win",
+      "method": "Wallet",
+      "amount": 56,
+      "referenceNumber": "WIN-FAST-RND-653257-#289",
+      "fullSmsText": "Bingo Win Prize +56.00 ETB (Cartela #289)",
+      "status": "approved",
+      "timestamp": "10/14/2026, 12:46:18 PM"
+    },
+    {
+      "id": "srv-win-601219-142-1791814694352",
+      "userId": "usr-2684-080",
+      "userName": "Player_2684",
+      "userPhone": "0942722684",
+      "type": "win",
+      "method": "Wallet",
+      "amount": 20,
+      "referenceNumber": "WIN-REGULAR-RND-601219-#142",
+      "fullSmsText": "Bingo Win Prize +20.00 ETB (Cartela #142)",
+      "status": "approved",
+      "timestamp": "10/12/2026, 2:18:14 PM"
+    },
+    {
+      "id": "srv-win-601219-7-1791814686047",
+      "userId": "usr-2684-080",
+      "userName": "Player_2684",
+      "userPhone": "0942722684",
+      "type": "win",
+      "method": "Wallet",
+      "amount": 32,
+      "referenceNumber": "WIN-REGULAR-RND-601219-#7",
+      "fullSmsText": "Bingo Win Prize +32.00 ETB (Cartela #7)",
+      "status": "approved",
+      "timestamp": "10/12/2026, 2:18:06 PM"
+    },
+    {
+      "id": "srv-win-410925-412-1791795776747",
+      "userId": "usr-2684-261",
+      "userName": "Player_2684",
+      "userPhone": "0942742684",
+      "type": "win",
+      "method": "Wallet",
+      "amount": 32,
+      "referenceNumber": "WIN-FAST-RND-410925-#412",
+      "fullSmsText": "Bingo Win Prize +32.00 ETB (Cartela #412)",
+      "status": "approved",
+      "timestamp": "10/12/2026, 9:02:56 AM"
+    },
+    {
+      "id": "srv-win-189848-412-1791794801535",
+      "userId": "usr-2684-261",
+      "userName": "Player_2684",
+      "userPhone": "0942742684",
+      "type": "win",
+      "method": "Wallet",
+      "amount": 32,
+      "referenceNumber": "WIN-FAST-RND-189848-#412",
+      "fullSmsText": "Bingo Win Prize +32.00 ETB (Cartela #412)",
+      "status": "approved",
+      "timestamp": "10/12/2026, 8:46:41 AM"
+    },
+    {
+      "id": "srv-win-902405-412-1791722863130",
+      "userId": "usr-9855-782",
+      "userName": "Player_9855",
+      "userPhone": "0997539855",
+      "type": "win",
+      "method": "Wallet",
+      "amount": 32,
+      "referenceNumber": "WIN-FAST-RND-902405-#412",
+      "fullSmsText": "Bingo Win Prize +32.00 ETB (Cartela #412)",
+      "status": "approved",
+      "timestamp": "10/11/2026, 12:47:43 PM"
+    },
+    {
+      "id": "srv-win-560237-289-1791717273427",
+      "userId": "usr-9855-782",
+      "userName": "Player_9855",
+      "userPhone": "0997539855",
+      "type": "win",
+      "method": "Wallet",
+      "amount": 32,
+      "referenceNumber": "WIN-FAST-RND-560237-#289",
+      "fullSmsText": "Bingo Win Prize +32.00 ETB (Cartela #289)",
+      "status": "approved",
+      "timestamp": "10/11/2026, 11:14:33 AM"
+    },
+    {
+      "id": "srv-tx-1791538477962",
+      "userId": "usr-2684-513",
+      "userName": "@EzBinGoSupport",
+      "userPhone": "0711742684",
+      "chatId": 8878763975,
+      "type": "deposit",
+      "method": "Telebirr",
+      "amount": 10,
+      "referenceNumber": "10DJ50GKEGD6",
+      "fullSmsText": "10 DJ50GKEGD6",
+      "status": "approved",
+      "timestamp": "10/9/2026, 9:34:37 AM"
+    },
+    {
+      "id": "srv-tx-1791538295800",
+      "userId": "usr-7051-390",
+      "userName": "Prince jo",
+      "userPhone": "0984907051",
+      "chatId": 2052547445,
+      "type": "transfer",
+      "method": "Wallet",
+      "amount": 300,
+      "referenceNumber": "TR-295800",
+      "recipientPhone": "0711742684",
+      "fullSmsText": "Transfer 300.00 ETB from 0984907051 to 0711742684 (Player_2684)",
+      "status": "approved",
+      "timestamp": "10/9/2026, 9:31:35 AM"
+    },
+    {
+      "id": "srv-tx-1791535611944",
+      "userId": "usr-7051-390",
+      "userName": "Prince jo",
+      "userPhone": "0984907051",
+      "chatId": 2052547445,
+      "type": "transfer",
+      "method": "Wallet",
+      "amount": 200,
+      "referenceNumber": "TR-611944",
+      "recipientPhone": "0942742684",
+      "fullSmsText": "Transfer 200.00 ETB from 0984907051 to 0942742684 (Player_2684)",
+      "status": "approved",
+      "timestamp": "10/9/2026, 8:46:51 AM"
+    },
+    {
+      "id": "srv-tx-1791533982086",
+      "userId": "usr-2684-261",
+      "userName": "King",
+      "userPhone": "0942742684",
+      "chatId": 7372523979,
+      "type": "deposit",
+      "method": "Telebirr",
+      "amount": 10,
+      "referenceNumber": "ውድEZANAከቴሌብርአካውንትዎ",
+      "fullSmsText": "ውድ  Ezana \nከቴሌ ብር አካውንትዎ 251942742684 ለ Bank of Abyssinia አካውንት ቁጥር   66816532 10.00 ብር በቀን 05/10/2026 20:10:46 በተሳካ ሁኔታ አስተላልፈዋል፡፡ የቴሌብር ሂሳብ እንቅስቃሴ ቁጥርዎ  DJ50GKEGD6 እና የባንክ ሂሳብ እንቅስቃሴ ቁጥርዎ  ነው፡፡ የአገልግሎት ክፍያው 0.87 ብር ፤ የአገልግሎት ክፍያው 15% VAT 0.13 ብር ነዉ። ያለዎት ቀሪ ሂሳብ 160.34 ብር ነው፡፡ የክፍያ መረጃዎን ለማግኘት ማስፈንጠርያውን ይጫኑ፡ https://transactioninfo.ethiotelecom.et/receipt/DJ50GKEGD6\nበቴሌብር ስለተገለገሉ እናመሰግናለን፡፡",
+      "status": "approved",
+      "timestamp": "10/9/2026, 8:19:42 AM"
+    },
+    {
+      "id": "srv-tx-1791533854562",
+      "userId": "usr-2684-513",
+      "userName": "@EzBinGoSupport",
+      "userPhone": "0711742684",
+      "chatId": 8878763975,
+      "type": "withdraw",
+      "method": "Telebirr",
+      "amount": 500,
+      "referenceNumber": "0711742684",
+      "fullSmsText": "Telegram Withdraw: 500 ETB to Telebirr (0711742684)",
+      "status": "approved",
+      "timestamp": "10/9/2026, 8:17:34 AM"
+    },
+    {
+      "id": "srv-tx-1791532436040",
+      "userId": "usr-7051-390",
+      "userName": "Prince jo",
+      "userPhone": "0984907051",
+      "chatId": 2052547445,
+      "type": "deposit",
+      "method": "Telebirr",
+      "amount": 1500,
+      "referenceNumber": "FT26256T08VB",
+      "fullSmsText": "ውድ  Ezana \nከቴሌ ብር አካውንትዎ 251942742684 ለ Commercial Bank of Ethiopia አካውንት ቁጥር   1000112964936 1,500.00 ብር በቀን 12/09/2026 23:30:49 በተሳካ ሁኔታ አስተላልፈዋል፡፡ የቴሌብር ሂሳብ እንቅስቃሴ ቁጥርዎ  DIC4OFX8A4 እና የባንክ ሂሳብ እንቅስቃሴ ቁጥርዎ FT26256T08VB ነው፡፡ የአገልግሎት ክፍያው 5.22 ብር ፤ የአገልግሎት ክፍያው 15% VAT 0.78 ብር ነዉ። ያለዎት ቀሪ ሂሳብ 546.09 ብር ነው፡፡ የክፍያ መረጃዎን ለማግኘት ማስፈንጠርያውን ይጫኑ፡ https://transactioninfo.ethiotelecom.et/receipt/DIC4OFX8A4\nበቴሌብር ስለተገለገሉ እናመሰግናለን፡፡",
+      "status": "rejected",
+      "timestamp": "10/9/2026, 7:53:56 AM"
+    },
+    {
+      "id": "srv-tx-1791531741208",
+      "userId": "usr-7051-390",
+      "userName": "Prince jo",
+      "userPhone": "0984907051",
+      "chatId": 2052547445,
+      "type": "deposit",
+      "method": "Telebirr",
+      "amount": 200,
+      "referenceNumber": "FT26256T08VB",
+      "fullSmsText": "ውድ  Ezana \nከቴሌ ብር አካውንትዎ 251942742684 ለ Commercial Bank of Ethiopia አካውንት ቁጥር   1000112964936 1,500.00 ብር በቀን 12/09/2026 23:30:49 በተሳካ ሁኔታ አስተላልፈዋል፡፡ የቴሌብር ሂሳብ እንቅስቃሴ ቁጥርዎ  DIC4OFX8A4 እና የባንክ ሂሳብ እንቅስቃሴ ቁጥርዎ FT26256T08VB ነው፡፡ የአገልግሎት ክፍያው 5.22 ብር ፤ የአገልግሎት ክፍያው 15% VAT 0.78 ብር ነዉ። ያለዎት ቀሪ ሂሳብ 546.09 ብር ነው፡፡ የክፍያ መረጃዎን ለማግኘት ማስፈንጠርያውን ይጫኑ፡ https://transactioninfo.ethiotelecom.et/receipt/DIC4OFX8A4\nበቴሌብር ስለተገለገሉ እናመሰግናለን፡፡",
+      "status": "approved",
+      "timestamp": "10/9/2026, 7:42:21 AM"
+    },
+    {
+      "id": "srv-tx-1791531632854",
+      "userId": "usr-7051-390",
+      "userName": "Prince jo",
+      "userPhone": "0984907051",
+      "chatId": 2052547445,
+      "type": "deposit",
+      "method": "Telebirr",
+      "amount": 200,
+      "referenceNumber": "FT26256T08VB",
+      "fullSmsText": "ውድ  Ezana \nከቴሌ ብር አካውንትዎ 251942742684 ለ Commercial Bank of Ethiopia አካውንት ቁጥር   1000112964936 1,500.00 ብር በቀን 12/09/2026 23:30:49 በተሳካ ሁኔታ አስተላልፈዋል፡፡ የቴሌብር ሂሳብ እንቅስቃሴ ቁጥርዎ  DIC4OFX8A4 እና የባንክ ሂሳብ እንቅስቃሴ ቁጥርዎ FT26256T08VB ነው፡፡ የአገልግሎት ክፍያው 5.22 ብር ፤ የአገልግሎት ክፍያው 15% VAT 0.78 ብር ነዉ። ያለዎት ቀሪ ሂሳብ 546.09 ብር ነው፡፡ የክፍያ መረጃዎን ለማግኘት ማስፈንጠርያውን ይጫኑ፡ https://transactioninfo.ethiotelecom.et/receipt/DIC4OFX8A4\nበቴሌብር ስለተገለገሉ እናመሰግናለን፡፡",
+      "status": "approved",
+      "timestamp": "10/9/2026, 7:40:32 AM"
+    }
+  ],
+  "fastGameHistory": [
+    {
+      "id": "fast-gh-1792311923065",
+      "gameMatchId": 676698,
+      "timestamp": "18/10/2026, 11:25:22",
+      "stakeAmount": 10,
+      "prizeAmount": 8,
+      "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+      "totalBallsCalled": 39,
+      "lastBall": 15,
+      "calledBallsSnapshot": [
+        51,
+        25,
+        27,
+        21,
+        6,
+        48,
+        34,
+        53,
+        58,
+        66,
+        71,
+        37,
+        18,
+        43,
+        70,
+        8,
+        23,
+        36,
+        17,
+        29,
+        60,
+        46,
+        7,
+        74,
+        56,
+        42,
+        32,
+        38,
+        20,
+        63,
+        55,
+        31,
+        19,
+        11,
+        14,
+        64,
+        16,
+        45,
+        15
+      ],
+      "participantPhones": [
+        "0911324423"
+      ],
+      "participantCartelasByPhone": {
+        "0911324423": [
+          145
+        ]
+      },
+      "winners": [
+        {
+          "cartelaId": 145,
+          "userName": "Player_4423",
+          "prizeAmount": 200,
+          "winningCells": [
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              2,
+              4
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fast-gh-1791982121079",
+      "gameMatchId": 962069,
+      "timestamp": "14/10/2026, 15:48:40",
+      "stakeAmount": 10,
+      "prizeAmount": 56,
+      "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+      "totalBallsCalled": 31,
+      "lastBall": 69,
+      "calledBallsSnapshot": [
+        66,
+        50,
+        25,
+        61,
+        34,
+        33,
+        2,
+        37,
+        53,
+        40,
+        52,
+        70,
+        8,
+        6,
+        42,
+        22,
+        51,
+        48,
+        49,
+        20,
+        38,
+        71,
+        59,
+        68,
+        5,
+        39,
+        14,
+        54,
+        27,
+        44,
+        69
+      ],
+      "participantPhones": [
+        "0942742684"
+      ],
+      "participantCartelasByPhone": {
+        "0942742684": [
+          21,
+          145,
+          289,
+          412,
+          27,
+          28,
+          55
+        ]
+      },
+      "winners": [
+        {
+          "cartelaId": 145,
+          "userName": "Player_2684",
+          "prizeAmount": 56,
+          "winningCells": [
+            [
+              0,
+              2
+            ],
+            [
+              1,
+              2
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              4,
+              2
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fast-gh-1791981978291",
+      "gameMatchId": 653257,
+      "timestamp": "14/10/2026, 15:46:18",
+      "stakeAmount": 10,
+      "prizeAmount": 56,
+      "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+      "totalBallsCalled": 27,
+      "lastBall": 68,
+      "calledBallsSnapshot": [
+        35,
+        9,
+        67,
+        57,
+        21,
+        66,
+        51,
+        5,
+        62,
+        6,
+        1,
+        22,
+        15,
+        17,
+        65,
+        24,
+        42,
+        69,
+        11,
+        70,
+        19,
+        44,
+        46,
+        49,
+        71,
+        28,
+        68
+      ],
+      "participantPhones": [
+        "0942742684"
+      ],
+      "participantCartelasByPhone": {
+        "0942742684": [
+          21,
+          145,
+          289,
+          412,
+          27,
+          28,
+          55
+        ]
+      },
+      "winners": [
+        {
+          "cartelaId": 289,
+          "userName": "Player_2684",
+          "prizeAmount": 56,
+          "winningCells": [
+            [
+              0,
+              0
+            ],
+            [
+              1,
+              1
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              3,
+              3
+            ],
+            [
+              4,
+              4
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fast-gh-1791795776747",
+      "gameMatchId": 410925,
+      "timestamp": "12/10/2026, 12:02:56",
+      "stakeAmount": 10,
+      "prizeAmount": 32,
+      "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+      "totalBallsCalled": 35,
+      "lastBall": 59,
+      "calledBallsSnapshot": [
+        51,
+        52,
+        66,
+        20,
+        7,
+        36,
+        13,
+        22,
+        17,
+        69,
+        43,
+        31,
+        58,
+        62,
+        74,
+        64,
+        26,
+        44,
+        45,
+        28,
+        18,
+        14,
+        68,
+        67,
+        34,
+        49,
+        15,
+        53,
+        32,
+        4,
+        60,
+        5,
+        21,
+        11,
+        59
+      ],
+      "participantPhones": [
+        "0942742684"
+      ],
+      "participantCartelasByPhone": {
+        "0942742684": [
+          21,
+          145,
+          289,
+          412
+        ]
+      },
+      "winners": [
+        {
+          "cartelaId": 412,
+          "userName": "Player_2684",
+          "prizeAmount": 32,
+          "winningCells": [
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              1
+            ],
+            [
+              1,
+              2
+            ],
+            [
+              1,
+              3
+            ],
+            [
+              1,
+              4
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fast-gh-1791794801535",
+      "gameMatchId": 189848,
+      "timestamp": "12/10/2026, 11:46:41",
+      "stakeAmount": 10,
+      "prizeAmount": 32,
+      "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+      "totalBallsCalled": 41,
+      "lastBall": 54,
+      "calledBallsSnapshot": [
+        43,
+        71,
+        17,
+        53,
+        27,
+        13,
+        21,
+        52,
+        59,
+        8,
+        18,
+        41,
+        72,
+        47,
+        44,
+        15,
+        63,
+        39,
+        7,
+        38,
+        33,
+        37,
+        61,
+        3,
+        24,
+        69,
+        10,
+        50,
+        56,
+        31,
+        74,
+        5,
+        2,
+        14,
+        70,
+        20,
+        75,
+        64,
+        35,
+        49,
+        54
+      ],
+      "participantPhones": [
+        "0942742684"
+      ],
+      "participantCartelasByPhone": {
+        "0942742684": [
+          21,
+          145,
+          289,
+          412
+        ]
+      },
+      "winners": [
+        {
+          "cartelaId": 412,
+          "userName": "Player_2684",
+          "prizeAmount": 32,
+          "winningCells": [
+            [
+              0,
+              2
+            ],
+            [
+              1,
+              2
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              4,
+              2
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fast-gh-1791722863130",
+      "gameMatchId": 902405,
+      "timestamp": "11/10/2026, 15:47:42",
+      "stakeAmount": 10,
+      "prizeAmount": 32,
+      "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+      "totalBallsCalled": 38,
+      "lastBall": 41,
+      "calledBallsSnapshot": [
+        63,
+        61,
+        25,
+        10,
+        60,
+        15,
+        22,
+        2,
+        16,
+        29,
+        39,
+        75,
+        19,
+        37,
+        45,
+        11,
+        12,
+        5,
+        1,
+        66,
+        74,
+        53,
+        20,
+        32,
+        51,
+        40,
+        28,
+        57,
+        36,
+        62,
+        46,
+        44,
+        68,
+        52,
+        43,
+        67,
+        18,
+        41
+      ],
+      "participantPhones": [
+        "0997539855"
+      ],
+      "participantCartelasByPhone": {
+        "0997539855": [
+          21,
+          145,
+          289,
+          412
+        ]
+      },
+      "winners": [
+        {
+          "cartelaId": 412,
+          "userName": "Player_9855",
+          "prizeAmount": 32,
+          "winningCells": [
+            [
+              0,
+              2
+            ],
+            [
+              1,
+              2
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              4,
+              2
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fast-gh-1791717273427",
+      "gameMatchId": 560237,
+      "timestamp": "11/10/2026, 14:14:32",
+      "stakeAmount": 10,
+      "prizeAmount": 32,
+      "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+      "totalBallsCalled": 70,
+      "lastBall": 36,
+      "calledBallsSnapshot": [
+        73,
+        11,
+        18,
+        70,
+        49,
+        17,
+        1,
+        27,
+        55,
+        51,
+        74,
+        69,
+        33,
+        32,
+        13,
+        4,
+        66,
+        15,
+        20,
+        67,
+        59,
+        23,
+        7,
+        58,
+        57,
+        54,
+        3,
+        45,
+        37,
+        10,
+        24,
+        29,
+        39,
+        8,
+        65,
+        30,
+        12,
+        35,
+        44,
+        40,
+        47,
+        19,
+        42,
+        28,
+        43,
+        48,
+        71,
+        61,
+        60,
+        56,
+        21,
+        75,
+        5,
+        46,
+        26,
+        34,
+        72,
+        63,
+        64,
+        52,
+        22,
+        14,
+        50,
+        31,
+        41,
+        6,
+        38,
+        2,
+        25,
+        36
+      ],
+      "participantPhones": [
+        "0997539855"
+      ],
+      "participantCartelasByPhone": {
+        "0997539855": [
+          21,
+          145,
+          289,
+          412
+        ]
+      },
+      "winners": [
+        {
+          "cartelaId": 289,
+          "userName": "Player_9855",
+          "prizeAmount": 32,
+          "winningCells": [
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              2,
+              4
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "regularGameHistory": [
+    {
+      "id": "regular-gh-1791814686047",
+      "gameMatchId": 601219,
+      "timestamp": "12/10/2026, 17:18:05",
+      "stakeAmount": 10,
+      "prizeAmount": 40,
+      "patternTitle": "ግማሽ ቤት ወደ ሁሉም አቅጣጫ (ከ F ጋር 15 መጥቆር አለበት)",
+      "totalBallsCalled": 75,
+      "lastBall": 64,
+      "calledBallsSnapshot": [
+        1,
+        12,
+        52,
+        53,
+        36,
+        56,
+        50,
+        5,
+        6,
+        25,
+        7,
+        68,
+        38,
+        73,
+        31,
+        46,
+        54,
+        16,
+        74,
+        35,
+        39,
+        63,
+        48,
+        71,
+        40,
+        42,
+        45,
+        44,
+        69,
+        24,
+        15,
+        65,
+        27,
+        30,
+        8,
+        58,
+        21,
+        49,
+        2,
+        28,
+        57,
+        62,
+        51,
+        17,
+        61,
+        59,
+        47,
+        9,
+        11,
+        4,
+        18,
+        60,
+        23,
+        32,
+        72,
+        55,
+        10,
+        14,
+        34,
+        20,
+        67,
+        29,
+        66,
+        41,
+        43,
+        70,
+        26,
+        75,
+        13,
+        33,
+        19,
+        3,
+        37,
+        22,
+        64
+      ],
+      "participantPhones": [
+        "0942742684"
+      ],
+      "participantCartelasByPhone": {
+        "0942742684": [
+          23281,
+          23689
+        ]
+      },
+      "winners": [
+        {
+          "cartelaId": 7,
+          "userName": "Player_2684",
+          "prizeAmount": 20,
+          "winningCells": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              1
+            ],
+            [
+              0,
+              2
+            ],
+            [
+              0,
+              3
+            ],
+            [
+              0,
+              4
+            ],
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              1
+            ],
+            [
+              1,
+              2
+            ],
+            [
+              1,
+              3
+            ],
+            [
+              1,
+              4
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              2,
+              4
+            ]
+          ]
+        },
+        {
+          "cartelaId": 142,
+          "userName": "Player_2684",
+          "prizeAmount": 20,
+          "winningCells": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              1
+            ],
+            [
+              0,
+              2
+            ],
+            [
+              0,
+              3
+            ],
+            [
+              0,
+              4
+            ],
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              1
+            ],
+            [
+              1,
+              2
+            ],
+            [
+              1,
+              3
+            ],
+            [
+              1,
+              4
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              2,
+              4
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "fastRoomState": {
+    "gameMatchId": 805109,
+    "isPlaying": false,
+    "isPaused": false,
+    "preGameCountdown": null,
+    "winnerDisplayCountdown": null,
+    "calledBalls": [],
+    "activeBall": null,
+    "callSpeedSec": 3,
+    "stakeAmount": 10,
+    "prizeAmount": 200,
+    "activePatternId": 5,
+    "jackpotPool": 500,
+    "houseEarningsTotal": 466.5,
+    "jackpotWonInRound": 0,
+    "blockedCartelaIds": [],
+    "winnersList": [],
+    "lastVerifiedWinnerBanner": {
+      "cartelaId": 145,
+      "userName": "Player_4423",
+      "prizeAmount": 8,
+      "winningCells": [
+        [
+          2,
+          0
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          2,
+          2
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          2,
+          4
+        ]
+      ],
+      "lastBall": 15,
+      "calledBallsSnapshot": [
+        51,
+        25,
+        27,
+        21,
+        6,
+        48,
+        34,
+        53,
+        58,
+        66,
+        71,
+        37,
+        18,
+        43,
+        70,
+        8,
+        23,
+        36,
+        17,
+        29,
+        60,
+        46,
+        7,
+        74,
+        56,
+        42,
+        32,
+        38,
+        20,
+        63,
+        55,
+        31,
+        19,
+        11,
+        14,
+        64,
+        16,
+        45,
+        15
+      ],
+      "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+      "timestamp": "18/10/2026, 11:25:22"
+    },
+    "sha256Hash": "52c57b287b995fdc954fa851b59b74fd21d0de535f6b69972c9617db382203db",
+    "seq": 3209
+  },
+  "regularRoomState": {
+    "gameMatchId": 224330,
+    "isPlaying": false,
+    "isPaused": false,
+    "preGameCountdown": null,
+    "bingoClaimCountdown": null,
+    "winnerDisplayCountdown": null,
+    "calledBalls": [],
+    "activeBall": null,
+    "callSpeedSec": 10,
+    "stakeAmount": 10,
+    "prizeAmount": 500,
+    "activePatternId": 5,
+    "jackpotPool": 500,
+    "houseEarningsTotal": 420,
+    "jackpotWonInRound": 0,
+    "blockedCartelaIds": [],
+    "winnersList": [],
+    "lastVerifiedWinnerBanner": {
+      "cartelaId": 7,
+      "userName": "Player_2684",
+      "prizeAmount": 32,
+      "winningCells": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          3
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          3
+        ],
+        [
+          1,
+          4
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          2,
+          2
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          2,
+          4
+        ]
+      ],
+      "lastBall": 64,
+      "calledBallsSnapshot": [
+        1,
+        12,
+        52,
+        53,
+        36,
+        56,
+        50,
+        5,
+        6,
+        25,
+        7,
+        68,
+        38,
+        73,
+        31,
+        46,
+        54,
+        16,
+        74,
+        35,
+        39,
+        63,
+        48,
+        71,
+        40,
+        42,
+        45,
+        44,
+        69,
+        24,
+        15,
+        65,
+        27,
+        30,
+        8,
+        58,
+        21,
+        49,
+        2,
+        28,
+        57,
+        62,
+        51,
+        17,
+        61,
+        59,
+        47,
+        9,
+        11,
+        4,
+        18,
+        60,
+        23,
+        32,
+        72,
+        55,
+        10,
+        14,
+        34,
+        20,
+        67,
+        29,
+        66,
+        41,
+        43,
+        70,
+        26,
+        75,
+        13,
+        33,
+        19,
+        3,
+        37,
+        22,
+        64
+      ],
+      "patternTitle": "ግማሽ ቤት ወደ ሁሉም አቅጣጫ (ከ F ጋር 15 መጥቆር አለበት)",
+      "timestamp": "12/10/2026, 17:18:30"
+    },
+    "sha256Hash": "52094ae6845be2d8bce7faf10ce9cc2f30aeabbc3743eb794c5ed137c8ef3d0c",
+    "seq": 2194
+  },
+  "fastLockedCartelas": [],
+  "regularLockedCartelas": [
+    {
+      "cartelaId": 21,
+      "ownerPhone": "0911469721",
+      "ownerName": "Player_9721",
+      "clientId": "dev-dju1i6-iuza",
+      "isRegistered": true,
+      "lockedAt": 1792410434429
+    },
+    {
+      "cartelaId": 7,
+      "ownerPhone": "0911469721",
+      "ownerName": "Player_9721",
+      "clientId": "dev-dju1i6-iuza",
+      "isRegistered": true,
+      "lockedAt": 1792410437197
+    }
+  ],
+  "fastRoomsByStake": {
+    "10": {
+      "mode": "fast",
+      "gameMatchId": 805109,
+      "isPlaying": false,
+      "isPaused": false,
+      "preGameCountdown": null,
+      "bingoClaimCountdown": null,
+      "winnerDisplayCountdown": null,
+      "calledBalls": [],
+      "activeBall": null,
+      "callSpeedSec": 3,
+      "stakeAmount": 10,
+      "prizeAmount": 200,
+      "activePatternId": 5,
+      "jackpotPool": 500,
+      "houseEarningsTotal": 466.5,
+      "jackpotWonInRound": 0,
+      "onlinePlayersCount": 2,
+      "blockedCartelaIds": [],
+      "winnersList": [],
+      "lastVerifiedWinnerBanner": {
+        "cartelaId": 145,
+        "userName": "Player_4423",
+        "prizeAmount": 8,
+        "winningCells": [
+          [
+            2,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            2,
+            4
+          ]
+        ],
+        "lastBall": 15,
+        "calledBallsSnapshot": [
+          51,
+          25,
+          27,
+          21,
+          6,
+          48,
+          34,
+          53,
+          58,
+          66,
+          71,
+          37,
+          18,
+          43,
+          70,
+          8,
+          23,
+          36,
+          17,
+          29,
+          60,
+          46,
+          7,
+          74,
+          56,
+          42,
+          32,
+          38,
+          20,
+          63,
+          55,
+          31,
+          19,
+          11,
+          14,
+          64,
+          16,
+          45,
+          15
+        ],
+        "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+        "timestamp": "18/10/2026, 11:25:22"
+      },
+      "gameHistory": [
+        {
+          "id": "fast-gh-1792311923065",
+          "gameMatchId": 676698,
+          "timestamp": "18/10/2026, 11:25:22",
+          "stakeAmount": 10,
+          "prizeAmount": 8,
+          "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+          "totalBallsCalled": 39,
+          "lastBall": 15,
+          "calledBallsSnapshot": [
+            51,
+            25,
+            27,
+            21,
+            6,
+            48,
+            34,
+            53,
+            58,
+            66,
+            71,
+            37,
+            18,
+            43,
+            70,
+            8,
+            23,
+            36,
+            17,
+            29,
+            60,
+            46,
+            7,
+            74,
+            56,
+            42,
+            32,
+            38,
+            20,
+            63,
+            55,
+            31,
+            19,
+            11,
+            14,
+            64,
+            16,
+            45,
+            15
+          ],
+          "participantPhones": [
+            "0911324423"
+          ],
+          "participantCartelasByPhone": {
+            "0911324423": [
+              145
+            ]
+          },
+          "winners": [
+            {
+              "cartelaId": 145,
+              "userName": "Player_4423",
+              "prizeAmount": 200,
+              "winningCells": [
+                [
+                  2,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  2,
+                  2
+                ],
+                [
+                  2,
+                  3
+                ],
+                [
+                  2,
+                  4
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fast-gh-1791982121079",
+          "gameMatchId": 962069,
+          "timestamp": "14/10/2026, 15:48:40",
+          "stakeAmount": 10,
+          "prizeAmount": 56,
+          "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+          "totalBallsCalled": 31,
+          "lastBall": 69,
+          "calledBallsSnapshot": [
+            66,
+            50,
+            25,
+            61,
+            34,
+            33,
+            2,
+            37,
+            53,
+            40,
+            52,
+            70,
+            8,
+            6,
+            42,
+            22,
+            51,
+            48,
+            49,
+            20,
+            38,
+            71,
+            59,
+            68,
+            5,
+            39,
+            14,
+            54,
+            27,
+            44,
+            69
+          ],
+          "participantPhones": [
+            "0942742684"
+          ],
+          "participantCartelasByPhone": {
+            "0942742684": [
+              21,
+              145,
+              289,
+              412,
+              27,
+              28,
+              55
+            ]
+          },
+          "winners": [
+            {
+              "cartelaId": 145,
+              "userName": "Player_2684",
+              "prizeAmount": 56,
+              "winningCells": [
+                [
+                  0,
+                  2
+                ],
+                [
+                  1,
+                  2
+                ],
+                [
+                  2,
+                  2
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  4,
+                  2
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fast-gh-1791981978291",
+          "gameMatchId": 653257,
+          "timestamp": "14/10/2026, 15:46:18",
+          "stakeAmount": 10,
+          "prizeAmount": 56,
+          "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+          "totalBallsCalled": 27,
+          "lastBall": 68,
+          "calledBallsSnapshot": [
+            35,
+            9,
+            67,
+            57,
+            21,
+            66,
+            51,
+            5,
+            62,
+            6,
+            1,
+            22,
+            15,
+            17,
+            65,
+            24,
+            42,
+            69,
+            11,
+            70,
+            19,
+            44,
+            46,
+            49,
+            71,
+            28,
+            68
+          ],
+          "participantPhones": [
+            "0942742684"
+          ],
+          "participantCartelasByPhone": {
+            "0942742684": [
+              21,
+              145,
+              289,
+              412,
+              27,
+              28,
+              55
+            ]
+          },
+          "winners": [
+            {
+              "cartelaId": 289,
+              "userName": "Player_2684",
+              "prizeAmount": 56,
+              "winningCells": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  1,
+                  1
+                ],
+                [
+                  2,
+                  2
+                ],
+                [
+                  3,
+                  3
+                ],
+                [
+                  4,
+                  4
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fast-gh-1791795776747",
+          "gameMatchId": 410925,
+          "timestamp": "12/10/2026, 12:02:56",
+          "stakeAmount": 10,
+          "prizeAmount": 32,
+          "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+          "totalBallsCalled": 35,
+          "lastBall": 59,
+          "calledBallsSnapshot": [
+            51,
+            52,
+            66,
+            20,
+            7,
+            36,
+            13,
+            22,
+            17,
+            69,
+            43,
+            31,
+            58,
+            62,
+            74,
+            64,
+            26,
+            44,
+            45,
+            28,
+            18,
+            14,
+            68,
+            67,
+            34,
+            49,
+            15,
+            53,
+            32,
+            4,
+            60,
+            5,
+            21,
+            11,
+            59
+          ],
+          "participantPhones": [
+            "0942742684"
+          ],
+          "participantCartelasByPhone": {
+            "0942742684": [
+              21,
+              145,
+              289,
+              412
+            ]
+          },
+          "winners": [
+            {
+              "cartelaId": 412,
+              "userName": "Player_2684",
+              "prizeAmount": 32,
+              "winningCells": [
+                [
+                  1,
+                  0
+                ],
+                [
+                  1,
+                  1
+                ],
+                [
+                  1,
+                  2
+                ],
+                [
+                  1,
+                  3
+                ],
+                [
+                  1,
+                  4
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fast-gh-1791794801535",
+          "gameMatchId": 189848,
+          "timestamp": "12/10/2026, 11:46:41",
+          "stakeAmount": 10,
+          "prizeAmount": 32,
+          "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+          "totalBallsCalled": 41,
+          "lastBall": 54,
+          "calledBallsSnapshot": [
+            43,
+            71,
+            17,
+            53,
+            27,
+            13,
+            21,
+            52,
+            59,
+            8,
+            18,
+            41,
+            72,
+            47,
+            44,
+            15,
+            63,
+            39,
+            7,
+            38,
+            33,
+            37,
+            61,
+            3,
+            24,
+            69,
+            10,
+            50,
+            56,
+            31,
+            74,
+            5,
+            2,
+            14,
+            70,
+            20,
+            75,
+            64,
+            35,
+            49,
+            54
+          ],
+          "participantPhones": [
+            "0942742684"
+          ],
+          "participantCartelasByPhone": {
+            "0942742684": [
+              21,
+              145,
+              289,
+              412
+            ]
+          },
+          "winners": [
+            {
+              "cartelaId": 412,
+              "userName": "Player_2684",
+              "prizeAmount": 32,
+              "winningCells": [
+                [
+                  0,
+                  2
+                ],
+                [
+                  1,
+                  2
+                ],
+                [
+                  2,
+                  2
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  4,
+                  2
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fast-gh-1791722863130",
+          "gameMatchId": 902405,
+          "timestamp": "11/10/2026, 15:47:42",
+          "stakeAmount": 10,
+          "prizeAmount": 32,
+          "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+          "totalBallsCalled": 38,
+          "lastBall": 41,
+          "calledBallsSnapshot": [
+            63,
+            61,
+            25,
+            10,
+            60,
+            15,
+            22,
+            2,
+            16,
+            29,
+            39,
+            75,
+            19,
+            37,
+            45,
+            11,
+            12,
+            5,
+            1,
+            66,
+            74,
+            53,
+            20,
+            32,
+            51,
+            40,
+            28,
+            57,
+            36,
+            62,
+            46,
+            44,
+            68,
+            52,
+            43,
+            67,
+            18,
+            41
+          ],
+          "participantPhones": [
+            "0997539855"
+          ],
+          "participantCartelasByPhone": {
+            "0997539855": [
+              21,
+              145,
+              289,
+              412
+            ]
+          },
+          "winners": [
+            {
+              "cartelaId": 412,
+              "userName": "Player_9855",
+              "prizeAmount": 32,
+              "winningCells": [
+                [
+                  0,
+                  2
+                ],
+                [
+                  1,
+                  2
+                ],
+                [
+                  2,
+                  2
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  4,
+                  2
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fast-gh-1791717273427",
+          "gameMatchId": 560237,
+          "timestamp": "11/10/2026, 14:14:32",
+          "stakeAmount": 10,
+          "prizeAmount": 32,
+          "patternTitle": "1 መስመር (Horizontal, Vertical, Diagonal) ወይም 4ቱ የማዕዘን ካስ",
+          "totalBallsCalled": 70,
+          "lastBall": 36,
+          "calledBallsSnapshot": [
+            73,
+            11,
+            18,
+            70,
+            49,
+            17,
+            1,
+            27,
+            55,
+            51,
+            74,
+            69,
+            33,
+            32,
+            13,
+            4,
+            66,
+            15,
+            20,
+            67,
+            59,
+            23,
+            7,
+            58,
+            57,
+            54,
+            3,
+            45,
+            37,
+            10,
+            24,
+            29,
+            39,
+            8,
+            65,
+            30,
+            12,
+            35,
+            44,
+            40,
+            47,
+            19,
+            42,
+            28,
+            43,
+            48,
+            71,
+            61,
+            60,
+            56,
+            21,
+            75,
+            5,
+            46,
+            26,
+            34,
+            72,
+            63,
+            64,
+            52,
+            22,
+            14,
+            50,
+            31,
+            41,
+            6,
+            38,
+            2,
+            25,
+            36
+          ],
+          "participantPhones": [
+            "0997539855"
+          ],
+          "participantCartelasByPhone": {
+            "0997539855": [
+              21,
+              145,
+              289,
+              412
+            ]
+          },
+          "winners": [
+            {
+              "cartelaId": 289,
+              "userName": "Player_9855",
+              "prizeAmount": 32,
+              "winningCells": [
+                [
+                  2,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  2,
+                  2
+                ],
+                [
+                  2,
+                  3
+                ],
+                [
+                  2,
+                  4
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "adminRoomMessage": "ሚፈየሀፀትዩቨፀረተገ467888",
+      "adminRoomMessageAt": "01:16 PM",
+      "bonusCartelasForOver20": 5,
+      "heroBanners": [
+        {
+          "id": "hb-1",
+          "title": "ሁልጊዜ ጨዋታ! በ Ezi Bingo እስከ 50,000 ብር ያሸንፉ!",
+          "subtitle": "ከ 70,000 ካርቴላዎች ይምረጡ · ከ 20 በላይ ካርቴላ ለሚይዙ +5 ካርቴላ ቦነስ በነፃ ይሰጣል!",
+          "badgeText": "Ezi Bingo ልዩ ቦነስ",
+          "accentColor": "emerald",
+          "isActive": true
+        },
+        {
+          "id": "hb-2",
+          "title": "በየቀኑ 4 ጊዜ የነፃ ቢንጎ ጨዋታዎች (2:00፣ 8:00፣ 12:00፣ 4:30)",
+          "subtitle": "ጓደኛዎን ይጋብዙ እና በእያንዳንዱ ተጋባዥ ጓደኛ ወዲያውኑ የ 25 ብር ሽልማት ያግኙ!",
+          "badgeText": "የነፃ ጨዋታ መርሃ-ግብር",
+          "accentColor": "blue",
+          "isActive": true
+        }
+      ],
+      "bankAccounts": [
+        {
+          "id": "CBE",
+          "bankName": "Commercial Bank of Ethiopia (CBE)",
+          "shortName": "CBE",
+          "accountNumber": "1000112964936",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-purple-700 text-white"
+        },
+        {
+          "id": "Abyssinia",
+          "bankName": "Bank of Abyssinia (አቢሲኒያ ባንክ)",
+          "shortName": "Abyssinia",
+          "accountNumber": "66816532",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-amber-500 text-slate-950"
+        },
+        {
+          "id": "Telebirr",
+          "bankName": "Telebirr (ቴሌብር)",
+          "shortName": "Telebirr",
+          "accountNumber": "0942742684",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-sky-500 text-white"
+        },
+        {
+          "id": "M-Pesa",
+          "bankName": "M-Pesa Safaricom (ኤም-ፔሳ)",
+          "shortName": "M-Pesa",
+          "accountNumber": "0711742684",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-emerald-600 text-white"
+        }
+      ],
+      "sha256Hash": "52c57b287b995fdc954fa851b59b74fd21d0de535f6b69972c9617db382203db",
+      "lastBallTickAt": 1793269824438,
+      "lastCountdownTickAt": 1793269824438,
+      "seq": 3209,
+      "lastUpdated": 1793269826824
+    },
+    "20": {
+      "mode": "fast",
+      "gameMatchId": 354439,
+      "isPlaying": false,
+      "isPaused": false,
+      "preGameCountdown": null,
+      "bingoClaimCountdown": null,
+      "winnerDisplayCountdown": null,
+      "calledBalls": [],
+      "activeBall": null,
+      "callSpeedSec": 3,
+      "stakeAmount": 20,
+      "prizeAmount": 400,
+      "activePatternId": 5,
+      "jackpotPool": 500,
+      "houseEarningsTotal": 420,
+      "jackpotWonInRound": 0,
+      "onlinePlayersCount": 2,
+      "blockedCartelaIds": [],
+      "winnersList": [],
+      "lastVerifiedWinnerBanner": null,
+      "gameHistory": [],
+      "adminRoomMessage": "ሚፈየሀፀትዩቨፀረተገ467888",
+      "adminRoomMessageAt": "01:16 PM",
+      "bonusCartelasForOver20": 5,
+      "heroBanners": [
+        {
+          "id": "hb-1",
+          "title": "ሁልጊዜ ጨዋታ! በ Ezi Bingo እስከ 50,000 ብር ያሸንፉ!",
+          "subtitle": "ከ 70,000 ካርቴላዎች ይምረጡ · ከ 20 በላይ ካርቴላ ለሚይዙ +5 ካርቴላ ቦነስ በነፃ ይሰጣል!",
+          "badgeText": "Ezi Bingo ልዩ ቦነስ",
+          "accentColor": "emerald",
+          "isActive": true
+        },
+        {
+          "id": "hb-2",
+          "title": "በየቀኑ 4 ጊዜ የነፃ ቢንጎ ጨዋታዎች (2:00፣ 8:00፣ 12:00፣ 4:30)",
+          "subtitle": "ጓደኛዎን ይጋብዙ እና በእያንዳንዱ ተጋባዥ ጓደኛ ወዲያውኑ የ 25 ብር ሽልማት ያግኙ!",
+          "badgeText": "የነፃ ጨዋታ መርሃ-ግብር",
+          "accentColor": "blue",
+          "isActive": true
+        }
+      ],
+      "bankAccounts": [
+        {
+          "id": "CBE",
+          "bankName": "Commercial Bank of Ethiopia (CBE)",
+          "shortName": "CBE",
+          "accountNumber": "1000112964936",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-purple-700 text-white"
+        },
+        {
+          "id": "Abyssinia",
+          "bankName": "Bank of Abyssinia (አቢሲኒያ ባንክ)",
+          "shortName": "Abyssinia",
+          "accountNumber": "66816532",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-amber-500 text-slate-950"
+        },
+        {
+          "id": "Telebirr",
+          "bankName": "Telebirr (ቴሌብር)",
+          "shortName": "Telebirr",
+          "accountNumber": "0942742684",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-sky-500 text-white"
+        },
+        {
+          "id": "M-Pesa",
+          "bankName": "M-Pesa Safaricom (ኤም-ፔሳ)",
+          "shortName": "M-Pesa",
+          "accountNumber": "0711742684",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-emerald-600 text-white"
+        }
+      ],
+      "sha256Hash": "2c8be65a21512cbadfd6f26955372e4ac3046e98e49f1dbea9c9d3c58aa710d3",
+      "lastBallTickAt": 1793269824438,
+      "lastCountdownTickAt": 1793269824438,
+      "seq": 2702,
+      "lastUpdated": 1793269826824
+    },
+    "50": {
+      "mode": "fast",
+      "gameMatchId": 735565,
+      "isPlaying": false,
+      "isPaused": false,
+      "preGameCountdown": null,
+      "bingoClaimCountdown": null,
+      "winnerDisplayCountdown": null,
+      "calledBalls": [],
+      "activeBall": null,
+      "callSpeedSec": 3,
+      "stakeAmount": 50,
+      "prizeAmount": 1000,
+      "activePatternId": 5,
+      "jackpotPool": 500,
+      "houseEarningsTotal": 420,
+      "jackpotWonInRound": 0,
+      "onlinePlayersCount": 2,
+      "blockedCartelaIds": [],
+      "winnersList": [],
+      "lastVerifiedWinnerBanner": null,
+      "gameHistory": [],
+      "adminRoomMessage": "ሚፈየሀፀትዩቨፀረተገ467888",
+      "adminRoomMessageAt": "01:16 PM",
+      "bonusCartelasForOver20": 5,
+      "heroBanners": [
+        {
+          "id": "hb-1",
+          "title": "ሁልጊዜ ጨዋታ! በ Ezi Bingo እስከ 50,000 ብር ያሸንፉ!",
+          "subtitle": "ከ 70,000 ካርቴላዎች ይምረጡ · ከ 20 በላይ ካርቴላ ለሚይዙ +5 ካርቴላ ቦነስ በነፃ ይሰጣል!",
+          "badgeText": "Ezi Bingo ልዩ ቦነስ",
+          "accentColor": "emerald",
+          "isActive": true
+        },
+        {
+          "id": "hb-2",
+          "title": "በየቀኑ 4 ጊዜ የነፃ ቢንጎ ጨዋታዎች (2:00፣ 8:00፣ 12:00፣ 4:30)",
+          "subtitle": "ጓደኛዎን ይጋብዙ እና በእያንዳንዱ ተጋባዥ ጓደኛ ወዲያውኑ የ 25 ብር ሽልማት ያግኙ!",
+          "badgeText": "የነፃ ጨዋታ መርሃ-ግብር",
+          "accentColor": "blue",
+          "isActive": true
+        }
+      ],
+      "bankAccounts": [
+        {
+          "id": "CBE",
+          "bankName": "Commercial Bank of Ethiopia (CBE)",
+          "shortName": "CBE",
+          "accountNumber": "1000112964936",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-purple-700 text-white"
+        },
+        {
+          "id": "Abyssinia",
+          "bankName": "Bank of Abyssinia (አቢሲኒያ ባንክ)",
+          "shortName": "Abyssinia",
+          "accountNumber": "66816532",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-amber-500 text-slate-950"
+        },
+        {
+          "id": "Telebirr",
+          "bankName": "Telebirr (ቴሌብር)",
+          "shortName": "Telebirr",
+          "accountNumber": "0942742684",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-sky-500 text-white"
+        },
+        {
+          "id": "M-Pesa",
+          "bankName": "M-Pesa Safaricom (ኤም-ፔሳ)",
+          "shortName": "M-Pesa",
+          "accountNumber": "0711742684",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-emerald-600 text-white"
+        }
+      ],
+      "sha256Hash": "d8877c2b4cf6c0edbd33cb1739c79cbd2ad31c3f3f2e820f7f742470bbc5a84b",
+      "lastBallTickAt": 1793269824438,
+      "lastCountdownTickAt": 1793269824438,
+      "seq": 2702,
+      "lastUpdated": 1793269826824
+    },
+    "100": {
+      "mode": "fast",
+      "gameMatchId": 825686,
+      "isPlaying": false,
+      "isPaused": false,
+      "preGameCountdown": null,
+      "bingoClaimCountdown": null,
+      "winnerDisplayCountdown": null,
+      "calledBalls": [],
+      "activeBall": null,
+      "callSpeedSec": 3,
+      "stakeAmount": 100,
+      "prizeAmount": 2000,
+      "activePatternId": 5,
+      "jackpotPool": 500,
+      "houseEarningsTotal": 420,
+      "jackpotWonInRound": 0,
+      "onlinePlayersCount": 2,
+      "blockedCartelaIds": [],
+      "winnersList": [],
+      "lastVerifiedWinnerBanner": null,
+      "gameHistory": [],
+      "adminRoomMessage": "ሚፈየሀፀትዩቨፀረተገ467888",
+      "adminRoomMessageAt": "01:16 PM",
+      "bonusCartelasForOver20": 5,
+      "heroBanners": [
+        {
+          "id": "hb-1",
+          "title": "ሁልጊዜ ጨዋታ! በ Ezi Bingo እስከ 50,000 ብር ያሸንፉ!",
+          "subtitle": "ከ 70,000 ካርቴላዎች ይምረጡ · ከ 20 በላይ ካርቴላ ለሚይዙ +5 ካርቴላ ቦነስ በነፃ ይሰጣል!",
+          "badgeText": "Ezi Bingo ልዩ ቦነስ",
+          "accentColor": "emerald",
+          "isActive": true
+        },
+        {
+          "id": "hb-2",
+          "title": "በየቀኑ 4 ጊዜ የነፃ ቢንጎ ጨዋታዎች (2:00፣ 8:00፣ 12:00፣ 4:30)",
+          "subtitle": "ጓደኛዎን ይጋብዙ እና በእያንዳንዱ ተጋባዥ ጓደኛ ወዲያውኑ የ 25 ብር ሽልማት ያግኙ!",
+          "badgeText": "የነፃ ጨዋታ መርሃ-ግብር",
+          "accentColor": "blue",
+          "isActive": true
+        }
+      ],
+      "bankAccounts": [
+        {
+          "id": "CBE",
+          "bankName": "Commercial Bank of Ethiopia (CBE)",
+          "shortName": "CBE",
+          "accountNumber": "1000112964936",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-purple-700 text-white"
+        },
+        {
+          "id": "Abyssinia",
+          "bankName": "Bank of Abyssinia (አቢሲኒያ ባንክ)",
+          "shortName": "Abyssinia",
+          "accountNumber": "66816532",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-amber-500 text-slate-950"
+        },
+        {
+          "id": "Telebirr",
+          "bankName": "Telebirr (ቴሌብር)",
+          "shortName": "Telebirr",
+          "accountNumber": "0942742684",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-sky-500 text-white"
+        },
+        {
+          "id": "M-Pesa",
+          "bankName": "M-Pesa Safaricom (ኤም-ፔሳ)",
+          "shortName": "M-Pesa",
+          "accountNumber": "0711742684",
+          "accountHolder": "Ezana Gebremedhin",
+          "badgeBg": "bg-emerald-600 text-white"
+        }
+      ],
+      "sha256Hash": "c3876179819e32ee08b072b7c84812ae9058342c6081059a9925302a8a810f3d",
+      "lastBallTickAt": 1793269824438,
+      "lastCountdownTickAt": 1793269824438,
+      "seq": 2702,
+      "lastUpdated": 1793269826824
+    }
+  },
+  "fastLockedCartelasByStake": {
+    "10": [],
+    "20": [],
+    "50": [],
+    "100": []
+  },
+  "adminPinConfig": {
+    "username": "admin",
+    "passwordHash": "admin123",
+    "pinCode": "1234",
+    "requireDepositApproval": true,
+    "smsWebhookSecret": "ezi_sms_secret_2026",
+    "welcomeBonusAmount": 15,
+    "referralBonusAmount": 25,
+    "depositBonusPercent": 0,
+    "minDepositAmount": 10,
+    "minWithdrawAmount": 100
+  },
+  "verifiedBankSmsReceipts": [
+    {
+      "id": "sms-1792961215929-649",
+      "bank": "CBE",
+      "amount": 200,
+      "referenceNumber": "FT268889990",
+      "rawSms": "Your account has been debited with 200.00 ETB for withdrawal. Ref: FT268889990. Remaining balance: 1400 ETB.",
+      "receivedAt": 1792961215929,
+      "status": "ready_for_claim"
+    },
+    {
+      "id": "sms-1792960126123-632",
+      "bank": "CBE",
+      "amount": 1200,
+      "referenceNumber": "FT26108ABC99",
+      "senderPhone": "0911223344",
+      "rawSms": "Dear Ezana, your account 1000112964936 has been credited with ETB 1,200.00 from 0911223344. Ref No: FT26108ABC99. Available Bal: ETB 14,800.00.",
+      "receivedAt": 1792960126123,
+      "status": "auto_approved",
+      "matchedUserPhone": "0942742684"
+    },
+    {
+      "id": "sms-1792960117439-136",
+      "bank": "Telebirr",
+      "amount": 500,
+      "referenceNumber": "DCO77889912",
+      "senderPhone": "0942742684",
+      "rawSms": "የ 500.00 ብር ክፍያ ከ 0942742684 ተቀብለዋል። የግብይት ቁጥር DCO77889912 ነው። ቀሪ ሂሳብዎ 4,120.00 ብር ነው።",
+      "receivedAt": 1792960117444,
+      "matchedTxId": "webhook-tx-1792960117439",
+      "matchedUserPhone": "0942742684",
+      "status": "auto_approved"
+    }
+  ],
+  "receivedWebhookSmsLogs": [
+    {
+      "id": "sms-1792961221303-75",
+      "timestamp": "10/25/2026, 8:47:01 PM",
+      "sender": "CBE",
+      "rawText": "Your account has been debited with 200.00 ETB for withdrawal. Ref: FT999222333. Remaining balance: 1400 ETB.",
+      "parsedAmount": 200,
+      "parsedRef": "FT999222333",
+      "detectedBank": "CBE",
+      "detectedType": "withdraw",
+      "statusText": "ℹ️ የወጪ SMS (Withdrawal/Debit Detected) - ወጪ ስለሆነ በገቢ አይመዘገብም"
+    },
+    {
+      "id": "sms-1792961215929-649",
+      "timestamp": "10/25/2026, 8:46:55 PM",
+      "sender": "CBE",
+      "rawText": "Your account has been debited with 200.00 ETB for withdrawal. Ref: FT268889990. Remaining balance: 1400 ETB.",
+      "parsedAmount": 200,
+      "parsedRef": "FT268889990",
+      "detectedBank": "CBE",
+      "detectedType": "withdraw",
+      "statusText": "📥 ተመዝግቧል (Pre-Verified & Ready for Claim) Ref: FT268889990"
+    },
+    {
+      "id": "sms-1792960126123-632",
+      "timestamp": "10/25/2026, 8:28:46 PM",
+      "sender": "CBE",
+      "rawText": "Dear Ezana, your account 1000112964936 has been credited with ETB 1,200.00 from 0911223344. Ref No: FT26108ABC99. Available Bal: ETB 14,800.00.",
+      "parsedAmount": 1200,
+      "parsedRef": "FT26108ABC99",
+      "detectedBank": "CBE",
+      "detectedType": "deposit",
+      "statusText": "📥 ተመዝግቧል (Pre-Verified & Ready for Claim) Ref: FT26108ABC99",
+      "matchedPlayerPhone": "0911223344"
+    },
+    {
+      "id": "sms-1792960121838-58",
+      "timestamp": "10/25/2026, 8:28:41 PM",
+      "sender": "127",
+      "rawText": "የ 500.00 ብር ክፍያ ከ 0942742684 ተቀብለዋል። የግብይት ቁጥር DCO77889912 ነው። ቀሪ ሂሳብዎ 4,120.00 ብር ነው።",
+      "parsedAmount": 500,
+      "parsedRef": "DCO77889912",
+      "detectedBank": "Telebirr",
+      "detectedType": "deposit",
+      "statusText": "⚠️ የተደገመ ደረሰኝ (Duplicate Ref: DCO77889912) - ቀድሞ ጸድቋል",
+      "matchedPlayerPhone": "0942742684"
+    },
+    {
+      "id": "sms-1792960117439-136",
+      "timestamp": "10/25/2026, 8:28:37 PM",
+      "sender": "127",
+      "rawText": "የ 500.00 ብር ክፍያ ከ 0942742684 ተቀብለዋል። የግብይት ቁጥር DCO77889912 ነው። ቀሪ ሂሳብዎ 4,120.00 ብር ነው።",
+      "parsedAmount": 500,
+      "parsedRef": "DCO77889912",
+      "detectedBank": "Telebirr",
+      "detectedType": "deposit",
+      "statusText": "✅ በስልክ ቁጥር ተለይቶ ወዲያውኑ ገቢ ሆኗል (Auto-Credited to 0942742684)",
+      "matchedPlayerPhone": "0942742684"
+    }
+  ]
+}
