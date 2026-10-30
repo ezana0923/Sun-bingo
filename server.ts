@@ -5818,6 +5818,10 @@ async function startServer() {
 
   const distPath = path.join(__dirname, 'dist');
   const hasBuiltDist = fs.existsSync(path.join(distPath, 'index.html'));
+  const isProduction =
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.RENDER) ||
+    Boolean(process.env.RENDER_EXTERNAL_URL);
 
   if (hasBuiltDist) {
     app.use(express.static(distPath));
@@ -5825,13 +5829,17 @@ async function startServer() {
       const indexPath = path.join(distPath, 'index.html');
       res.sendFile(indexPath);
     });
-  } else {
+  } else if (!isProduction) {
     // In dev mode (AI Studio preview), ALWAYS mount Vite middlewares for live SPA execution
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
+  } else {
+    app.get('*', (_req, res) => {
+      res.status(500).send('Production build not found. Please run npm run build.');
+    });
   }
 
   // Global Express error handler to prevent raw ENOENT stack traces
