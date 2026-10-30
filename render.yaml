@@ -3,9 +3,8 @@ services:
     name: sun-bingo
     env: node
     plan: free
-    buildCommand: npm install --include=dev --legacy-peer-deps && npm run build
-    startCommand: npm run start
-    healthCheckPath: /api/health
+    buildCommand: npm install --legacy-peer-deps && npm run build
+    startCommand: node server.js
     autoDeploy: true
     envVars:
       - key: NODE_VERSION
