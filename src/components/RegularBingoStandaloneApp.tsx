@@ -813,7 +813,7 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
 
       if (newlyAdded.length > 0) {
         setStatusNotice(
-          `🎁 ከ20 በላይ ካርቴላ ስላስመዘገቡ +${newlyAdded.length} ነፃ ቦነስ ካርቴላ ተሰጥቶዎታል!`
+          `🎁 ከ20 በላይ (21+) ካርቴላ ስላስመዘገቡ +${newlyAdded.length} ነፃ ቦነስ ካርቴላ ተሰጥቶዎታል!`
         );
         return [...cards, ...newlyAdded];
       }
@@ -858,7 +858,8 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
         return candidate;
       };
 
-      const slotsAvailable = Math.max(0, 30 - newCards.filter((c) => !c.isBonus).length);
+      const limit = stakeAmount === 0 ? 10 : 30;
+      const slotsAvailable = Math.max(0, limit - newCards.filter((c) => !c.isBonus).length);
       const toAddPaid = Math.min(requestedCount, slotsAvailable);
 
       for (let i = 0; i < toAddPaid; i++) {
@@ -876,6 +877,13 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
   };
 
   const handleAddSpecificCartela = (id: number) => {
+    const limit = stakeAmount === 0 ? 10 : 30;
+    if (cartelas.filter((c) => !c.isBonus).length >= limit) {
+      if (stakeAmount === 0) {
+        setStatusNotice('በነፃ ጨዋታ አንድ ተጫዋች እስከ 10 ካርቴላ ብቻ ነው የሚፈቀደው!');
+      }
+      return;
+    }
     localUnregisteredIdsRef.current.add(id);
     setCartelas((prev) => {
       if (prev.some((c) => c.id === id)) return prev;
@@ -1772,7 +1780,7 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
         isOpen={isSelectorModalOpen}
         onClose={() => setIsSelectorModalOpen(false)}
         currentCount={cartelas.length}
-        maxCartelas={30}
+        maxCartelas={stakeAmount === 0 ? 10 : 30}
         maxPoolId={REGULAR_MAX_POOL_CARTELAS}
         blockedCartelaIds={blockedCartelaIds}
         existingCartelaIds={cartelas.map((c) => c.id)}

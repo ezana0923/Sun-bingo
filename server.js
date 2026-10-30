@@ -3764,7 +3764,7 @@ app.post("/api/live-room/lock-cartela", (req, res) => {
     for (const cid2 of req.body.cartelaIds) {
       const numCid = Number(cid2);
       const existing2 = lockedMap.get(numCid);
-      if (isFreeGame && !existing2 && myOwnedCount >= 5) {
+      if (isFreeGame && !existing2 && myOwnedCount >= 10) {
         break;
       }
       if (!existing2 || isSameOwner(existing2)) {
@@ -3831,10 +3831,10 @@ app.post("/api/live-room/lock-cartela", (req, res) => {
   }
   if (room.stakeAmount === 0 && !existing) {
     const myOwnedCount = Array.from(lockedMap.values()).filter((info) => isSameOwner(info)).length;
-    if (myOwnedCount >= 5) {
+    if (myOwnedCount >= 10) {
       res.status(400).json({
         ok: false,
-        error: "\u1260\u1290\u1343 \u1328\u12CB\u1273 (Free Game) 5 \u12AB\u122D\u1274\u120B \u1265\u127B \u1290\u12CD \u12E8\u121A\u1348\u1240\u12F0\u12CD!",
+        error: "\u1260\u1290\u1343 \u1328\u12CB\u1273 (Free Game) \u12A0\u1295\u12F5 \u1270\u132B\u12CB\u127D \u12A5\u1235\u12A8 10 \u12AB\u122D\u1274\u120B \u1265\u127B \u1290\u12CD \u12E8\u121A\u1348\u1240\u12F0\u12CD!",
         lockedCartelas: Array.from(lockedMap.values())
       });
       return;

@@ -4543,7 +4543,7 @@ app.post('/api/live-room/lock-cartela', (req, res) => {
     for (const cid of req.body.cartelaIds) {
       const numCid = Number(cid);
       const existing = lockedMap.get(numCid);
-      if (isFreeGame && !existing && myOwnedCount >= 5) {
+      if (isFreeGame && !existing && myOwnedCount >= 10) {
         break;
       }
       if (!existing || isSameOwner(existing)) {
@@ -4613,13 +4613,13 @@ app.post('/api/live-room/lock-cartela', (req, res) => {
     return;
   }
 
-  // Enforce 5-cartela limit per player in Free Game (stakeAmount === 0)
+  // Enforce 10-cartela limit per player in Free Game (stakeAmount === 0)
   if (room.stakeAmount === 0 && !existing) {
     const myOwnedCount = Array.from(lockedMap.values()).filter((info) => isSameOwner(info)).length;
-    if (myOwnedCount >= 5) {
+    if (myOwnedCount >= 10) {
       res.status(400).json({
         ok: false,
-        error: 'በነፃ ጨዋታ (Free Game) 5 ካርቴላ ብቻ ነው የሚፈቀደው!',
+        error: 'በነፃ ጨዋታ (Free Game) አንድ ተጫዋች እስከ 10 ካርቴላ ብቻ ነው የሚፈቀደው!',
         lockedCartelas: Array.from(lockedMap.values()),
       });
       return;

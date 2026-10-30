@@ -74,14 +74,14 @@ export const CartelaSelectorModal: React.FC<CartelaSelectorModalProps> = ({
           <div>
             <h3 className="text-base sm:text-lg font-extrabold flex items-center gap-2">
               <Plus className="w-5 h-5 text-emerald-500" />
-              <span>ካርቴላ መምረጫ {maxCartelas <= 5 ? '(የነፃ ጨዋታ — 5 ካርቴላ ብቻ)' : ''}</span>
+              <span>ካርቴላ መምረጫ {maxCartelas <= 10 ? '(የነፃ ጨዋታ — እስከ 10 ካርቴላ ብቻ)' : ''}</span>
             </h3>
             <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
               አሁን የያዙት፦ {currentCount}/{maxCartelas}
-              {maxCartelas <= 5
-                ? ' · የነፃ ጨዋታ 5 ካርቴላ ብቻ ነው የሚፈቀደው!'
+              {maxCartelas <= 10
+                ? ' · በነፃ ጨዋታ አንድ ተጫዋች እስከ 10 ካርቴላ ብቻ ነው የሚፈቀደው!'
                 : bonusCartelasForOver20 > 0
-                ? ` · ከ20 በላይ ላስመዘገበ +${bonusCartelasForOver20} ካርቴላ ቦነስ በነፃ ይሰጣል!`
+                ? ` · ከ20 በላይ (21+) ላስመዘገበ +${bonusCartelasForOver20} ካርቴላ ቦነስ በነፃ ይሰጣል!`
                 : ''}
             </p>
           </div>
@@ -95,12 +95,12 @@ export const CartelaSelectorModal: React.FC<CartelaSelectorModalProps> = ({
         </div>
 
         {/* Bonus Banner */}
-        {maxCartelas <= 5 ? (
+        {maxCartelas <= 10 ? (
           <div className="p-3 rounded-xl bg-gradient-to-r from-emerald-500/20 via-teal-500/20 to-blue-500/20 border border-emerald-500/40 mb-4 flex items-center gap-2.5">
             <Sparkles className="w-5 h-5 text-emerald-400 shrink-0" />
             <p className="text-xs font-bold">
               🎁 የነፃ ጨዋታ ሕግ፦ በነፃ ጨዋታ እያንዳንዱ ተጫዋች{' '}
-              <span className="text-emerald-400 underline">እስከ 5 ካርቴላ ብቻ</span> መምረጥ እና ማስመዝገብ ይችላል!
+              <span className="text-emerald-400 underline">እስከ 10 ካርቴላ ብቻ</span> መምረጥ እና ማስመዝገብ ይችላል!
             </p>
           </div>
         ) : (
@@ -108,7 +108,7 @@ export const CartelaSelectorModal: React.FC<CartelaSelectorModalProps> = ({
             <div className="p-3 rounded-xl bg-gradient-to-r from-amber-500/20 via-emerald-500/20 to-blue-500/20 border border-amber-500/40 mb-4 flex items-center gap-2.5">
               <Sparkles className="w-5 h-5 text-amber-500 shrink-0" />
               <p className="text-xs font-bold">
-                ልዩ ቦነስ፦ ከ 20 በላይ ካርቴላ ለሚያስመዘግቡ ተጫዋቾች{' '}
+                ልዩ ቦነስ፦ ከ 20 በላይ ካርቴላ ለሚያስመዘግቡ ተጫዋቾች (ማለትም 21 ካርቴላ እና ከዚያ በላይ){' '}
                 <span className="text-emerald-500 underline">
                   +{bonusCartelasForOver20} ተጨማሪ ካርቴላ በነፃ (FREE Bonus)
                 </span>{' '}
@@ -121,13 +121,13 @@ export const CartelaSelectorModal: React.FC<CartelaSelectorModalProps> = ({
         {/* Quick Batch Selection Grid */}
         <div className="mb-5">
           <label className="block text-xs font-bold mb-2">
-            {maxCartelas <= 5
-              ? 'በብዛት ይምረጡ (ከ 1 እስከ 5 ካርቴላ ብቻ)፦'
+            {maxCartelas <= 10
+              ? 'በብዛት ይምረጡ (ከ 1 እስከ 10 ካርቴላ ብቻ)፦'
               : 'በብዛት ይምረጡ (1, 2, 3, 5, 10, 15, 20, 25, 30 ካርቴላዎች)፦'}
           </label>
           <div className="grid grid-cols-3 gap-2.5">
             {BATCH_OPTIONS.filter((count) => count <= maxCartelas).map((count) => {
-              const hasBonus = count > 20 && bonusCartelasForOver20 > 0 && maxCartelas > 5;
+              const hasBonus = count > 20 && bonusCartelasForOver20 > 0 && maxCartelas > 10;
               return (
                 <button
                   key={count}

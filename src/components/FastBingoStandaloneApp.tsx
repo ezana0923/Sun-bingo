@@ -1662,7 +1662,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
 
       if (newlyAddedBonusIds.length > 0) {
         setBonusBannerText(
-          `🎁 ከ20 በላይ ካርቴላ ስላስመዘገቡ +${newlyAddedBonusIds.length} ነፃ ቦነስ ካርቴላ ተሰጥቶዎታል!`
+          `🎁 ከ20 በላይ (21+) ካርቴላ ስላስመዘገቡ +${newlyAddedBonusIds.length} ነፃ ቦነስ ካርቴላ ተሰጥቶዎታል!`
         );
       }
 
@@ -1773,7 +1773,9 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
         return candidate;
       };
 
-      const slotsAvailable = Math.max(0, 30 - newCards.filter((c) => !c.isBonus).length);
+      const isFree = activeStakeTier === 0 || stakeAmount === 0;
+      const limit = isFree ? 10 : 30;
+      const slotsAvailable = Math.max(0, limit - newCards.filter((c) => !c.isBonus).length);
       const toAddPaid = Math.min(requestedCount, slotsAvailable);
 
       for (let i = 0; i < toAddPaid; i++) {
@@ -1790,6 +1792,16 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
   };
 
   const handleAddSpecificCartela = (id: number) => {
+    const isFree = activeStakeTier === 0 || stakeAmount === 0;
+    const limit = isFree ? 10 : 30;
+    if (cartelas.filter((c) => !c.isBonus).length >= limit) {
+      if (isFree) {
+        setStatusNotice('በነፃ ጨዋታ አንድ ተጫዋች እስከ 10 ካርቴላ ብቻ ነው የሚፈቀደው!');
+      } else {
+        setStatusNotice('ከፍተኛው የካርቴላ መጠን (30) ደርሷል!');
+      }
+      return;
+    }
     setCartelas((prev) => {
       if (prev.some((c) => c.id === id)) return prev;
       return [
@@ -4870,7 +4882,7 @@ support - Support 📞`}
         isOpen={isSelectorModalOpen}
         onClose={() => setIsSelectorModalOpen(false)}
         currentCount={cartelas.length}
-        maxCartelas={30}
+        maxCartelas={stakeAmount === 0 || activeStakeTier === 0 ? 10 : 30}
         maxPoolId={FAST_MAX_POOL_CARTELAS}
         blockedCartelaIds={blockedCartelaIds}
         existingCartelaIds={cartelas.map((c) => c.id)}
