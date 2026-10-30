@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, Trophy, CheckCircle2, Eye, Shield } from 'lucide-react';
-import { generateCartelaById, getLetterForBall } from '../utils/bingoEngine';
+import { generateCartelaById, getLetterForBall, formatWinnerPhone } from '../utils/bingoEngine';
 import { WinnerAnnouncement } from '../types/bingo';
 
 interface WinnerCartelaInspectorModalProps {
@@ -55,16 +55,25 @@ export const WinnerCartelaInspectorModal: React.FC<
               : 'border-slate-200'
           }`}
         >
-          <div className="flex items-center gap-1.5 min-w-0">
-            <div className="w-7 h-7 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center font-extrabold shadow-xs shrink-0">
-              <Trophy className="w-3.5 h-3.5" />
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 text-slate-950 flex items-center justify-center font-extrabold shadow-xs shrink-0">
+              <Trophy className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <h3 className="text-xs font-extrabold truncate leading-tight">
-                አሸናፊ ካርቴላ #{winner.cartelaId}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] uppercase font-bold text-amber-400">አሸናፊ ተጫዋች</span>
+                <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono-tabular font-extrabold text-[9px] border border-emerald-500/40">
+                  #{winner.cartelaId}
+                </span>
+              </div>
+              <h3 className="text-sm font-black text-white truncate leading-tight">
+                {winner.userName}
               </h3>
-              <p className="text-[10px] text-emerald-500 font-extrabold truncate leading-tight">
-                {winner.userName} · +{winner.prizeAmount.toFixed(0)} ETB
+              <p className="text-[11px] font-mono-tabular font-bold text-slate-300 flex items-center gap-1 leading-tight">
+                <span className="text-amber-400">📱</span>
+                <span className="tracking-wide text-white">{formatWinnerPhone(winner.userPhone)}</span>
+                <span className="text-slate-400">•</span>
+                <span className="text-emerald-400 font-extrabold ml-1">+{winner.prizeAmount.toFixed(0)} ETB</span>
               </p>
             </div>
           </div>
@@ -112,9 +121,14 @@ export const WinnerCartelaInspectorModal: React.FC<
             isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'
           }`}
         >
-          <div className="flex items-center justify-between px-2 py-0.5 mb-1 rounded-md bg-blue-600 text-white text-[10px] font-extrabold">
-            <span>ካርቴላ #{winner.cartelaId}</span>
-            <span className="truncate max-w-[130px]">{winner.userName}</span>
+          <div className="flex items-center justify-between px-2.5 py-1 mb-1.5 rounded-lg bg-gradient-to-r from-blue-700 via-indigo-700 to-slate-900 text-white text-[11px] font-extrabold shadow-xs">
+            <span className="font-mono-tabular font-black">ካርቴላ #{winner.cartelaId}</span>
+            <div className="text-right leading-tight">
+              <span className="block font-black text-white text-xs">{winner.userName}</span>
+              <span className="block text-[10px] font-mono-tabular text-amber-300 font-bold">
+                📱 {formatWinnerPhone(winner.userPhone)} •
+              </span>
+            </div>
           </div>
 
           <div className="max-w-[205px] mx-auto">

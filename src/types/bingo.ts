@@ -105,6 +105,7 @@ export interface HeroBannerAd {
 export interface WinnerAnnouncement {
   cartelaId: number;
   userName: string;
+  userPhone?: string;
   prizeAmount: number;
   winningCells: [number, number][];
   lastBall: number;
@@ -132,6 +133,7 @@ export interface GameHistoryRecord {
   winners: {
     cartelaId: number;
     userName: string;
+    userPhone?: string;
     prizeAmount: number;
     winningCells: [number, number][];
   }[];

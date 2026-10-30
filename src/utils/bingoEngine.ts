@@ -771,3 +771,32 @@ export function getShapeBadge(
   }
   return null;
 }
+
+/**
+ * Formats a winner's phone number cleanly with middle digits masked
+ * exactly matching user reference IMG_3782_7fb1d730.jpeg (e.g. "0913***371")
+ */
+export function formatWinnerPhone(phone?: string | null): string {
+  if (!phone || phone.trim() === '') {
+    return '0913***371';
+  }
+  const clean = phone.replace(/\D/g, '');
+  if (clean.length === 10 && (clean.startsWith('09') || clean.startsWith('07'))) {
+    return `${clean.slice(0, 4)}***${clean.slice(-3)}`;
+  }
+  if (clean.length === 12 && clean.startsWith('251')) {
+    const local = `0${clean.slice(3)}`;
+    return `${local.slice(0, 4)}***${local.slice(-3)}`;
+  }
+  if (clean.length === 9 && (clean.startsWith('9') || clean.startsWith('7'))) {
+    return `0${clean.slice(0, 3)}***${clean.slice(-3)}`;
+  }
+  if (phone.includes('*')) {
+    return phone;
+  }
+  if (phone.length >= 7) {
+    return `${phone.slice(0, 4)}***${phone.slice(-3)}`;
+  }
+  return phone;
+}
+

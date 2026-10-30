@@ -47,6 +47,7 @@ import {
   generateCartelaById,
   getCartelaSortMetrics,
   getLetterForBall,
+  formatWinnerPhone,
   verifyCartelaBingo,
   getShapeBadge,
   countCompletedSquares,
@@ -3081,17 +3082,40 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                     )}
 
                     <div className="flex flex-wrap items-center justify-between gap-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <Trophy className="w-6 h-6 text-amber-400" />
-                          <h3 className="text-base sm:text-xl font-extrabold">
-                            አሸናፊ ተጫዋች: {winnersList[0].userName} · አሸናፊ ካርቴላ፦{' '}
-                            {winnersList.map((w) => `#${w.cartelaId}`).join(', ')}
-                          </h3>
+                      <div className="space-y-2">
+                        {/* Winner Identity Card matching IMG_3782_7fb1d730.jpeg */}
+                        <div className="p-3 sm:p-4 rounded-2xl bg-slate-950/85 border-2 border-amber-400/80 shadow-xl space-y-1">
+                          <div className="text-[11px] sm:text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-2">
+                            <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
+                            <span>🏆 አሸናፊ ተጫዋች (Winner)</span>
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 font-mono-tabular font-extrabold text-[11px] border border-emerald-500/40">
+                              ካርቴላ {winnersList.map((w) => `#${w.cartelaId}`).join(', ')}
+                            </span>
+                          </div>
+
+                          {/* Large Bold Username on top - exactly like IMG_3782_7fb1d730.jpeg */}
+                          <div className="text-2xl sm:text-3xl font-black text-white tracking-wide truncate">
+                            {winnersList[0].userName}
+                          </div>
+
+                          {/* Clean Monospace Phone Number with Bullet right underneath */}
+                          <div className="text-base sm:text-lg font-mono-tabular font-bold text-slate-300 flex items-center gap-2">
+                            <span className="text-amber-400">📱</span>
+                            <span className="tracking-widest text-slate-100 font-extrabold">
+                              {formatWinnerPhone(winnersList[0].userPhone)}
+                            </span>
+                            <span className="text-slate-400 font-black">•</span>
+                          </div>
                         </div>
-                        <p className="text-xs sm:text-sm text-emerald-200 font-bold">
-                          ሕግ፦ {winnersList[0].patternTitle} · የመጨረሻ ኳስ፦{' '}
-                          {getLetterForBall(winnersList[0].lastBall)}-{winnersList[0].lastBall}
+
+                        <p className="text-xs sm:text-sm text-emerald-200 font-bold flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <span>
+                            ሕግ፦ {winnersList[0].patternTitle} · የመጨረሻ ኳስ፦{' '}
+                            <span className="px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 font-black font-mono-tabular">
+                              {getLetterForBall(winnersList[0].lastBall)}-{winnersList[0].lastBall}
+                            </span>
+                          </span>
                         </p>
                       </div>
 

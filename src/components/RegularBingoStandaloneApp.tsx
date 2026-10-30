@@ -68,6 +68,7 @@ import {
   generateCartelaById,
   getCartelaSortMetrics,
   getLetterForBall,
+  formatWinnerPhone,
   verifyCartelaBingo,
   getShapeBadge,
   countCompletedSquares,
@@ -1223,6 +1224,75 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
                 onResetGame={handleResetGame}
               />
             </div>
+
+            {/* ACTIVE ROUND WINNING CELEBRATION BANNER FOR REGULAR BINGO */}
+            {winnersList.length > 0 && (
+              <div className="relative overflow-hidden rounded-2xl border-2 border-amber-400 bg-gradient-to-r from-emerald-950 via-slate-900 to-amber-950 p-4 sm:p-5 text-white shadow-2xl space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="space-y-2">
+                    {/* Winner Identity Card - matching IMG_3782_7fb1d730.jpeg */}
+                    <div className="p-3 sm:p-4 rounded-2xl bg-slate-950/85 border-2 border-amber-400/80 shadow-xl space-y-1">
+                      <div className="text-[11px] sm:text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-2">
+                        <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span>🏆 አሸናፊ ተጫዋች (Winner)</span>
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 font-mono-tabular font-extrabold text-[11px] border border-emerald-500/40">
+                          ካርቴላ {winnersList.map((w) => `#${w.cartelaId}`).join(', ')}
+                        </span>
+                      </div>
+
+                      {/* Large Bold Username on top */}
+                      <div className="text-2xl sm:text-3xl font-black text-white tracking-wide truncate">
+                        {winnersList[0].userName}
+                      </div>
+
+                      {/* Clean Monospace Phone Number with Bullet right underneath */}
+                      <div className="text-base sm:text-lg font-mono-tabular font-bold text-slate-300 flex items-center gap-2">
+                        <span className="text-amber-400">📱</span>
+                        <span className="tracking-widest text-slate-100 font-extrabold">
+                          {formatWinnerPhone(winnersList[0].userPhone)}
+                        </span>
+                        <span className="text-slate-400 font-black">•</span>
+                      </div>
+                    </div>
+
+                    <p className="text-xs sm:text-sm text-emerald-200 font-bold flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>
+                        ሕግ፦ {winnersList[0].patternTitle} · የመጨረሻ ኳስ፦{' '}
+                        <span className="px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 font-black font-mono-tabular">
+                          {getLetterForBall(winnersList[0].lastBall)}-{winnersList[0].lastBall}
+                        </span>
+                      </span>
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="text-right">
+                      <div className="text-xs uppercase font-bold text-amber-300">
+                        የተሸለሙት ብር (80% ደራሽ)
+                      </div>
+                      <div className="text-2xl sm:text-3xl font-extrabold font-mono-tabular text-amber-400">
+                        +{winnersList[0].prizeAmount.toFixed(2)} ETB
+                      </div>
+                    </div>
+                    {bingoCountdown !== null && bingoCountdown > 0 ? (
+                      <div className="px-3 py-1.5 rounded-xl bg-amber-500/20 border border-amber-400/50 text-amber-300 font-mono-tabular text-xs font-bold animate-pulse">
+                        ቢንጎ የማለት ሰዓት {bingoCountdown}s ይቀራል...
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleResetGame}
+                        className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer shadow-md"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        <span>አዲስ ዙር ጀምር</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Quick Layout Switcher (Icon-only: 2-col, 3-col) + Au (ON / OFF) on exact same single line */}
             <div className="flex items-center justify-between gap-2 px-1 py-0.5">

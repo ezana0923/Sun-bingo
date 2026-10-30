@@ -9,6 +9,7 @@ import {
   Eye,
 } from 'lucide-react';
 import { GameHistoryRecord, WinnerAnnouncement } from '../types/bingo';
+import { formatWinnerPhone } from '../utils/bingoEngine';
 
 interface GameHistoryModalProps {
   isOpen: boolean;
@@ -342,6 +343,14 @@ export const GameHistoryModal: React.FC<GameHistoryModalProps> = ({
                       >
                         Ref: {item.refCode}
                       </div>
+                      {firstWinner && (
+                        <div className="text-[11px] font-bold text-amber-300 flex items-center gap-1.5 truncate">
+                          <span className="font-extrabold text-white">🏆 {firstWinner.userName}</span>
+                          <span className="font-mono-tabular text-slate-300">
+                            📱 {formatWinnerPhone(firstWinner.userPhone)} •
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 

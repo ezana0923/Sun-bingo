@@ -176,6 +176,7 @@ let adminPinConfig = {
 export interface ServerWinnerAnnouncement {
   cartelaId: number;
   userName: string;
+  userPhone?: string;
   prizeAmount: number;
   winningCells: [number, number][];
   lastBall: number;
@@ -199,6 +200,7 @@ export interface ServerGameHistoryRecord {
   winners: {
     cartelaId: number;
     userName: string;
+    userPhone?: string;
     prizeAmount: number;
     winningCells: [number, number][];
   }[];
@@ -4197,7 +4199,23 @@ app.post('/api/live-room/action', (req, res) => {
       room.winnerDisplayCountdown = 10;
       room.lastCountdownTickAt = Date.now();
     }
-    room.lastVerifiedWinnerBanner = winner;
+    const explicitWinnerPhone = String((req.body as { winnerPhone?: string }).winnerPhone || '').trim();
+    const lockedOwner = lockedMap.get(winner.cartelaId);
+    const rawCandidatePhone =
+      explicitWinnerPhone ||
+      lockedOwner?.ownerPhone ||
+      winner.userPhone ||
+      Array.from(playersByPhone.values()).find(
+        (p) => p.name.trim().toLowerCase() === (winner.userName || '').trim().toLowerCase()
+      )?.phone ||
+      '';
+    const winnerPhone = normalizeEthiopianPhone(rawCandidatePhone) || rawCandidatePhone.trim() || '0913***371';
+    const resolvedWinnerWithPhone: ServerWinnerAnnouncement = {
+      ...winner,
+      userName: lockedOwner?.ownerName || winner.userName,
+      userPhone: winnerPhone,
+    };
+    room.lastVerifiedWinnerBanner = resolvedWinnerWithPhone;
 
     const alreadyWon = room.winnersList.some((w) => w.cartelaId === winner.cartelaId);
     if (!alreadyWon) {
@@ -4214,7 +4232,7 @@ app.post('/api/live-room/action', (req, res) => {
 
       room.winnersList = [
         ...room.winnersList.map((w) => ({ ...w, prizeAmount: equalShare })),
-        { ...winner, prizeAmount: equalShare },
+        { ...resolvedWinnerWithPhone, prizeAmount: equalShare },
       ];
 
       // If multiple winners, adjust previous winners' balances so everyone received equal share!
@@ -4303,6 +4321,7 @@ app.post('/api/live-room/action', (req, res) => {
           winners: room.winnersList.map((w) => ({
             cartelaId: w.cartelaId,
             userName: w.userName,
+            userPhone: w.userPhone,
             prizeAmount: w.prizeAmount,
             winningCells: w.winningCells,
           })),
@@ -4324,6 +4343,7 @@ app.post('/api/live-room/action', (req, res) => {
             winners: room.winnersList.map((w) => ({
               cartelaId: w.cartelaId,
               userName: w.userName,
+              userPhone: w.userPhone,
               prizeAmount: w.prizeAmount,
               winningCells: w.winningCells,
             })),
