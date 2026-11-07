@@ -42,16 +42,7 @@ import {
   ChevronUp,
   Sparkles,
 } from 'lucide-react';
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-} from 'recharts';
+import { RevenueTrendChart } from './RevenueTrendChart';
 import { BINGO_PATTERNS } from '../data/bingoPatterns';
 import { PWAInstallButton } from './PWAInstallButton';
 import { connectTelegramBotEverywhere, disconnectTelegramBotEverywhere } from '../utils/telegramBotBridge';
@@ -1278,82 +1269,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               </div>
             </div>
 
-            {/* Recharts Responsive Container */}
-            <div className="w-full h-64 sm:h-72 pt-1">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={dailyRevenueData} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#272738' : '#e2e8f0'} />
-                  <XAxis
-                    dataKey="date"
-                    stroke={isDark ? '#94a3b8' : '#64748b'}
-                    fontSize={11}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    stroke={isDark ? '#94a3b8' : '#64748b'}
-                    fontSize={11}
-                    tickLine={false}
-                    tickFormatter={(val) => `${val >= 1000 ? `${(val / 1000).toFixed(1)}k` : val}`}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: isDark ? '#0f172a' : '#ffffff',
-                      borderColor: isDark ? '#334155' : '#cbd5e1',
-                      borderRadius: '12px',
-                      fontSize: '12px',
-                      fontWeight: 'bold',
-                      color: isDark ? '#f8fafc' : '#0f172a',
-                    }}
-                    formatter={(val: any, name: any) => [
-                      `${Number(val).toLocaleString()} ETB`,
-                      name === 'netRevenue'
-                        ? 'የተጣራ ገቢ (Net Revenue)'
-                        : name === 'deposits'
-                        ? 'ተቀማጭ (Deposits)'
-                        : 'ወጪ (Withdrawals)',
-                    ]}
-                    labelFormatter={(label, payload) => {
-                      const item = payload?.[0]?.payload;
-                      return item?.fullDate ? `${label} (${item.fullDate})` : label;
-                    }}
-                  />
-                  <Legend
-                    wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }}
-                    formatter={(value) =>
-                      value === 'netRevenue'
-                        ? 'የተጣራ ገቢ (Net Revenue)'
-                        : value === 'deposits'
-                        ? 'ተቀማጭ (Deposits)'
-                        : 'ወጪ (Withdrawals)'
-                    }
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="netRevenue"
-                    name="netRevenue"
-                    stroke="#10b981"
-                    strokeWidth={3}
-                    dot={{ r: 2.5, fill: '#10b981' }}
-                    activeDot={{ r: 6 }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="deposits"
-                    name="deposits"
-                    stroke="#6366f1"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="withdrawals"
-                    name="withdrawals"
-                    stroke="#f59e0b"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+            {/* Custom SVG Responsive Revenue Trend Chart */}
+            <div className="w-full pt-1">
+              <RevenueTrendChart data={dailyRevenueData} isDark={isDark} />
             </div>
           </div>
 
