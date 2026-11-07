@@ -2591,8 +2591,8 @@
         }
       ],
       "sha256Hash": "52c57b287b995fdc954fa851b59b74fd21d0de535f6b69972c9617db382203db",
-      "lastBallTickAt": 1794057268843,
-      "lastCountdownTickAt": 1794057268843,
+      "lastBallTickAt": 1794057879514,
+      "lastCountdownTickAt": 1794057879514,
       "seq": 3343,
       "lastUpdated": 1793870891603
     },
@@ -2674,8 +2674,8 @@
         }
       ],
       "sha256Hash": "2c8be65a21512cbadfd6f26955372e4ac3046e98e49f1dbea9c9d3c58aa710d3",
-      "lastBallTickAt": 1794057268843,
-      "lastCountdownTickAt": 1794057268843,
+      "lastBallTickAt": 1794057879514,
+      "lastCountdownTickAt": 1794057879514,
       "seq": 2836,
       "lastUpdated": 1793870891603
     },
@@ -2757,8 +2757,8 @@
         }
       ],
       "sha256Hash": "d8877c2b4cf6c0edbd33cb1739c79cbd2ad31c3f3f2e820f7f742470bbc5a84b",
-      "lastBallTickAt": 1794057268843,
-      "lastCountdownTickAt": 1794057268843,
+      "lastBallTickAt": 1794057879514,
+      "lastCountdownTickAt": 1794057879514,
       "seq": 2836,
       "lastUpdated": 1793870891603
     },
@@ -2840,8 +2840,8 @@
         }
       ],
       "sha256Hash": "c3876179819e32ee08b072b7c84812ae9058342c6081059a9925302a8a810f3d",
-      "lastBallTickAt": 1794057268843,
-      "lastCountdownTickAt": 1794057268843,
+      "lastBallTickAt": 1794057879514,
+      "lastCountdownTickAt": 1794057879514,
       "seq": 2836,
       "lastUpdated": 1793870891603
     }

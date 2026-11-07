@@ -314,7 +314,9 @@ export const RulesAndPatternsModal: React.FC<RulesAndPatternsModalProps> = ({
                         : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
                     }`}
                   >
-                    <span>ሕግ #{rule.id}</span>
+                    <span className="truncate max-w-[140px]">
+                      {isAdminAuthenticated ? `ሕግ #${rule.id}` : getRuleTitle(rule)}
+                    </span>
                     <span
                       className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
                         isSelected

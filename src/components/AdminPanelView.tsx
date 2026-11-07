@@ -181,12 +181,20 @@ export const ADMIN_PATTERN_CATEGORIES: AdminPatternCategory[] = [
     patterns: [
       { code: 'D', label: 'Diagonal lines', ruleId: 4 },
       { code: 'MC', label: 'Most called', ruleId: 3 },
-      { code: 'X', label: 'Small X', ruleId: 19 },
+      { code: 'X', label: 'Small X', ruleId: 14 },
       { code: 'T', label: 'Small T', ruleId: 20 },
       { code: '+', label: 'Small cross (+)', ruleId: 21 },
-      { code: 'Co', label: 'Corner balls', ruleId: 22 },
+      { code: 'Co', label: 'Corner balls', ruleId: 15 },
       { code: 'HH', label: 'Half house', ruleId: 5 },
-      { code: 'BO', label: 'Big O (border)', ruleId: 23 },
+      { code: 'BO', label: 'Big O (border)', ruleId: 13 },
+      { code: 'FH', label: 'Full house (25 cells)', ruleId: 16 },
+      { code: '3Sq', label: '3 Squares (no corners)', ruleId: 10 },
+      { code: '2PL', label: '2 Parallel lines', ruleId: 22 },
+      { code: '2Tr', label: '2 Triangles (3x3)', ruleId: 26 },
+      { code: '3T', label: '3 Small T shapes', ruleId: 27 },
+      { code: '5L', label: '5 Lines (any)', ruleId: 7 },
+      { code: '6L', label: '6 Lines (any)', ruleId: 8 },
+      { code: '7L', label: '7 Lines (any)', ruleId: 9 },
     ],
   },
 ];
@@ -381,6 +389,41 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       ...prev,
       [catId]: !prev[catId],
     }));
+  };
+
+  // Authoritative Admin Pattern Application (Enforces on server room and all connected clients)
+  const handleApplyAdminPattern = (newRuleId: number, code: string, label: string) => {
+    setPatternInput(newRuleId);
+    const parsedStake = Math.max(0, parseFloat(stakeInput) || 0);
+    const parsedPrize = Math.max(1, parseFloat(prizeInput) || 8);
+    const parsedMinutes = Math.max(0.1, parseFloat(regMinInput) || 1);
+    const totalSecs = Math.max(5, Math.round(parsedMinutes * 60));
+
+    if (onUpdateGameSettings) {
+      onUpdateGameSettings(parsedStake, parsedPrize, newRuleId, parsedMinutes);
+    }
+
+    dispatchServerRoomAction({
+      mode: 'regular',
+      action: 'update_settings',
+      stakeAmount: parsedStake,
+      prizeAmount: parsedPrize,
+      activePatternId: newRuleId,
+      countdownSeconds: totalSecs,
+    });
+
+    dispatchServerRoomAction({
+      mode: 'fast',
+      action: 'update_settings',
+      activePatternId: newRuleId,
+    });
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('sun_regular_active_pattern_id', String(newRuleId));
+      localStorage.setItem('sun_bingo_admin_active_pattern', String(newRuleId));
+    }
+
+    showToast(`⚡ በ Admin የታዘዘው የቢንጎ ሕግ (${label} [${code}]) ወዲያውኑ በሁሉም ተጫዋቾች ላይ ተፈፃሚ ሆኗል!`);
   };
 
   // Users Tab State
@@ -1459,7 +1502,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   </label>
                   <select
                     value={patternInput}
-                    onChange={(e) => setPatternInput(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      const pat = BINGO_PATTERNS.find((p) => p.id === val);
+                      handleApplyAdminPattern(val, String(val), pat?.titleAm || 'Pattern');
+                    }}
                     className={`w-full px-3 py-2.5 rounded-xl text-xs sm:text-sm font-bold border focus:outline-none focus:ring-2 focus:ring-purple-500 ${
                       isDark ? 'bg-[#14141d] border-slate-700 text-white' : 'bg-slate-50 border-slate-300'
                     }`}
@@ -1533,7 +1580,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                                 <button
                                   key={`${cat.id}-${pat.code}`}
                                   type="button"
-                                  onClick={() => setPatternInput(pat.ruleId)}
+                                  onClick={() => handleApplyAdminPattern(pat.ruleId, pat.code, pat.label)}
                                   className={`px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border select-none ${
                                     isSelected
                                       ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-purple-400 shadow-sm scale-[1.02]'

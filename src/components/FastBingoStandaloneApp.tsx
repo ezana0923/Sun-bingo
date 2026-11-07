@@ -3160,13 +3160,15 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                         >
                           Copy
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setIsProvablyFairModalOpen(true)}
-                          className="px-2 py-1 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-emerald-400/40 text-emerald-300 text-[10px] sm:text-[11px] font-extrabold cursor-pointer"
-                        >
-                          Verify
-                        </button>
+                        {(winnersList.length > 0 || gameFinishedAt !== null || (calledBalls.length >= 75 && !isPlaying)) && (
+                          <button
+                            type="button"
+                            onClick={() => setIsProvablyFairModalOpen(true)}
+                            className="px-2 py-1 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-emerald-400/40 text-emerald-300 text-[10px] sm:text-[11px] font-extrabold cursor-pointer"
+                          >
+                            Verify
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -3244,6 +3246,33 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                             Au
                           </span>
                           <span>{autoDaub ? 'Au (ON)' : 'Au (OFF)'}</span>
+                        </button>
+
+                        {/* የፈጣን ቢንጎ አደራደር ON / OFF Button placed right next to Au (ON / OFF) */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSortMode((prev) => (prev === 'default' ? 'by_fast_win' : 'default'))
+                          }
+                          className={`px-2.5 py-1 rounded-xl text-xs font-black flex items-center gap-1.5 border transition-all cursor-pointer shadow-xs active:scale-95 whitespace-nowrap select-none ${
+                            sortMode !== 'default'
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-400/60 shadow-amber-500/10'
+                              : isDark
+                              ? 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                              : 'bg-white text-slate-600 border-slate-300 hover:text-slate-900'
+                          }`}
+                          title={
+                            sortMode !== 'default'
+                              ? 'የቢንጎ አደራደር (በራሱ ህግ)፦ በርቷል (ON) - ለማጥፋት ይጫኑ'
+                              : 'የቢንጎ አደራደር፦ ጠፍቷል (OFF) - ለማብራት ይጫኑ'
+                          }
+                        >
+                          <ArrowUpDown
+                            className={`w-3.5 h-3.5 shrink-0 ${
+                              sortMode !== 'default' ? 'text-amber-400' : 'text-slate-400'
+                            }`}
+                          />
+                          <span>{sortMode !== 'default' ? 'አደራደር (ON)' : 'አደራደር (OFF)'}</span>
                         </button>
                       </div>
                     </div>
