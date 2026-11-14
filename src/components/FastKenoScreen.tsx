@@ -29,6 +29,7 @@ import {
   Download,
   BarChart2,
 } from 'lucide-react';
+import { buildApiUrl, getDeviceClientId } from '../utils/realtimeRoomClient';
 
 const fireConfetti = () => {
   try {
@@ -87,9 +88,11 @@ export interface KenoStats {
 export interface FastKenoScreenProps {
   onBackToLudo?: () => void;
   onOpenBingo?: () => void;
-  onOpenWallet?: () => void;
+  onOpenWallet?: (tab?: 'deposit' | 'withdraw' | 'transfer' | 'history') => void;
   initialBalance?: number;
-  onBalanceChange?: (newBalance: number) => void;
+  playerPhone?: string;
+  playerName?: string;
+  onBalanceChange?: (newBalance: number, reason?: string) => void;
   language?: Language;
   onChangeLanguage?: (lang: Language) => void;
 }
@@ -1358,23 +1361,37 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
   onOpenBingo,
   onOpenWallet,
   initialBalance = 9980,
+  playerPhone,
+  playerName,
   onBalanceChange,
   language: externalLanguage,
   onChangeLanguage,
 }) => {
+  const myKenoPlayerId = useMemo(
+    () => (playerPhone?.trim() ? `p_${playerPhone.trim()}` : `cid_${getDeviceClientId()}`),
+    [playerPhone]
+  );
+  const myKenoHandle = useMemo(
+    () => playerName?.trim() || (playerPhone ? playerPhone.slice(-4) : 'Player'),
+    [playerName, playerPhone]
+  );
+
   const [user, setUser] = useState({
-    id: 'keno_player_1',
-    name: 'Player',
+    id: myKenoPlayerId,
+    name: myKenoHandle,
     birrBalance: initialBalance,
     totalMatches: 0,
     totalBirrWon: 0,
     totalWins: 0,
     avatar: '🎯',
   });
+  const birrBalanceRef = useRef<number>(initialBalance);
+  birrBalanceRef.current = user.birrBalance;
 
   // Keep internal balance in sync if parent initialBalance changes
   useEffect(() => {
     if (initialBalance !== undefined) {
+      birrBalanceRef.current = initialBalance;
       setUser((prev) => (prev.birrBalance !== initialBalance ? { ...prev, birrBalance: initialBalance } : prev));
     }
   }, [initialBalance]);
@@ -1388,14 +1405,14 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
     }
   }, [externalLanguage, language]);
 
-  const updateUserProfile = (updates: any) => {
-    setUser((prev) => {
-      const next = { ...prev, ...updates };
-      if (updates.birrBalance !== undefined && onBalanceChange) {
-        onBalanceChange(updates.birrBalance);
-      }
-      return next;
-    });
+  const updateUserProfile = (updates: any, reason?: string) => {
+    if (updates.birrBalance !== undefined) {
+      birrBalanceRef.current = updates.birrBalance;
+    }
+    setUser((prev) => ({ ...prev, ...updates }));
+    if (updates.birrBalance !== undefined && onBalanceChange) {
+      onBalanceChange(updates.birrBalance, reason);
+    }
   };
 
   // Dynamic Translations based on current selected language
@@ -1443,16 +1460,16 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
   const [isBetAccepted, setIsBetAccepted] = useState<boolean>(false);
   const [roundWonPayout, setRoundWonPayout] = useState<number>(0);
 
-  // Draw State
+  // Draw State (synchronized from server)
   const [isDrawing, setIsDrawing] = useState<boolean>(false);
   const [drawnBalls, setDrawnBalls] = useState<number[]>([]);
   const [currentRevealedIndex, setCurrentRevealedIndex] = useState<number>(-1);
-  const [roundNumber, setRoundNumber] = useState<number>(() => 127161519);
+  const [roundNumber, setRoundNumber] = useState<number>(() => 127161520);
   const currentDrawId = roundNumber.toString().slice(0, 9);
   const [lastRoundResult, setLastRoundResult] = useState<KenoRoundResult | null>(null);
 
   // Provably Fair Hash for current round
-  const [currentRoundHash] = useState<string>(
+  const [currentRoundHash, setCurrentRoundHash] = useState<string>(
     '3586ED7EECC3AEA4A6AC4A359D96E5CF30BBC47E24ED9E030066D7C7DE6C82B1F1376122E35B5165342F27243E1BE5B46B31F2A5D97E6DE26E0E4A6202DF3CDD'
   );
   const [copiedHash, setCopiedHash] = useState<boolean>(false);
@@ -1545,31 +1562,25 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
     return groups;
   }, [historyItems]);
 
-  // Fast-forward / Skip draw animation
+  // Fast-forward preview helper (server controls authoritative round phase)
   const handleSkipDraw = () => {
-    if (!isDrawing) return;
-    if (drawIntervalRef.current) clearInterval(drawIntervalRef.current);
+    if (!isDrawing || drawnBalls.length < 20) return;
     setCurrentRevealedIndex(20);
-    finalizeBet(drawnBalls);
   };
 
   // Video matching: Balls placed in Row 2 (bottom row: balls 1 to 10)
   const row2Balls = useMemo(() => {
     if (currentRevealedIndex < 1) return [];
-    // At index 1..9, balls 0..(currentRevealedIndex-1) have moved into bottom row
-    // At index >= 10, all 10 balls (0..9) are in bottom row
     return drawnBalls.slice(0, Math.min(10, currentRevealedIndex));
   }, [drawnBalls, currentRevealedIndex]);
 
   // Video matching: Balls placed in Row 1 (top row: balls 11 to 20)
   const row1Balls = useMemo(() => {
     if (currentRevealedIndex < 11) return [];
-    // At index 11..19, balls 10..(currentRevealedIndex-1) have moved into top row
-    // At index >= 20, all 10 balls (10..19) are in top row
     return drawnBalls.slice(10, Math.min(20, currentRevealedIndex));
   }, [drawnBalls, currentRevealedIndex]);
 
-  // Ball currently in center circle (null when index === 20 or < 0, exactly as in video Frame 00:11-00:15)
+  // Ball currently in center circle
   const activeCenterBall = useMemo(() => {
     if (currentRevealedIndex >= 0 && currentRevealedIndex < 20) {
       return drawnBalls[currentRevealedIndex];
@@ -1585,54 +1596,199 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
 
   const [isAdminPaused, setIsAdminPaused] = useState(false);
   const lastKenoResetTokenRef = useRef(0);
+  const kenoPhaseRef = useRef<'betting' | 'drawing' | 'cooldown'>('betting');
+  const lastRevealedIdxRef = useRef<number>(-1);
+  const finalizedRoundRef = useRef<number | null>(null);
+  const lastBettingRoundRef = useRef<number | null>(null);
+  const finalizeBetRef = useRef<(drawn20: number[], settledRoundNumber?: number) => void>(() => {});
+  const myKenoPlayerIdRef = useRef(myKenoPlayerId);
+  myKenoPlayerIdRef.current = myKenoPlayerId;
 
+  const applyServerKenoState = (state: any) => {
+    if (!state || typeof state !== 'object') return;
+    const srvPhase: 'betting' | 'drawing' | 'cooldown' =
+      state.phase === 'drawing' || state.phase === 'cooldown' ? state.phase : 'betting';
+    const srvRound = Number(state.roundNumber || 127161520);
+    const srvCountdown = Number(state.countdownSeconds ?? 0);
+    const srvDrawn: number[] = Array.isArray(state.drawnBalls) ? state.drawnBalls : [];
+    const srvRevealIdx = typeof state.currentRevealedIndex === 'number' ? state.currentRevealedIndex : -1;
+
+    setRoundNumber(srvRound);
+    setCountdownSeconds(srvCountdown);
+    setIsAdminPaused(Boolean(state.isPaused));
+    if (state.roundHash) setCurrentRoundHash(String(state.roundHash));
+
+    if (typeof state.resetToken === 'number' && state.resetToken !== lastKenoResetTokenRef.current) {
+      if (lastKenoResetTokenRef.current !== 0) {
+        showToast('🔄 አድሚን አዲስ የኬኖ ዙር ጀምሯል!');
+      }
+      lastKenoResetTokenRef.current = state.resetToken;
+    }
+
+    setDrawnBalls(srvDrawn);
+    setCurrentRevealedIndex(srvRevealIdx);
+    const drawingNow = srvPhase === 'drawing' || srvPhase === 'cooldown';
+    setIsDrawing(drawingNow);
+    isDrawingRef.current = drawingNow;
+
+    if (srvPhase === 'drawing' && srvRevealIdx >= 0 && srvRevealIdx < 20 && srvDrawn.length > srvRevealIdx) {
+      if (srvRevealIdx !== lastRevealedIdxRef.current || kenoPhaseRef.current !== 'drawing') {
+        lastRevealedIdxRef.current = srvRevealIdx;
+        const ball = srvDrawn[srvRevealIdx];
+        const allUserPicks = Array.from(new Set(userActiveTicketsRef.current.flatMap((tk) => tk.numbers)));
+        const isHit = allUserPicks.includes(ball);
+        const isSuperBall = srvRevealIdx === 19;
+
+        setIsBallPopping(true);
+        setTimeout(() => setIsBallPopping(false), 240);
+
+        const hitsSoFar = allUserPicks.filter((n) => srvDrawn.slice(0, srvRevealIdx + 1).includes(n)).length;
+        setCurrentHitsCount(hitsSoFar);
+
+        if (isSuperBall) {
+          kenoAudio.playSuperBall();
+        } else if (isHit) {
+          kenoAudio.playHitMatch(hitsSoFar);
+        } else {
+          kenoAudio.playBallPop(srvRevealIdx);
+        }
+      }
+    }
+
+    if (srvPhase === 'cooldown' && srvDrawn.length === 20) {
+      lastRevealedIdxRef.current = 20;
+      if (finalizedRoundRef.current !== srvRound) {
+        finalizedRoundRef.current = srvRound;
+        finalizeBetRef.current(srvDrawn, srvRound);
+      }
+    }
+
+    if (srvPhase === 'betting') {
+      lastRevealedIdxRef.current = -1;
+      if (lastBettingRoundRef.current !== null && lastBettingRoundRef.current !== srvRound) {
+        setUserActiveTickets([]);
+        userActiveTicketsRef.current = [];
+        setHasActiveBet(false);
+        setActiveUserTicketId(null);
+        setMyTicketsCount(0);
+        setMyBetsTotal(0);
+        setSelectedNumbers([]);
+        setCurrentHitsCount(0);
+        setRoundWonPayout(0);
+      }
+      lastBettingRoundRef.current = srvRound;
+    }
+
+    if (Array.isArray(state.liveTickets)) {
+      let ownIdx = 0;
+      const mappedLive: CommunityTicket[] = state.liveTickets.map((tk: any) => {
+        const isMine = tk.playerId && tk.playerId === myKenoPlayerIdRef.current;
+        if (isMine) ownIdx += 1;
+        return {
+          id: String(tk.id),
+          handle: isMine ? `${ownIdx} My Ticket` : String(tk.handle || 'Player'),
+          numbers: Array.isArray(tk.numbers) ? tk.numbers : [],
+          bet: Number(tk.bet || 2),
+          status: tk.status === 'Won' || tk.status === 'Lost' ? tk.status : 'Waiting',
+          wonAmount: typeof tk.wonAmount === 'number' ? tk.wonAmount : undefined,
+        };
+      });
+      setCommunityTickets(mappedLive.length > 0 ? mappedLive : INITIAL_COMMUNITY_TICKETS);
+    }
+
+    if (Array.isArray(state.recentResults) && state.recentResults.length > 0) {
+      setResultsDraws(() => {
+        const seen = new Set<string>();
+        const combined: ResultRound[] = [];
+        for (const r of [...state.recentResults, ...CANONICAL_RESULTS_DRAWS]) {
+          const rid = String(r.id);
+          if (!seen.has(rid)) {
+            seen.add(rid);
+            combined.push({ id: rid, time: String(r.time || ''), balls: Array.isArray(r.balls) ? r.balls : [] });
+          }
+        }
+        return combined;
+      });
+    }
+
+    if (state.ballFrequency && typeof state.ballFrequency === 'object') {
+      setStats((prev) => ({
+        ...prev,
+        ballFrequency: state.ballFrequency as Record<number, number>,
+      }));
+    }
+
+    kenoPhaseRef.current = srvPhase;
+  };
+
+  // Real-time Server Synchronization via WebSocket (/ws/bingo) + HTTP Live State hydration
   useEffect(() => {
     let active = true;
-    const syncKenoAdmin = async () => {
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let wsOpen = false;
+
+    const hydrate = async () => {
       try {
-        const res = await fetch('/api/keno/admin/state');
+        const res = await fetch(buildApiUrl(`/api/keno/live-state?_t=${Date.now()}`), { cache: 'no-store' });
         const data = await res.json();
-        if (!active || !data?.ok) return;
-        setIsAdminPaused(Boolean(data.isPaused));
-        if (typeof data.resetToken === 'number' && data.resetToken !== lastKenoResetTokenRef.current) {
-          if (lastKenoResetTokenRef.current !== 0) {
-            setCountdownSeconds(Number(data.defaultCountdownSec || 60));
-            setIsDrawing(false);
-            showToast('🔄 አድሚን አዲስ የኬኖ ዙር ጀምሯል!');
-          }
-          lastKenoResetTokenRef.current = data.resetToken;
+        if (active && data?.ok && data.state) {
+          applyServerKenoState(data.state);
         }
       } catch {}
     };
-    syncKenoAdmin();
-    const tmr = window.setInterval(syncKenoAdmin, 4000);
+
+    const connectWs = () => {
+      if (!active || typeof window === 'undefined') return;
+      try {
+        const apiRoot = buildApiUrl('');
+        const wsUrl = apiRoot
+          ? `${apiRoot.replace(/^http/, 'ws')}/ws/bingo`
+          : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/bingo`;
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+          wsOpen = true;
+        };
+        ws.onmessage = (evt) => {
+          if (!active) return;
+          try {
+            const msg = JSON.parse(String(evt.data));
+            if (msg?.type === 'keno:state:sync' && msg.state) {
+              applyServerKenoState(msg.state);
+            } else if (msg?.type === 'keno:admin:sync') {
+              setIsAdminPaused(Boolean(msg.isPaused));
+            }
+          } catch {}
+        };
+        ws.onclose = () => {
+          wsOpen = false;
+          if (active) {
+            reconnectTimer = setTimeout(connectWs, 1500);
+          }
+        };
+        ws.onerror = () => {
+          wsOpen = false;
+        };
+      } catch {}
+    };
+
+    hydrate();
+    connectWs();
+    const backupTimer = window.setInterval(() => {
+      if (!wsOpen) hydrate();
+    }, 3500);
+
     return () => {
       active = false;
-      window.clearInterval(tmr);
+      window.clearInterval(backupTimer);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) {
+        try {
+          ws.close();
+        } catch {}
+      }
     };
   }, []);
-
-  // 60-SECOND COUNTDOWN TICKER: Counts down from 60s to 0s then AUTO-STARTS the draw!
-  useEffect(() => {
-    if (isDrawing || isAdminPaused) return;
-
-    const timer = setInterval(() => {
-      setCountdownSeconds((prev) => {
-        if (prev <= 1) {
-          // Timer reached 0: Automatically start the game/draw!
-          setTimeout(() => {
-            if (!isDrawingRef.current) {
-              startAuthenticKenoDraw();
-            }
-          }, 50);
-          return 60;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [isDrawing, isAdminPaused]);
 
   // Format digital countdown string "01:00" -> "00:59" -> "00:00"
   const formattedCountdown = useMemo(() => {
@@ -1695,103 +1851,49 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
     setStake(maxAffordable);
   };
 
-  // Real Authentic Keno Draw Engine (20 balls out of 80, drawn one by one at 1s cadence)
-  const startAuthenticKenoDraw = () => {
-    if (isDrawingRef.current) return;
-
-    if (resetTimeoutRef.current) {
-      clearTimeout(resetTimeoutRef.current);
+  // Place Bet: registers ticket on authoritative server so all connected players see live bets & results together
+  const handlePlaceBet = async () => {
+    if (isDrawing || kenoPhaseRef.current !== 'betting') {
+      showToast(language === 'am' ? 'ጨዋታው እየተሳበ ነው — ለሚቀጥለው ዙር ይጠብቁ!' : 'Draw in progress — wait for next round!');
+      return;
     }
-    if (drawIntervalRef.current) {
-      clearInterval(drawIntervalRef.current);
-    }
-
-    setIsDrawing(true);
-    isDrawingRef.current = true;
-    setCurrentRevealedIndex(-1);
-    setCurrentHitsCount(0);
-
-    // Generate 20 unique random balls from 1 to 80
-    const fullDraw = generateKenoDraw();
-    setDrawnBalls(fullDraw);
-
-    // Distinct numbers picked across all active user tickets
-    const activeTickets = userActiveTicketsRef.current;
-    const allUserPicks = Array.from(new Set(activeTickets.flatMap((t) => t.numbers)));
-
-    let idx = 0;
-    // Exactly 1000ms cadence matching the video (1 second per ball)
-    drawIntervalRef.current = setInterval(() => {
-      setCurrentRevealedIndex(idx);
-      const ball = fullDraw[idx];
-      const isHit = allUserPicks.includes(ball);
-      const isSuperBall = idx === 19;
-
-      // Trigger ball pop scale bounce
-      setIsBallPopping(true);
-      setTimeout(() => setIsBallPopping(false), 240);
-
-      // Real-time hits tracking across user picks
-      const hitsSoFar = allUserPicks.filter((n) =>
-        fullDraw.slice(0, idx + 1).includes(n)
-      ).length;
-      setCurrentHitsCount(hitsSoFar);
-
-      // Authentic Keno sound effects
-      if (isSuperBall) {
-        kenoAudio.playSuperBall();
-      } else if (isHit) {
-        kenoAudio.playHitMatch(hitsSoFar);
-      } else {
-        kenoAudio.playBallPop(idx);
-      }
-
-      idx++;
-      if (idx >= 20) {
-        clearInterval(drawIntervalRef.current);
-        // After 20th ball is revealed in center, wait 1000ms for it to move into Row 1 slot 10 and empty center!
-        setTimeout(() => {
-          setCurrentRevealedIndex(20);
-          finalizeBet(fullDraw);
-        }, 1000);
-      }
-    }, 1000);
-  };
-
-  // Place Bet: allows placing multiple independent tickets for the upcoming draw round!
-  const handlePlaceBet = () => {
-    if (isDrawing) return;
 
     if (selectedNumbers.length === 0) {
       showToast(t.selectAtLeastOne);
       return;
     }
 
-    if (stake > user.birrBalance) {
-      showToast(t.insufficientBalance(user.birrBalance));
-      if (onOpenWallet) onOpenWallet();
+    if (stake > birrBalanceRef.current) {
+      showToast(t.insufficientBalance(birrBalanceRef.current));
+      if (onOpenWallet) onOpenWallet('deposit');
       return;
     }
 
-    // Deduct stake from player balance
-    updateUserProfile({
-      birrBalance: user.birrBalance - stake,
-      totalMatches: user.totalMatches + 1,
-    });
-
+    const picksToSubmit = [...selectedNumbers];
+    const stakeToSubmit = stake;
     const ticketIdx = userActiveTickets.length + 1;
     const myTicketId = `my-${Date.now()}-${ticketIdx}`;
+
+    // Deduct stake from player balance immediately
+    updateUserProfile(
+      {
+        birrBalance: Math.max(0, birrBalanceRef.current - stakeToSubmit),
+        totalMatches: user.totalMatches + 1,
+      },
+      `Keno #${roundNumber}`
+    );
+
     const newTicket = {
       id: myTicketId,
       ticketIndex: ticketIdx,
-      numbers: [...selectedNumbers],
-      stake: stake,
+      numbers: picksToSubmit,
+      stake: stakeToSubmit,
       timestamp: Date.now(),
     };
 
     setUserActiveTickets((prev) => [...prev, newTicket]);
     setMyTicketsCount((prev) => prev + 1);
-    setMyBetsTotal((prev) => prev + stake);
+    setMyBetsTotal((prev) => prev + stakeToSubmit);
     setHasActiveBet(true);
     setActiveUserTicketId(myTicketId);
 
@@ -1800,21 +1902,10 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
       setIsBetAccepted(false);
     }, 1400);
 
-    // Add user's ticket with video format: "1 My Ticket", "2 My Ticket", etc.
-    const myNewTicket: CommunityTicket = {
-      id: myTicketId,
-      handle: `${ticketIdx} My Ticket`,
-      numbers: [...selectedNumbers],
-      bet: stake,
-      status: 'Waiting',
-    };
-    setCommunityTickets((prev) => [myNewTicket, ...prev]);
-
-    // Clear board so the player can immediately pick a separate set of numbers!
+    // Clear board so the player can immediately pick a separate set of numbers
     setSelectedNumbers([]);
     kenoAudio.playSelect();
 
-    // Auto-slide to the new draft card matching IMG_3879 and video
     setTimeout(() => {
       if (cardsCarouselRef.current) {
         cardsCarouselRef.current.scrollTo({
@@ -1826,16 +1917,31 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
 
     showToast(
       language === 'am'
-        ? `ቲኬት #${ticketIdx} ተይዟል! (${newTicket.numbers.length} ቁጥር • ${stake} ETB)`
-        : `Ticket #${ticketIdx} placed! (${newTicket.numbers.length} picks • ${stake} ETB)`
+        ? `ቲኬት #${ticketIdx} ተይዟል! (${newTicket.numbers.length} ቁጥር • ${stakeToSubmit} ETB)`
+        : `Ticket #${ticketIdx} placed! (${newTicket.numbers.length} picks • ${stakeToSubmit} ETB)`
     );
 
-    // NOTE: Keep countdown running uninterrupted until 00:00 per user requirement:
-    // "ጨዋታው 60 ሰከንዱ ካለቀ እንዲጀምር"
+    try {
+      const res = await fetch(buildApiUrl('/api/keno/tickets'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId: myKenoPlayerId,
+          handle: myKenoHandle,
+          numbers: picksToSubmit,
+          bet: stakeToSubmit,
+        }),
+      });
+      const data = await res.json();
+      if (data?.ok && data.state) {
+        applyServerKenoState(data.state);
+      }
+    } catch {}
   };
 
-  // Finalize bet calculation for all placed user tickets and schedule transition back
-  const finalizeBet = (drawn20: number[]) => {
+  // Finalize bet calculation for all placed user tickets when server finishes 20-ball draw
+  const finalizeBet = (drawn20: number[], settledRoundNumber?: number) => {
+    const activeRound = settledRoundNumber ?? roundNumber;
     const activeTickets = userActiveTicketsRef.current;
     const superBall = drawn20[19];
 
@@ -1843,7 +1949,6 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
     let winningTicketsCount = 0;
     const newHistoryItems: HistoryItem[] = [];
 
-    // Evaluate each of user's active tickets!
     activeTickets.forEach((ticket) => {
       const hits = ticket.numbers.filter((n) => drawn20.includes(n));
       const isSuperBallHit = ticket.numbers.includes(superBall);
@@ -1859,7 +1964,7 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
 
       newHistoryItems.push({
         id: `h-${Date.now()}-${ticket.id}`,
-        drawId: roundNumber.toString(),
+        drawId: activeRound.toString(),
         dateStr: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString('en-GB'),
         numbers: [...ticket.numbers],
         matchedNumbers: hits,
@@ -1869,59 +1974,16 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
       });
     });
 
-    // Append to Results Draws table (matching IMG_3873)
-    const newDrawResult: ResultRound = {
-      id: roundNumber.toString(),
-      time: new Date().toLocaleTimeString('en-GB'),
-      balls: drawn20,
-    };
-    setResultsDraws((prev) => [
-      newDrawResult,
-      ...prev.filter((rd) => rd.balls && rd.balls.length > 0),
-    ]);
-
-    // Append new user history items
     if (newHistoryItems.length > 0) {
       setHistoryItems((prev) => [...newHistoryItems, ...prev]);
     }
 
-    // Update community tickets statuses
-    setCommunityTickets((prev) =>
-      prev.map((tk) => {
-        const userTicket = activeTickets.find((ut) => ut.id === tk.id);
-        if (userTicket) {
-          const hits = userTicket.numbers.filter((n) => drawn20.includes(n));
-          const isSuperBallHit = userTicket.numbers.includes(superBall);
-          const baseMult = calculateKenoMultiplier(userTicket.numbers.length, hits.length);
-          const superMult = isSuperBallHit && baseMult > 0 ? 2.0 : 1.0;
-          const payout = Math.round(userTicket.stake * baseMult * superMult);
-          return {
-            ...tk,
-            status: payout > 0 ? 'Won' : 'Lost',
-            wonAmount: payout > 0 ? payout : undefined,
-          };
-        }
-        if (tk.status === 'Waiting') {
-          const tHits = tk.numbers.filter((num) => drawn20.includes(num));
-          const tMult = calculateKenoMultiplier(tk.numbers.length, tHits.length);
-          const tWon = tMult > 0;
-          return {
-            ...tk,
-            status: tWon ? 'Won' : 'Lost',
-            wonAmount: tWon ? Math.round(tk.bet * tMult) : undefined,
-          };
-        }
-        return tk;
-      })
-    );
-
-    // Update Stats
+    const totalWageredThisRound = activeTickets.reduce((acc, tk) => acc + tk.stake, 0);
     const updatedFreq = { ...stats.ballFrequency };
     drawn20.forEach((b) => {
-      updatedFreq[b] = (updatedFreq[b] || 0) + 1;
+      updatedFreq[b] = (updatedFreq[b] || 24) + 1;
     });
 
-    const totalWageredThisRound = activeTickets.reduce((acc, tk) => acc + tk.stake, 0);
     const newStats: KenoStats = {
       totalRoundsPlayed: stats.totalRoundsPlayed + 1,
       totalBirrWagered: stats.totalBirrWagered + totalWageredThisRound,
@@ -1932,20 +1994,21 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
     setStats(newStats);
     saveKenoStats(newStats);
 
-    // Record won payout for "YOU WIN" display in center circle (Frame 00:41 to 00:45)
     setRoundWonPayout(totalUserPayout);
 
-    // Credit winnings to player
     if (totalUserPayout > 0) {
-      updateUserProfile({
-        birrBalance: user.birrBalance + totalUserPayout,
-        totalBirrWon: user.totalBirrWon + totalUserPayout,
-        totalWins: user.totalWins + winningTicketsCount,
-      });
+      updateUserProfile(
+        {
+          birrBalance: birrBalanceRef.current + totalUserPayout,
+          totalBirrWon: user.totalBirrWon + totalUserPayout,
+          totalWins: user.totalWins + winningTicketsCount,
+        },
+        `Keno Win #${activeRound}`
+      );
 
       if (totalUserPayout >= 100) {
         kenoAudio.playBigWin();
-        fireConfetti(); // confetti({ particleCount: 140, spread: 85, origin: { y: 0.55 } });
+        fireConfetti();
       } else {
         kenoAudio.playCashRegister();
       }
@@ -1956,27 +2019,8 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
           : `Congratulations! ${winningTicketsCount} ticket(s) won (+${totalUserPayout} ETB)`
       );
     }
-
-    setRoundNumber((prev) => prev + 1);
-
-    // Hold completed 20-ball draw display for 5.0 seconds (matching video)
-    // then return to the 80-board and start the fresh 60-second countdown for next round!
-    resetTimeoutRef.current = setTimeout(() => {
-      setIsDrawing(false);
-      isDrawingRef.current = false;
-      setUserActiveTickets([]);
-      userActiveTicketsRef.current = [];
-      setHasActiveBet(false);
-      setActiveUserTicketId(null);
-      setMyTicketsCount(0);
-      setMyBetsTotal(0);
-      setSelectedNumbers([]);
-      setCountdownSeconds(60);
-      setCurrentRevealedIndex(-1);
-      setCurrentHitsCount(0);
-      setRoundWonPayout(0);
-    }, 5000);
   };
+  finalizeBetRef.current = finalizeBet;
 
   // Currently revealed drawn balls set
   const revealedDrawnSet = useMemo(() => {
@@ -2016,13 +2060,22 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
               <span>🏠 {t.back}</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => (onOpenWallet ? onOpenWallet() : showToast(t.walletMenu(user.birrBalance)))}
-              className="px-3.5 py-1 rounded-xl bg-[#22c55e] hover:bg-[#16a34a] text-slate-950 font-black text-xs shadow-md transition active:scale-95 cursor-pointer"
-            >
-              {t.deposit}
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => (onOpenWallet ? onOpenWallet('deposit') : showToast(t.walletMenu(user.birrBalance)))}
+                className="px-3 py-1 rounded-xl bg-[#22c55e] hover:bg-[#16a34a] text-slate-950 font-black text-xs shadow-md transition active:scale-95 cursor-pointer"
+              >
+                {t.deposit}
+              </button>
+              <button
+                type="button"
+                onClick={() => (onOpenWallet ? onOpenWallet('withdraw') : showToast(t.walletMenu(user.birrBalance)))}
+                className="px-3 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-md transition active:scale-95 cursor-pointer"
+              >
+                {language === 'am' ? 'ወጪ' : language === 'ti' ? 'ወጻኢ' : language === 'om' ? 'Baasii' : 'Withdraw'}
+              </button>
+            </div>
           </div>
 
           {/* Row 2: [FAST KENO] Logo | [ 🪙 0 ETB | ID: 127161519 (✓) ] | [ ☰ ] */}
@@ -2036,7 +2089,7 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
             <div className="flex items-center rounded-full bg-[#161c24] border border-[#2d3748] px-2.5 py-1 text-xs shadow-sm">
               <button
                 type="button"
-                onClick={() => (onOpenWallet ? onOpenWallet() : showToast(t.walletMenu(user.birrBalance)))}
+                onClick={() => (onOpenWallet ? onOpenWallet('history') : showToast(t.walletMenu(user.birrBalance)))}
                 className="flex items-center gap-1 pr-2 border-r border-[#2d3748] hover:text-[#4ade80] transition cursor-pointer"
                 title={t.walletMenu(user.birrBalance)}
               >
@@ -3553,40 +3606,12 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
 
                   <div className="h-px bg-[#252f3d] my-2" />
 
-                  {onOpenBingo && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        onOpenBingo();
-                      }}
-                      className="w-full p-2.5 rounded-xl bg-gradient-to-r from-emerald-600/30 to-teal-700/30 border border-emerald-500/50 flex items-center gap-3 text-xs font-black text-emerald-300 hover:brightness-110 cursor-pointer"
-                    >
-                      <span>🎟️</span>
-                      <span>{t.goToBingoMenu}</span>
-                    </button>
-                  )}
-
-                  {onBackToLudo && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        onBackToLudo();
-                      }}
-                      className="w-full p-2.5 rounded-xl bg-gradient-to-r from-amber-600/30 to-yellow-700/30 border border-amber-500/50 flex items-center gap-3 text-xs font-black text-amber-300 hover:brightness-110 cursor-pointer"
-                    >
-                      <span>👑</span>
-                      <span>{t.goToLudoMenu}</span>
-                    </button>
-                  )}
-
                   <button
                     type="button"
                     onClick={() => {
                       setIsMenuOpen(false);
                       if (onOpenWallet) {
-                        onOpenWallet();
+                        onOpenWallet('deposit');
                       } else {
                         showToast(t.walletMenu(user.birrBalance));
                       }

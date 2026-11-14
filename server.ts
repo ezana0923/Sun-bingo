@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
+import crypto from 'crypto';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -6502,17 +6503,1796 @@ app.get(['/api/ping', '/api/keep-alive', '/api/health'], (_req, res) => {
   });
 });
 
-// Ramino Private Rooms Store & API (Invite Link + Room Code + Friend Count)
+// ============================================================================
+// SERVER-AUTHORITATIVE FAST KENO LIVE ENGINE (100% SYNCHRONIZED ACROSS DEVICES)
+// ============================================================================
+type KenoLivePhase = 'betting' | 'drawing' | 'cooldown';
+
+interface ServerKenoTicket {
+  id: string;
+  handle: string;
+  playerId: string;
+  numbers: number[];
+  bet: number;
+  status: 'Waiting' | 'Lost' | 'Won';
+  wonAmount?: number;
+  timestamp: number;
+}
+
+interface ServerKenoResultRound {
+  id: string;
+  time: string;
+  balls: number[];
+}
+
+const KENO_SERVER_PAYMENT_MATRIX: (number | null)[][] = [
+  [null, null, null, null, null, null, 1, 1, 2, 2],
+  [3.5, 1, null, null, null, null, null, null, null, null],
+  [null, 10, 2, 1.5, 1, null, null, null, null, null],
+  [null, null, 50, 10, 3, 2, 2, null, null, null],
+  [null, null, null, 80, 30, 15, 4, 5, 2, null],
+  [null, null, null, null, 150, 60, 20, 15, 10, 5],
+  [null, null, null, null, null, 500, 80, 50, 25, 30],
+  [null, null, null, null, null, null, 1000, 200, 125, 100],
+  [null, null, null, null, null, null, null, 2000, 1000, 300],
+  [null, null, null, null, null, null, null, null, 5000, 2000],
+  [null, null, null, null, null, null, null, null, null, 10000],
+];
+
+function calculateServerKenoMultiplier(spots: number, hits: number): number {
+  if (spots < 1 || spots > 10 || hits < 0 || hits > spots) return 0;
+  return KENO_SERVER_PAYMENT_MATRIX[hits]?.[spots - 1] ?? 0;
+}
+
+function generateServerKenoDraw(): number[] {
+  const pool = Array.from({ length: 80 }, (_, i) => i + 1);
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(0, i + 1);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, 20);
+}
+
+function makeKenoRoundHash(roundNumber: number, balls: number[]): string {
+  return crypto
+    .createHash('sha512')
+    .update(`SUN_KENO_${roundNumber}_${balls.join(',')}_${Date.now()}`)
+    .digest('hex')
+    .toUpperCase();
+}
+
+const kenoAdminConfig = {
+  isPaused: false,
+  defaultCountdownSec: 60,
+  speed: 'normal' as 'normal' | 'fast' | 'turbo',
+  resetToken: 0,
+  totalBetsCount: 0,
+  totalWagered: 0,
+  totalPaidOut: 0,
+};
+
+const initialKenoBallFreq: Record<number, number> = {};
+for (let i = 1; i <= 80; i++) initialKenoBallFreq[i] = 24;
+
+const kenoLiveState = {
+  roundNumber: 127161520,
+  phase: 'betting' as KenoLivePhase,
+  countdownSeconds: 60,
+  cooldownSeconds: 0,
+  drawnBalls: [] as number[],
+  currentRevealedIndex: -1,
+  roundHash: crypto.createHash('sha512').update('SUN_KENO_INIT_127161520').digest('hex').toUpperCase(),
+  liveTickets: [] as ServerKenoTicket[],
+  recentResults: [] as ServerKenoResultRound[],
+  ballFrequency: initialKenoBallFreq,
+  lastStepAt: Date.now(),
+};
+
+function serializeKenoLiveState() {
+  return {
+    roundNumber: kenoLiveState.roundNumber,
+    phase: kenoLiveState.phase,
+    countdownSeconds: kenoLiveState.countdownSeconds,
+    cooldownSeconds: kenoLiveState.cooldownSeconds,
+    drawnBalls: kenoLiveState.drawnBalls,
+    currentRevealedIndex: kenoLiveState.currentRevealedIndex,
+    roundHash: kenoLiveState.roundHash,
+    liveTickets: kenoLiveState.liveTickets,
+    recentResults: kenoLiveState.recentResults,
+    ballFrequency: kenoLiveState.ballFrequency,
+    isPaused: kenoAdminConfig.isPaused,
+    speed: kenoAdminConfig.speed,
+    defaultCountdownSec: kenoAdminConfig.defaultCountdownSec,
+    resetToken: kenoAdminConfig.resetToken,
+    serverTimestamp: Date.now(),
+  };
+}
+
+function broadcastKenoLiveState() {
+  const payload = JSON.stringify({
+    type: 'keno:state:sync',
+    state: serializeKenoLiveState(),
+  });
+  for (const client of wsClients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payload);
+      } catch {}
+    }
+  }
+}
+
+function startKenoServerLoop() {
+  setInterval(() => {
+    if (kenoAdminConfig.isPaused) {
+      kenoLiveState.lastStepAt = Date.now();
+      return;
+    }
+    const now = Date.now();
+    const stepMs =
+      kenoLiveState.phase === 'drawing'
+        ? kenoAdminConfig.speed === 'turbo'
+          ? 300
+          : kenoAdminConfig.speed === 'fast'
+          ? 550
+          : 1000
+        : 1000;
+
+    if (now - kenoLiveState.lastStepAt < stepMs - 40) return;
+    kenoLiveState.lastStepAt = now;
+
+    if (kenoLiveState.phase === 'betting') {
+      if (kenoLiveState.countdownSeconds > 1) {
+        kenoLiveState.countdownSeconds -= 1;
+        broadcastKenoLiveState();
+      } else {
+        const balls = generateServerKenoDraw();
+        kenoLiveState.phase = 'drawing';
+        kenoLiveState.countdownSeconds = 0;
+        kenoLiveState.drawnBalls = balls;
+        kenoLiveState.currentRevealedIndex = -1;
+        kenoLiveState.roundHash = makeKenoRoundHash(kenoLiveState.roundNumber, balls);
+        broadcastKenoLiveState();
+      }
+      return;
+    }
+
+    if (kenoLiveState.phase === 'drawing') {
+      if (kenoLiveState.currentRevealedIndex < 19) {
+        kenoLiveState.currentRevealedIndex += 1;
+        broadcastKenoLiveState();
+      } else {
+        kenoLiveState.currentRevealedIndex = 20;
+        kenoLiveState.phase = 'cooldown';
+        kenoLiveState.cooldownSeconds = 5;
+        const drawn20 = kenoLiveState.drawnBalls;
+        const superBall = drawn20[19];
+
+        kenoLiveState.recentResults = [
+          {
+            id: String(kenoLiveState.roundNumber),
+            time: new Date().toLocaleTimeString('en-GB'),
+            balls: [...drawn20],
+          },
+          ...kenoLiveState.recentResults,
+        ].slice(0, 25);
+
+        for (const b of drawn20) {
+          kenoLiveState.ballFrequency[b] = (kenoLiveState.ballFrequency[b] || 24) + 1;
+        }
+
+        kenoLiveState.liveTickets = kenoLiveState.liveTickets.map((tk) => {
+          const hits = tk.numbers.filter((n) => drawn20.includes(n)).length;
+          const baseMult = calculateServerKenoMultiplier(tk.numbers.length, hits);
+          const superMult = tk.numbers.includes(superBall) && baseMult > 0 ? 2.0 : 1.0;
+          const payout = Math.round(tk.bet * baseMult * superMult);
+          return {
+            ...tk,
+            status: payout > 0 ? 'Won' : 'Lost',
+            wonAmount: payout > 0 ? payout : undefined,
+          };
+        });
+
+        broadcastKenoLiveState();
+      }
+      return;
+    }
+
+    if (kenoLiveState.phase === 'cooldown') {
+      if (kenoLiveState.cooldownSeconds > 1) {
+        kenoLiveState.cooldownSeconds -= 1;
+        broadcastKenoLiveState();
+      } else {
+        kenoLiveState.roundNumber += 1;
+        kenoLiveState.phase = 'betting';
+        kenoLiveState.countdownSeconds = kenoAdminConfig.defaultCountdownSec;
+        kenoLiveState.cooldownSeconds = 0;
+        kenoLiveState.drawnBalls = [];
+        kenoLiveState.currentRevealedIndex = -1;
+        kenoLiveState.liveTickets = [];
+        kenoLiveState.roundHash = crypto
+          .createHash('sha512')
+          .update(`SUN_KENO_${kenoLiveState.roundNumber}_${Date.now()}`)
+          .digest('hex')
+          .toUpperCase();
+        broadcastKenoLiveState();
+      }
+    }
+  }, 250);
+}
+
+// ============================================================================
+// SERVER-AUTHORITATIVE CONKER RAMINO MULTIPLAYER ENGINE (HUMAN-ONLY PRIVATE ROOMS)
+// ============================================================================
+type RaminoSuitSymbol = '♠' | '♣' | '♦' | '♥' | '🃏';
+interface RaminoCard {
+  id: string;
+  rank: string;
+  suit: RaminoSuitSymbol;
+  suitName: 'spades' | 'clubs' | 'diamonds' | 'hearts' | 'joker';
+  color: 'black' | 'red' | 'gold';
+  value: number;
+  points: number;
+  isJoker: boolean;
+  isPrintedJoker?: boolean;
+}
+interface RaminoMeldGroup {
+  id: string;
+  cards: RaminoCard[];
+  type: 'run' | 'set';
+  suit?: RaminoSuitSymbol;
+  rank?: string;
+  ownerId: string;
+  ownerColor: string;
+  meldTurnSeq: number;
+}
+interface RaminoClosedSetBadge {
+  id: string;
+  rank: string;
+  ownerId: string;
+  ownerColor: string;
+}
+interface RaminoPrivatePlayerInfo {
+  id: string;
+  name: string;
+  phone?: string;
+  avatarLetter: string;
+  avatarColor: string;
+  isHost: boolean;
+  joinedAt: number;
+}
 interface RaminoPrivateRoomRecord {
   code: string;
+  hostId: string;
   hostName: string;
   maxPlayers: 2 | 3 | 4 | 5;
   stake: number;
-  players: { name: string; isHost: boolean; joinedAt: number }[];
+  players: RaminoPrivatePlayerInfo[];
   status: 'waiting' | 'started';
   createdAt: number;
 }
+interface RaminoPublicRoomRecord {
+  id: string;
+  name: string;
+  creatorId: string;
+  creatorPhone?: string;
+  creator: string;
+  avatarLetter: string;
+  avatarColor: string;
+  stake: number;
+  max: 2 | 3 | 4 | 5;
+  current: number;
+  duration: number;
+  timeRemaining: number;
+  isDemo?: boolean;
+  players: RaminoPrivatePlayerInfo[];
+  createdAt: number;
+}
+interface RaminoTablePlayer {
+  id: string;
+  name: string;
+  phone?: string;
+  avatarLetter: string;
+  avatarColor: string;
+  isHost: boolean;
+  isBot: boolean;
+  joinedAt: number;
+  hand: RaminoCard[];
+  hasMelded: boolean;
+  winStreak: number;
+  isDealer: boolean;
+}
+interface RaminoTableSession {
+  roomCode: string;
+  isPrivate: boolean;
+  hostId: string;
+  hostName: string;
+  maxPlayers: 2 | 3 | 4 | 5;
+  stake: number;
+  phase: 'waiting' | 'ceremony' | 'game' | 'finished';
+  roundIndex: number;
+  privateRoundCount: number;
+  reshuffleCount: number;
+  players: RaminoTablePlayer[];
+  cutParticipants: { id: string; name: string; card: RaminoCard; isWinner: boolean }[];
+  ceremonyRevealedCount: number;
+  ceremonyDealerId: string;
+  ceremonyDealerName: string;
+  deck: RaminoCard[];
+  bottomCard: RaminoCard;
+  discardPile: RaminoCard[];
+  tableMelds: RaminoMeldGroup[];
+  closedSetBadges: RaminoClosedSetBadge[];
+  meldTurnCounter: number;
+  currentTurnIdx: number;
+  hasDrawn: boolean;
+  drawnFromDiscardCardId: string | null;
+  hasDiscarded: boolean;
+  turnSeconds: number;
+  winnerCelebration: {
+    roundKey: string;
+    show: boolean;
+    titleKey:
+      | 'dopey_joker'
+      | 'dopey'
+      | 'streak'
+      | 'normal'
+      | 'bottom_dopey_joker'
+      | 'bottom_dopey'
+      | 'bottom_normal';
+    winnerId: string;
+    winnerName: string;
+    dopeyMultiplier: number;
+    streakMultiplier: number;
+    streakCount: number;
+    pot: number;
+    rakeAmount: number;
+    winAmount: number;
+    bottomCardStr?: string;
+  } | null;
+  postDayRequest: {
+    requestedById: string;
+    requestedByName: string;
+    source: 'header' | 'winner';
+    acceptedPlayerIds: string[];
+    allAccepted: boolean;
+  } | null;
+  lastEvent: {
+    id: number;
+    type: string;
+    actorId?: string;
+    actorName?: string;
+    detail?: string;
+  } | null;
+  ceremonyTimer?: NodeJS.Timeout | null;
+}
+
+const RAMINO_SEAT_AVATAR_COLORS = [
+  'bg-amber-400',
+  'bg-sky-500',
+  'bg-rose-500',
+  'bg-emerald-500',
+  'bg-purple-500',
+];
+const RAMINO_SUITS: { symbol: RaminoSuitSymbol; name: 'spades' | 'clubs' | 'diamonds' | 'hearts'; color: 'black' | 'red' }[] = [
+  { symbol: '♠', name: 'spades', color: 'black' },
+  { symbol: '♥', name: 'hearts', color: 'red' },
+  { symbol: '♣', name: 'clubs', color: 'black' },
+  { symbol: '♦', name: 'diamonds', color: 'red' },
+];
+const RAMINO_RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+const RAMINO_RANK_VALUES: Record<string, number> = {
+  '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
+  J: 10, Q: 10, K: 10, A: 11, JOKER: 0,
+};
+const RAMINO_CUT_RANK_ORDER: Record<string, number> = {
+  '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
+  J: 11, Q: 12, K: 13, A: 14,
+};
+const RAMINO_SEAT_DURATION_MAP: Record<2 | 3 | 4 | 5, number> = {
+  2: 60,
+  3: 180,
+  4: 240,
+  5: 300,
+};
+
+function buildServerRaminoDeck(deckCount: 1 | 2): RaminoCard[] {
+  const cards: RaminoCard[] = [];
+  let seq = 0;
+  for (let d = 0; d < deckCount; d++) {
+    for (const s of RAMINO_SUITS) {
+      for (const r of RAMINO_RANKS) {
+        seq++;
+        cards.push({
+          id: `card_${d}_${r}_${s.name}_${seq}`,
+          rank: r,
+          suit: s.symbol,
+          suitName: s.name,
+          color: s.color,
+          value: RAMINO_RANK_VALUES[r] || 10,
+          points: RAMINO_RANK_VALUES[r] || 10,
+          isJoker: false,
+        });
+      }
+    }
+    for (let j = 0; j < 2; j++) {
+      seq++;
+      cards.push({
+        id: `card_${d}_joker_${j}_${seq}`,
+        rank: 'JOKER',
+        suit: '🃏',
+        suitName: 'joker',
+        color: 'gold',
+        value: 0,
+        points: 0,
+        isJoker: true,
+        isPrintedJoker: true,
+      });
+    }
+  }
+  for (let i = cards.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(0, i + 1);
+    [cards[i], cards[j]] = [cards[j], cards[i]];
+  }
+  return cards;
+}
+
+function srvIsValidSet(cards: RaminoCard[]): boolean {
+  if (cards.length < 3 || cards.length > 4) return false;
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  if (nonJokers.length === 0) return false;
+  const targetRank = nonJokers[0].rank;
+  if (!nonJokers.every((c) => c.rank === targetRank)) return false;
+  return new Set(nonJokers.map((c) => c.suit)).size === nonJokers.length;
+}
+
+function srvIsAllFourSuitsClosedSet(cards: RaminoCard[]): boolean {
+  if (cards.length !== 4) return false;
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  if (nonJokers.length !== 4) return false;
+  const rank = nonJokers[0].rank;
+  if (!nonJokers.every((c) => c.rank === rank)) return false;
+  return new Set(nonJokers.map((c) => c.suit)).size === 4;
+}
+
+function srvIsValidRun(cards: RaminoCard[]): boolean {
+  if (cards.length < 3) return false;
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  if (nonJokers.length <= 1) return nonJokers.length === 1 && cards.length >= 3;
+  const suit = nonJokers[0].suit;
+  if (!nonJokers.every((c) => c.suit === suit)) return false;
+
+  const testSequence = (ranksList: string[]) => {
+    const jokersAvailable = cards.length - nonJokers.length;
+    const indices = nonJokers
+      .map((c) => ranksList.indexOf(c.rank))
+      .filter((idx) => idx !== -1)
+      .sort((a, b) => a - b);
+    if (indices.length !== nonJokers.length) return false;
+    for (let i = 0; i < indices.length - 1; i++) {
+      if (indices[i] === indices[i + 1]) return false;
+    }
+    let gaps = 0;
+    for (let i = 0; i < indices.length - 1; i++) {
+      gaps += indices[i + 1] - indices[i] - 1;
+    }
+    return jokersAvailable >= gaps;
+  };
+  return (
+    testSequence(['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']) ||
+    testSequence(['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'])
+  );
+}
+
+function srvGetGroupPoints(cards: RaminoCard[]): number {
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  const isAceLowRun =
+    srvIsValidRun(cards) &&
+    nonJokers.some((c) => c.rank === 'A') &&
+    nonJokers.some((c) => c.rank === '2' || c.rank === '3');
+  return cards.reduce((sum, c) => {
+    if (c.isJoker) {
+      if (nonJokers.length > 0 && srvIsValidSet(cards)) {
+        return sum + (RAMINO_RANK_VALUES[nonJokers[0].rank] || 10);
+      }
+      return sum + 10;
+    }
+    if (c.rank === 'A') return sum + (isAceLowRun ? 1 : 11);
+    return sum + (RAMINO_RANK_VALUES[c.rank] || 10);
+  }, 0);
+}
+
+function srvPartitionValidMelds(cards: RaminoCard[]) {
+  const n = cards.length;
+  if (n < 3) return { melds: [] as { type: 'set' | 'run'; cards: RaminoCard[]; points: number }[], remaining: [...cards], totalPoints: 0 };
+
+  interface Cand { mask: number; count: number; type: 'set' | 'run'; cards: RaminoCard[]; points: number }
+  const candidatesByMask = new Map<number, Cand>();
+  const addCandidate = (type: 'set' | 'run', grpCards: RaminoCard[], indices: number[]) => {
+    let mask = 0;
+    for (const idx of indices) mask |= 1 << idx;
+    const pts = srvGetGroupPoints(grpCards);
+    const ex = candidatesByMask.get(mask);
+    if (!ex || pts > ex.points) {
+      candidatesByMask.set(mask, { mask, count: indices.length, type, cards: grpCards, points: pts });
+    }
+  };
+  const jokerIndices: number[] = [];
+  const naturalIndices: number[] = [];
+  cards.forEach((c, idx) => (c.isJoker ? jokerIndices.push(idx) : naturalIndices.push(idx)));
+  const jokerCombos = (cnt: number): number[][] => {
+    if (cnt === 0) return [[]];
+    if (jokerIndices.length < cnt) return [];
+    if (cnt === 1) return jokerIndices.map((j) => [j]);
+    const res: number[][] = [];
+    for (let a = 0; a < jokerIndices.length; a++) {
+      for (let b = a + 1; b < jokerIndices.length; b++) res.push([jokerIndices[a], jokerIndices[b]]);
+    }
+    return res;
+  };
+  const byRankIdx: Record<string, number[]> = {};
+  for (const idx of naturalIndices) {
+    const r = cards[idx].rank;
+    if (!byRankIdx[r]) byRankIdx[r] = [];
+    byRankIdx[r].push(idx);
+  }
+  for (const rankIdxs of Object.values(byRankIdx)) {
+    const m = rankIdxs.length;
+    for (let sub = 1; sub < (1 << m); sub++) {
+      const chosen: number[] = [];
+      const seenSuits = new Set<string>();
+      let ok = true;
+      for (let b = 0; b < m; b++) {
+        if (sub & (1 << b)) {
+          const ci = rankIdxs[b];
+          const s = cards[ci].suit;
+          if (seenSuits.has(s)) { ok = false; break; }
+          seenSuits.add(s);
+          chosen.push(ci);
+        }
+      }
+      if (!ok || chosen.length > 4) continue;
+      if (chosen.length >= 3) addCandidate('set', chosen.map((i) => cards[i]), chosen);
+      for (let jk = 1; jk <= Math.min(2, jokerIndices.length); jk++) {
+        if (chosen.length + jk >= 3 && chosen.length + jk <= 4 && chosen.length >= 1) {
+          for (const jks of jokerCombos(jk)) {
+            const all = [...chosen, ...jks];
+            addCandidate('set', all.map((i) => cards[i]), all);
+          }
+        }
+      }
+    }
+  }
+  const runOrders = [
+    ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'],
+    ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'],
+  ];
+  for (const s of RAMINO_SUITS) {
+    const suitNatural = naturalIndices.filter((idx) => cards[idx].suit === s.symbol);
+    if (suitNatural.length === 0) continue;
+    for (const order of runOrders) {
+      const byPos = new Map<number, number[]>();
+      for (const idx of suitNatural) {
+        const pos = order.indexOf(cards[idx].rank);
+        if (pos !== -1) {
+          const list = byPos.get(pos) || [];
+          list.push(idx);
+          byPos.set(pos, list);
+        }
+      }
+      for (let start = 0; start < order.length; start++) {
+        for (let len = 3; len <= Math.min(7, order.length - start); len++) {
+          let natLists: number[][] = [[]];
+          let missing = 0;
+          for (let p = start; p < start + len; p++) {
+            const foundList = byPos.get(p);
+            if (foundList && foundList.length > 0) {
+              const nextLists: number[][] = [];
+              for (const base of natLists) {
+                for (const optIdx of foundList) nextLists.push([...base, optIdx]);
+              }
+              natLists = nextLists.slice(0, 8);
+            } else {
+              missing++;
+            }
+          }
+          if (missing <= Math.min(2, jokerIndices.length)) {
+            for (const natChosen of natLists) {
+              if (natChosen.length < 2) continue;
+              for (const jks of jokerCombos(missing)) {
+                const all = [...natChosen, ...jks];
+                addCandidate('run', all.map((i) => cards[i]), all);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const candidates = Array.from(candidatesByMask.values()).sort((a, b) =>
+    b.count !== a.count ? b.count - a.count : b.points - a.points
+  );
+  let bestUsed = 0;
+  let bestPoints = 0;
+  let bestChoice: Cand[] = [];
+  let steps = 0;
+  const curChoice: Cand[] = [];
+  const search = (startIdx: number, usedMask: number, usedCount: number, curPts: number) => {
+    if (steps > 4500) return;
+    steps++;
+    if (usedCount > bestUsed || (usedCount === bestUsed && curPts > bestPoints)) {
+      bestUsed = usedCount;
+      bestPoints = curPts;
+      bestChoice = [...curChoice];
+    }
+    if (usedCount === n || usedCount + (n - usedCount) < bestUsed) return;
+    for (let i = startIdx; i < candidates.length; i++) {
+      const c = candidates[i];
+      if ((usedMask & c.mask) !== 0) continue;
+      let avail = 0;
+      for (let b = 0; b < n; b++) if ((usedMask & (1 << b)) === 0) avail++;
+      if (usedCount + avail < bestUsed) break;
+      curChoice.push(c);
+      search(i + 1, usedMask | c.mask, usedCount + c.count, curPts + c.points);
+      curChoice.pop();
+    }
+  };
+  search(0, 0, 0, 0);
+  let finalMask = 0;
+  bestChoice.forEach((m) => (finalMask |= m.mask));
+  const melds = bestChoice.map((m) => ({ type: m.type, cards: m.cards, points: m.points }));
+  const remaining = cards.filter((_, idx) => (finalMask & (1 << idx)) === 0);
+  return { melds, remaining, totalPoints: melds.reduce((s, m) => s + m.points, 0) };
+}
+
+function srvCanFormFivePairs(rem10: RaminoCard[], allowSameRankPairs = false): boolean {
+  if (rem10.length !== 10) return false;
+  const counts: Record<string, number> = {};
+  let jokers = 0;
+  for (const c of rem10) {
+    if (c.isJoker || c.rank === 'JOKER') jokers++;
+    else {
+      const key = allowSameRankPairs ? c.rank : `${c.rank}|${c.suit}`;
+      counts[key] = (counts[key] || 0) + 1;
+    }
+  }
+  let odds = 0;
+  for (const cnt of Object.values(counts)) if (cnt % 2 === 1) odds++;
+  return jokers >= odds && (jokers - odds) % 2 === 0;
+}
+
+function srvIsExact13CardDopey(cards13: RaminoCard[], allowSameRankPairs = false): boolean {
+  if (cards13.length !== 13) return false;
+  for (let i = 0; i < 11; i++) {
+    for (let j = i + 1; j < 12; j++) {
+      for (let k = j + 1; k < 13; k++) {
+        const triple = [cards13[i], cards13[j], cards13[k]];
+        if (!srvIsValidSet(triple) && !srvIsValidRun(triple)) continue;
+        const rem10: RaminoCard[] = [];
+        for (let m = 0; m < 13; m++) if (m !== i && m !== j && m !== k) rem10.push(cards13[m]);
+        if (srvCanFormFivePairs(rem10, allowSameRankPairs)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function srvCheckDopey(hand: RaminoCard[], closingCard?: RaminoCard | null, allowSameRankPairs = false) {
+  if (closingCard) {
+    if (hand.length !== 13 || !srvIsExact13CardDopey(hand, allowSameRankPairs)) {
+      return { isDopey: false, isJokerFinished: false };
+    }
+    return { isDopey: true, isJokerFinished: Boolean(closingCard.isJoker || closingCard.rank === 'JOKER') };
+  }
+  if (hand.length !== 13 && hand.length !== 14) return { isDopey: false, isJokerFinished: false };
+  if (hand.length === 13) return { isDopey: srvIsExact13CardDopey(hand, allowSameRankPairs), isJokerFinished: false };
+  const jokerDropCloses = hand.some(
+    (c, dropIdx) =>
+      (c.isJoker || c.rank === 'JOKER') &&
+      srvIsExact13CardDopey(hand.filter((__, idx) => idx !== dropIdx), allowSameRankPairs)
+  );
+  if (jokerDropCloses) return { isDopey: true, isJokerFinished: true };
+  const anyDropCloses = hand.some((_, dropIdx) =>
+    srvIsExact13CardDopey(hand.filter((__, idx) => idx !== dropIdx), allowSameRankPairs)
+  );
+  return { isDopey: anyDropCloses, isJokerFinished: false };
+}
+
+function srvDoesCardMatchTableMelds(card: RaminoCard, melds: RaminoMeldGroup[]): boolean {
+  if (card.isJoker) return false;
+  for (const m of melds) {
+    if (m.type === 'set') {
+      const nonJokers = m.cards.filter((c) => !c.isJoker);
+      const targetRank = m.rank || nonJokers[0]?.rank;
+      if (card.rank === targetRank && !nonJokers.some((c) => c.suit === card.suit) && m.cards.length < 4) return true;
+    } else if (m.type === 'run' && m.suit === card.suit) {
+      if (srvIsValidRun([...m.cards, card])) return true;
+    }
+  }
+  return false;
+}
+
+function srvGetRunOrderForMeld(cards: RaminoCard[]): string[] {
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  const hasTwo = nonJokers.some((c) => c.rank === '2');
+  const hasKingOrQueen = nonJokers.some((c) => c.rank === 'K' || c.rank === 'Q');
+  if (hasTwo && !hasKingOrQueen) return ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  return ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+}
+
+function srvGetTableMeldJokerInfo(meld: RaminoMeldGroup, cardIdx: number): { rank: string; suit: RaminoSuitSymbol | null } | null {
+  if (meld.type === 'set') {
+    const nonJokers = meld.cards.filter((c) => !c.isJoker);
+    const rank = meld.rank || nonJokers[0]?.rank;
+    if (!rank) return null;
+    const usedSuits = new Set(nonJokers.map((c) => c.suit));
+    const missingSuit = RAMINO_SUITS.find((s) => !usedSuits.has(s.symbol))?.symbol || null;
+    return { rank, suit: missingSuit };
+  }
+  const order = srvGetRunOrderForMeld(meld.cards);
+  const firstNatPos = meld.cards.findIndex((c) => !c.isJoker);
+  if (firstNatPos === -1) return null;
+  const firstNatOrderIdx = order.indexOf(meld.cards[firstNatPos].rank);
+  if (firstNatOrderIdx === -1) return null;
+  const targetRank = order[firstNatOrderIdx - firstNatPos + cardIdx];
+  const suit = meld.suit || meld.cards[firstNatPos].suit;
+  return targetRank ? { rank: targetRank, suit } : null;
+}
+
+function srvInsertCardIntoRunMeld(cards: RaminoCard[], newCard: RaminoCard, clickedIdx: number): RaminoCard[] | null {
+  if (cards.length >= 13) return null;
+  if (newCard.isJoker) {
+    const order = srvGetRunOrderForMeld(cards);
+    const firstNatPos = cards.findIndex((c) => !c.isJoker);
+    if (firstNatPos === -1) return [...cards, newCard];
+    const firstNatOrderIdx = order.indexOf(cards[firstNatPos].rank);
+    if (firstNatOrderIdx === -1) return [...cards, newCard];
+    const startOrderIdx = firstNatOrderIdx - firstNatPos;
+    const endOrderIdx = startOrderIdx + cards.length - 1;
+    const canPrepend = startOrderIdx > 0;
+    const canAppend = endOrderIdx < order.length - 1;
+    if (!canPrepend && !canAppend) return null;
+    if (clickedIdx === 0 && canPrepend) return [newCard, ...cards];
+    if (canAppend) return [...cards, newCard];
+    return [newCard, ...cards];
+  }
+  const candidate = [...cards, newCard];
+  if (!srvIsValidRun(candidate)) return null;
+  const order = srvGetRunOrderForMeld(candidate);
+  const nonJokers = candidate.filter((c) => !c.isJoker).sort((a, b) => order.indexOf(a.rank) - order.indexOf(b.rank));
+  const jokers = candidate.filter((c) => c.isJoker);
+  if (nonJokers.length === 0) return candidate;
+  const arranged: RaminoCard[] = [nonJokers[0]];
+  let jokerCursor = 0;
+  for (let i = 1; i < nonJokers.length; i++) {
+    const gap = order.indexOf(nonJokers[i].rank) - order.indexOf(nonJokers[i - 1].rank) - 1;
+    for (let g = 0; g < gap && jokerCursor < jokers.length; g++) arranged.push(jokers[jokerCursor++]);
+    arranged.push(nonJokers[i]);
+  }
+  let highIdx = order.indexOf(nonJokers[nonJokers.length - 1].rank);
+  let lowIdx = order.indexOf(nonJokers[0].rank);
+  while (jokerCursor < jokers.length) {
+    if (clickedIdx === 0 && lowIdx > 0) { arranged.unshift(jokers[jokerCursor++]); lowIdx--; }
+    else if (highIdx < order.length - 1) { arranged.push(jokers[jokerCursor++]); highIdx++; }
+    else if (lowIdx > 0) { arranged.unshift(jokers[jokerCursor++]); lowIdx--; }
+    else break;
+  }
+  return arranged;
+}
+
+function srvPartitionCollapsedFourSuitSets(melds: RaminoMeldGroup[], currentSeq: number) {
+  const badgesToAdd: RaminoClosedSetBadge[] = [];
+  const remainingMelds: RaminoMeldGroup[] = [];
+  for (const m of melds) {
+    if (m.type === 'set' && srvIsAllFourSuitsClosedSet(m.cards) && m.meldTurnSeq < currentSeq) {
+      badgesToAdd.push({
+        id: `closed_${m.id}`,
+        rank: m.rank || m.cards[0].rank,
+        ownerId: m.ownerId,
+        ownerColor: m.ownerColor,
+      });
+    } else {
+      remainingMelds.push(m);
+    }
+  }
+  return { remainingMelds, badgesToAdd };
+}
+
 const raminoPrivateRooms = new Map<string, RaminoPrivateRoomRecord>();
+const raminoPublicRooms = new Map<string, RaminoPublicRoomRecord>();
+const raminoTables = new Map<string, RaminoTableSession>();
+const raminoTableSockets = new Map<WebSocket, { roomCode: string; playerId: string }>();
+let raminoEventSeq = 1;
+
+function serializePublicRoomsList() {
+  return Array.from(raminoPublicRooms.values()).map((r) => ({
+    id: r.id,
+    name: r.name,
+    creatorId: r.creatorId,
+    creator: r.creator,
+    avatarLetter: r.avatarLetter,
+    avatarColor: r.avatarColor,
+    stake: r.stake,
+    max: r.max,
+    current: r.players.length || r.current,
+    duration: r.duration,
+    timeRemaining: r.timeRemaining,
+    players: r.players,
+    isDemo: Boolean(r.isDemo),
+  }));
+}
+
+function broadcastRaminoLobbySync() {
+  const payload = JSON.stringify({
+    type: 'ramino:lobby:sync',
+    rooms: serializePublicRoomsList(),
+    timestamp: Date.now(),
+  });
+  for (const client of wsClients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payload);
+      } catch {}
+    }
+  }
+}
+
+function broadcastPrivateRoomSnapshot(room: RaminoPrivateRoomRecord) {
+  const payload = JSON.stringify({
+    type: 'ramino:private-room:sync',
+    room,
+  });
+  for (const client of wsClients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payload);
+      } catch {}
+    }
+  }
+}
+
+function createOrSyncRaminoTableFromPrivateRoom(room: RaminoPrivateRoomRecord): RaminoTableSession {
+  let session = raminoTables.get(room.code);
+  const makePlayer = (p: RaminoPrivatePlayerInfo, idx: number): RaminoTablePlayer => ({
+    id: p.id,
+    name: p.name,
+    phone: p.phone,
+    avatarLetter: p.avatarLetter || p.name[0]?.toUpperCase() || 'P',
+    avatarColor: p.avatarColor || RAMINO_SEAT_AVATAR_COLORS[idx % RAMINO_SEAT_AVATAR_COLORS.length],
+    isHost: p.isHost,
+    isBot: false,
+    joinedAt: p.joinedAt,
+    hand: [],
+    hasMelded: false,
+    winStreak: 0,
+    isDealer: false,
+  });
+
+  if (!session) {
+    session = {
+      roomCode: room.code,
+      isPrivate: true,
+      hostId: room.hostId,
+      hostName: room.hostName,
+      maxPlayers: room.maxPlayers,
+      stake: room.stake,
+      phase: 'waiting',
+      roundIndex: 0,
+      privateRoundCount: 1,
+      reshuffleCount: 0,
+      players: room.players.map((p, idx) => makePlayer(p, idx)),
+      cutParticipants: [],
+      ceremonyRevealedCount: 0,
+      ceremonyDealerId: room.hostId,
+      ceremonyDealerName: room.hostName,
+      deck: [],
+      bottomCard: {
+        id: 'placeholder_10c',
+        rank: '10',
+        suit: '♣',
+        suitName: 'clubs',
+        color: 'black',
+        value: 10,
+        points: 10,
+        isJoker: false,
+      },
+      discardPile: [],
+      tableMelds: [],
+      closedSetBadges: [],
+      meldTurnCounter: 0,
+      currentTurnIdx: 0,
+      hasDrawn: false,
+      drawnFromDiscardCardId: null,
+      hasDiscarded: false,
+      turnSeconds: 120,
+      winnerCelebration: null,
+      postDayRequest: null,
+      lastEvent: null,
+    };
+    raminoTables.set(room.code, session);
+  } else {
+    session.maxPlayers = room.maxPlayers;
+    session.stake = room.stake;
+    session.hostId = room.hostId;
+    session.hostName = room.hostName;
+    if (session.phase === 'waiting') {
+      const existingById = new Map(session.players.map((p) => [p.id, p]));
+      session.players = room.players.map((p, idx) => existingById.get(p.id) || makePlayer(p, idx));
+    }
+  }
+  return session;
+}
+
+function serializeRaminoTableForPlayer(session: RaminoTableSession, playerId: string) {
+  const meIdx = session.players.findIndex((p) => p.id === playerId);
+  const opponents: {
+    id: string;
+    name: string;
+    avatarLetter: string;
+    avatarColor: string;
+    cardCount: number;
+    isDealer: boolean;
+    hasMelded: boolean;
+    isHost: boolean;
+    isBot: boolean;
+  }[] = [];
+
+  if (meIdx !== -1) {
+    for (let offset = 1; offset < session.players.length; offset++) {
+      const seat = session.players[(meIdx + offset) % session.players.length];
+      opponents.push({
+        id: seat.id,
+        name: seat.name,
+        avatarLetter: seat.avatarLetter,
+        avatarColor: seat.avatarColor,
+        cardCount: seat.hand.length,
+        isDealer: seat.isDealer,
+        hasMelded: seat.hasMelded,
+        isHost: seat.isHost,
+        isBot: seat.isBot,
+      });
+    }
+  } else {
+    for (const seat of session.players) {
+      opponents.push({
+        id: seat.id,
+        name: seat.name,
+        avatarLetter: seat.avatarLetter,
+        avatarColor: seat.avatarColor,
+        cardCount: seat.hand.length,
+        isDealer: seat.isDealer,
+        hasMelded: seat.hasMelded,
+        isHost: seat.isHost,
+        isBot: seat.isBot,
+      });
+    }
+  }
+
+  let currentTurnForClient = -1;
+  if (session.phase === 'game' && session.players[session.currentTurnIdx]) {
+    const activeId = session.players[session.currentTurnIdx].id;
+    if (activeId === playerId) {
+      currentTurnForClient = 0;
+    } else {
+      const oppPos = opponents.findIndex((o) => o.id === activeId);
+      currentTurnForClient = oppPos !== -1 ? oppPos + 1 : 1;
+    }
+  }
+
+  const me = meIdx !== -1 ? session.players[meIdx] : null;
+  const drawnCard =
+    session.drawnFromDiscardCardId && me
+      ? me.hand.find((c) => c.id === session.drawnFromDiscardCardId) || null
+      : null;
+
+  return {
+    roomCode: session.roomCode,
+    isPrivate: session.isPrivate,
+    hostId: session.hostId,
+    hostName: session.hostName,
+    maxPlayers: session.maxPlayers,
+    seatCount: Math.max(session.players.length, 2) as 2 | 3 | 4 | 5,
+    stake: session.stake,
+    phase: session.phase,
+    roundIndex: session.roundIndex,
+    privateRoundCount: session.privateRoundCount,
+    reshuffleCount: session.reshuffleCount,
+    myPlayerId: playerId,
+    myIsHost: Boolean(me?.isHost || playerId === session.hostId),
+    myHand: me ? me.hand : [],
+    myHasMelded: Boolean(me?.hasMelded),
+    myWinStreak: me?.winStreak ?? 0,
+    myIsDealer: Boolean(me?.isDealer),
+    opponents,
+    playersSummary: session.players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      avatarLetter: p.avatarLetter,
+      avatarColor: p.avatarColor,
+      isHost: p.isHost,
+      joinedAt: p.joinedAt,
+    })),
+    cutParticipants: session.cutParticipants.map((cp) => ({
+      ...cp,
+      isSelf: cp.id === playerId,
+    })),
+    ceremonyRevealedCount: session.ceremonyRevealedCount,
+    ceremonyDealer: session.ceremonyDealerName,
+    ceremonyDealerId: session.ceremonyDealerId,
+    deckCount: session.deck.length,
+    bottomCard: session.bottomCard,
+    discardPile: session.discardPile,
+    tableMelds: session.tableMelds,
+    closedSetBadges: session.closedSetBadges,
+    currentTurn: currentTurnForClient,
+    activePlayerId: session.players[session.currentTurnIdx]?.id || '',
+    activePlayerName: session.players[session.currentTurnIdx]?.name || '',
+    turnSeconds: session.turnSeconds,
+    hasDrawn: session.hasDrawn,
+    drawnFromDiscardCard: drawnCard,
+    hasDiscarded: session.hasDiscarded,
+    winnerCelebration: session.winnerCelebration,
+    postDayRequest: session.postDayRequest
+      ? {
+          requestedBy: session.postDayRequest.requestedByName,
+          requestedById: session.postDayRequest.requestedById,
+          source: session.postDayRequest.source,
+          acceptedIds: session.postDayRequest.acceptedPlayerIds,
+          acceptedNames: session.players
+            .filter((p) => session.postDayRequest!.acceptedPlayerIds.includes(p.id))
+            .map((p) => p.name),
+          needsMyAccept: !session.postDayRequest.acceptedPlayerIds.includes(playerId),
+          allAccepted: session.postDayRequest.allAccepted,
+        }
+      : null,
+    lastEvent: session.lastEvent,
+    serverTimestamp: Date.now(),
+  };
+}
+
+function broadcastRaminoTableState(session: RaminoTableSession) {
+  for (const [sock, meta] of raminoTableSockets.entries()) {
+    if (meta.roomCode === session.roomCode && sock.readyState === WebSocket.OPEN) {
+      try {
+        sock.send(
+          JSON.stringify({
+            type: 'ramino:table:sync',
+            table: serializeRaminoTableForPlayer(session, meta.playerId),
+          })
+        );
+      } catch {}
+    }
+  }
+}
+
+function dealServerRaminoRound(session: RaminoTableSession, dealerId: string) {
+  if (session.ceremonyTimer) {
+    clearTimeout(session.ceremonyTimer);
+    session.ceremonyTimer = null;
+  }
+  const actualCount = session.players.length;
+  const deckCount: 1 | 2 = actualCount <= 2 ? 1 : 2;
+  const shuffled = buildServerRaminoDeck(deckCount);
+  let offset = 0;
+
+  for (const p of session.players) {
+    p.hand = shuffled.slice(offset, offset + 13);
+    offset += 13;
+    p.hasMelded = false;
+    p.isDealer = p.id === dealerId;
+  }
+
+  session.bottomCard = shuffled[offset];
+  offset += 1;
+  session.discardPile = [shuffled[offset]];
+  offset += 1;
+  session.deck = shuffled.slice(offset);
+  session.tableMelds = [];
+  session.closedSetBadges = [];
+  session.meldTurnCounter = 0;
+  session.hasDrawn = false;
+  session.drawnFromDiscardCardId = null;
+  session.hasDiscarded = false;
+  session.turnSeconds = 120;
+  session.winnerCelebration = null;
+  session.postDayRequest = null;
+  session.roundIndex += 1;
+
+  const dealerIdx = session.players.findIndex((p) => p.id === dealerId);
+  const validDealerIdx = dealerIdx !== -1 ? dealerIdx : 0;
+  session.ceremonyDealerId = session.players[validDealerIdx].id;
+  session.ceremonyDealerName = session.players[validDealerIdx].name;
+  session.currentTurnIdx = (validDealerIdx + 1) % session.players.length;
+  session.phase = 'game';
+  session.lastEvent = {
+    id: ++raminoEventSeq,
+    type: 'round_started',
+    actorId: session.ceremonyDealerId,
+    actorName: session.ceremonyDealerName,
+  };
+  broadcastRaminoTableState(session);
+}
+
+function startServerRaminoCeremony(session: RaminoTableSession) {
+  if (session.players.length < 2) return;
+  if (session.ceremonyTimer) {
+    clearTimeout(session.ceremonyTimer);
+    session.ceremonyTimer = null;
+  }
+  const cutDeck = buildServerRaminoDeck(1).filter((c) => !c.isJoker);
+  const usedRanks = new Set<string>();
+  const pickCut = () => {
+    for (const c of cutDeck) {
+      if (!usedRanks.has(c.rank)) {
+        usedRanks.add(c.rank);
+        return c;
+      }
+    }
+    return cutDeck[0];
+  };
+
+  const parts = session.players.map((p) => ({
+    id: p.id,
+    name: p.name,
+    card: pickCut(),
+  }));
+
+  let maxVal = -1;
+  let winnerId = parts[0].id;
+  for (const pt of parts) {
+    const val = RAMINO_CUT_RANK_ORDER[pt.card.rank] || 0;
+    if (val > maxVal) {
+      maxVal = val;
+      winnerId = pt.id;
+    }
+  }
+  const winnerObj = parts.find((p) => p.id === winnerId) || parts[0];
+
+  session.phase = 'ceremony';
+  session.privateRoundCount = 1;
+  session.reshuffleCount = 0;
+  session.ceremonyDealerId = winnerObj.id;
+  session.ceremonyDealerName = winnerObj.name;
+  session.cutParticipants = parts.map((p) => ({ ...p, isWinner: p.id === winnerId }));
+  session.ceremonyRevealedCount = 0;
+  session.lastEvent = { id: ++raminoEventSeq, type: 'ceremony_started' };
+
+  const privRoom = raminoPrivateRooms.get(session.roomCode);
+  if (privRoom) {
+    privRoom.status = 'started';
+    broadcastPrivateRoomSnapshot(privRoom);
+  }
+  broadcastRaminoTableState(session);
+
+  const count = parts.length;
+  const stepReveal = (revealed: number) => {
+    const cur = raminoTables.get(session.roomCode);
+    if (!cur || cur.phase !== 'ceremony') return;
+    cur.ceremonyRevealedCount = revealed;
+    broadcastRaminoTableState(cur);
+    if (revealed < count) {
+      cur.ceremonyTimer = setTimeout(() => stepReveal(revealed + 1), 700);
+    } else {
+      cur.ceremonyTimer = setTimeout(() => {
+        const ready = raminoTables.get(session.roomCode);
+        if (ready && ready.phase === 'ceremony') {
+          dealServerRaminoRound(ready, ready.ceremonyDealerId);
+        }
+      }, 1500);
+    }
+  };
+  session.ceremonyTimer = setTimeout(() => stepReveal(1), 700);
+}
+
+function finishServerRaminoRound(
+  session: RaminoTableSession,
+  winner: RaminoTablePlayer,
+  dopeyMultiplier: number,
+  titleKey:
+    | 'dopey_joker'
+    | 'dopey'
+    | 'streak'
+    | 'normal'
+    | 'bottom_dopey_joker'
+    | 'bottom_dopey'
+    | 'bottom_normal',
+  bottomCardStr?: string
+) {
+  for (const p of session.players) {
+    if (p.id === winner.id) {
+      p.winStreak += 1;
+    } else {
+      p.winStreak = 0;
+    }
+  }
+  const streakCount = winner.winStreak;
+  const streakMultiplier = streakCount >= 3 ? 2 : 1;
+  const totalMultiplier = dopeyMultiplier * streakMultiplier;
+  const pot = session.stake * session.players.length;
+  const rake = pot * 0.1;
+  const winAmount = (pot - rake) * totalMultiplier;
+
+  session.ceremonyDealerId = winner.id;
+  session.ceremonyDealerName = winner.name;
+  session.phase = 'finished';
+  session.winnerCelebration = {
+    roundKey: `${session.roomCode}_r${session.roundIndex}_${Date.now()}`,
+    show: true,
+    titleKey:
+      titleKey === 'normal' && streakCount >= 3 && dopeyMultiplier === 1
+        ? 'streak'
+        : titleKey,
+    winnerId: winner.id,
+    winnerName: winner.name,
+    dopeyMultiplier,
+    streakMultiplier,
+    streakCount,
+    pot,
+    rakeAmount: rake,
+    winAmount,
+    bottomCardStr,
+  };
+  session.lastEvent = {
+    id: ++raminoEventSeq,
+    type: 'round_won',
+    actorId: winner.id,
+    actorName: winner.name,
+  };
+  broadcastRaminoTableState(session);
+}
+
+function handleServerRaminoAction(
+  session: RaminoTableSession,
+  playerId: string,
+  action: string,
+  payload: Record<string, any> = {}
+): { ok: boolean; error?: string } {
+  const meIdx = session.players.findIndex((p) => p.id === playerId);
+
+  if (action === 'leave_table') {
+    if (meIdx === -1) return { ok: true };
+    const leaving = session.players[meIdx];
+    session.players.splice(meIdx, 1);
+
+    const privRoom = raminoPrivateRooms.get(session.roomCode);
+    if (privRoom) {
+      privRoom.players = privRoom.players.filter((p) => p.id !== playerId);
+      if (privRoom.players.length === 0) {
+        raminoPrivateRooms.delete(session.roomCode);
+      } else {
+        if (privRoom.hostId === playerId) {
+          privRoom.players[0].isHost = true;
+          privRoom.hostId = privRoom.players[0].id;
+          privRoom.hostName = privRoom.players[0].name;
+          if (session.players[0]) {
+            session.players[0].isHost = true;
+            session.hostId = session.players[0].id;
+            session.hostName = session.players[0].name;
+          }
+        }
+        broadcastPrivateRoomSnapshot(privRoom);
+      }
+    }
+
+    for (const p of session.players) p.winStreak = 0;
+
+    if (session.players.length === 0) {
+      if (session.ceremonyTimer) clearTimeout(session.ceremonyTimer);
+      raminoTables.delete(session.roomCode);
+      return { ok: true };
+    }
+
+    if (session.phase === 'game') {
+      if (session.players.length < 2) {
+        const survivor = session.players[0];
+        finishServerRaminoRound(session, survivor, 1, 'normal');
+      } else {
+        if (session.currentTurnIdx >= session.players.length) session.currentTurnIdx = 0;
+        session.lastEvent = {
+          id: ++raminoEventSeq,
+          type: 'player_left',
+          actorId: leaving.id,
+          actorName: leaving.name,
+        };
+        broadcastRaminoTableState(session);
+      }
+    } else {
+      session.lastEvent = {
+        id: ++raminoEventSeq,
+        type: 'player_left',
+        actorId: leaving.id,
+        actorName: leaving.name,
+      };
+      broadcastRaminoTableState(session);
+    }
+    return { ok: true };
+  }
+
+  if (meIdx === -1) return { ok: false, error: 'ተጫዋቹ በዚህ ጠረጴዛ ላይ አልተገኘም።' };
+  const me = session.players[meIdx];
+
+  if (action === 'start_game') {
+    if (session.phase !== 'waiting') return { ok: true };
+    if (session.isPrivate && session.players.length < 2) {
+      return { ok: false, error: 'በግል ክፍል ውስጥ ለመጀመር ቢያንስ 2 እውነተኛ ተጫዋቾች መግባት አለባቸው!' };
+    }
+    startServerRaminoCeremony(session);
+    return { ok: true };
+  }
+
+  if (action === 'postday_request') {
+    if (!session.isPrivate || session.privateRoundCount < 5) {
+      return { ok: false, error: 'ፖስት ዴይ ከ5 ጨዋታ በኋላ ብቻ ይሰራል።' };
+    }
+    const source = payload.source === 'winner' ? 'winner' : 'header';
+    session.postDayRequest = {
+      requestedById: me.id,
+      requestedByName: me.name,
+      source,
+      acceptedPlayerIds: [me.id],
+      allAccepted: session.players.length <= 1,
+    };
+    session.lastEvent = { id: ++raminoEventSeq, type: 'postday_request', actorId: me.id, actorName: me.name };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'postday_accept') {
+    const req = session.postDayRequest;
+    if (!req) return { ok: true };
+    if (!req.acceptedPlayerIds.includes(me.id)) {
+      req.acceptedPlayerIds.push(me.id);
+    }
+    if (req.acceptedPlayerIds.length >= session.players.length) {
+      req.allAccepted = true;
+      const activeId = session.players[session.currentTurnIdx]?.id;
+      if (session.players.length >= 2) {
+        const prevSig = session.players.map((p) => p.id).join(',');
+        for (let attempt = 0; attempt < 6; attempt++) {
+          for (let i = session.players.length - 1; i > 0; i--) {
+            const j = crypto.randomInt(0, i + 1);
+            [session.players[i], session.players[j]] = [session.players[j], session.players[i]];
+          }
+          if (session.players.map((p) => p.id).join(',') !== prevSig) break;
+        }
+      }
+      if (activeId) {
+        const ni = session.players.findIndex((p) => p.id === activeId);
+        if (ni !== -1) session.currentTurnIdx = ni;
+      }
+      session.privateRoundCount = 1;
+      const src = req.source;
+      const prevDealerId = session.winnerCelebration?.winnerId || session.ceremonyDealerId;
+      session.lastEvent = { id: ++raminoEventSeq, type: 'postday_applied', actorName: me.name };
+      broadcastRaminoTableState(session);
+      setTimeout(() => {
+        const cur = raminoTables.get(session.roomCode);
+        if (!cur) return;
+        cur.postDayRequest = null;
+        if (src === 'winner') {
+          dealServerRaminoRound(cur, prevDealerId);
+        } else {
+          broadcastRaminoTableState(cur);
+        }
+      }, 900);
+      return { ok: true };
+    }
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'next_round') {
+    if (session.phase !== 'finished') return { ok: false, error: 'ዙሩ ገና አላለቀም።' };
+    if (session.isPrivate) session.privateRoundCount += 1;
+    const dealerId = session.winnerCelebration?.winnerId || session.ceremonyDealerId;
+    dealServerRaminoRound(session, dealerId);
+    return { ok: true };
+  }
+
+  if (session.phase !== 'game') return { ok: false, error: 'ጨዋታው አሁን በሂደት ላይ አይደለም።' };
+  if (session.currentTurnIdx !== meIdx) return { ok: false, error: 'ተራዎ አይደለም!' };
+
+  const allowSameRankDopey = session.players.length === 2;
+
+  if (action === 'draw_deck') {
+    if (session.hasDrawn) return { ok: false, error: 'አስቀድመው ካርታ ስበዋል።' };
+    if (session.deck.length === 0) {
+      if (session.discardPile.length <= 1) return { ok: false, error: 'መደቡ ባዶ ሆኗል።' };
+      const top = session.discardPile[session.discardPile.length - 1];
+      const pool = [...session.discardPile.slice(0, -1)];
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = crypto.randomInt(0, i + 1);
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      session.deck = pool;
+      session.discardPile = [top];
+      session.reshuffleCount += 1;
+    }
+    const drawn = session.deck.shift()!;
+    me.hand.push(drawn);
+    if (session.deck.length === 0 && session.discardPile.length > 1) {
+      const top = session.discardPile[session.discardPile.length - 1];
+      const pool = [...session.discardPile.slice(0, -1)];
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = crypto.randomInt(0, i + 1);
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      session.deck = pool;
+      session.discardPile = [top];
+      session.reshuffleCount += 1;
+    }
+    session.hasDrawn = true;
+    session.drawnFromDiscardCardId = null;
+    session.lastEvent = { id: ++raminoEventSeq, type: 'draw_deck', actorId: me.id, actorName: me.name };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'draw_discard') {
+    if (session.hasDrawn) return { ok: false, error: 'አስቀድመው ካርታ ስበዋል።' };
+    if (session.discardPile.length === 0) return { ok: false, error: 'መጣያው ባዶ ነው።' };
+    const top = session.discardPile.pop()!;
+    me.hand.push(top);
+    session.hasDrawn = true;
+    session.drawnFromDiscardCardId = top.id;
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: 'draw_discard',
+      actorId: me.id,
+      actorName: me.name,
+      detail: `${top.rank}${top.suit}`,
+    };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'return_discard') {
+    if (!session.drawnFromDiscardCardId || session.hasDiscarded) {
+      return { ok: false, error: 'መመለስ የሚቻል ካርታ የለም።' };
+    }
+    const idx = me.hand.findIndex((c) => c.id === session.drawnFromDiscardCardId);
+    if (idx === -1) return { ok: false, error: 'ካርታው በእጅዎ ላይ አልተገኘም።' };
+    const [ret] = me.hand.splice(idx, 1);
+    session.discardPile.push(ret);
+    session.hasDrawn = false;
+    session.drawnFromDiscardCardId = null;
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: 'return_discard',
+      actorId: me.id,
+      actorName: me.name,
+      detail: `${ret.rank}${ret.suit}`,
+    };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'bottom_win') {
+    if (me.hasMelded || session.hasDrawn || me.hand.length === 0) {
+      return { ok: false, error: 'የታችኛው ካርድ አሁን አይቻልም።' };
+    }
+    const partWithout = srvPartitionValidMelds(me.hand);
+    const dopeyWithout = srvCheckDopey(me.hand, undefined, allowSameRankDopey);
+    if (dopeyWithout.isDopey || (partWithout.remaining.length === 0 && partWithout.melds.length > 0)) {
+      return { ok: false, error: 'የታችኛው ካርድ ለመጨረስ ብቻ ያስፈልጋል።' };
+    }
+    const bc = session.bottomCard;
+    const dopeyViaBottom =
+      (me.hand.length === 12 && srvIsExact13CardDopey([...me.hand, bc], allowSameRankDopey)) ||
+      (me.hand.length === 13 &&
+        me.hand.some((_, dropIdx) =>
+          srvIsExact13CardDopey([...me.hand.filter((__, i) => i !== dropIdx), bc], allowSameRankDopey)
+        ));
+    const partWith = srvPartitionValidMelds([...me.hand, bc]);
+    const meldReady =
+      partWithout.remaining.length >= 1 &&
+      partWith.remaining.length === 0 &&
+      partWith.melds.length > 0 &&
+      partWith.totalPoints >= 41;
+
+    if (!dopeyViaBottom && !meldReady) {
+      return { ok: false, error: 'የታችኛው ካርድ ማሸነፊያ ገና አልተሟላም!' };
+    }
+    const isBottomJoker = Boolean(bc.isJoker || bc.rank === 'JOKER');
+    const mult = dopeyViaBottom ? (isBottomJoker ? 3 : 2) : 1;
+    const titleKey = dopeyViaBottom
+      ? isBottomJoker
+        ? 'bottom_dopey_joker'
+        : 'bottom_dopey'
+      : 'bottom_normal';
+    finishServerRaminoRound(session, me, mult, titleKey, `${bc.rank}${bc.suit}`);
+    return { ok: true };
+  }
+
+  if (action === 'dopey_win') {
+    if (me.hasMelded) return { ok: false, error: 'ቀድመው ወርደዋል።' };
+    const dopey = srvCheckDopey(me.hand, undefined, allowSameRankDopey);
+    if (!dopey.isDopey) return { ok: false, error: 'ዶፔይ ገና አልተሟላም!' };
+    const mult = dopey.isJokerFinished ? 3 : 2;
+    finishServerRaminoRound(session, me, mult, dopey.isJokerFinished ? 'dopey_joker' : 'dopey');
+    return { ok: true };
+  }
+
+  if (action === 'meld') {
+    const reqIds: string[] = Array.isArray(payload.cardIds) ? payload.cardIds : [];
+    const selectedCards = me.hand.filter((c) => reqIds.includes(c.id));
+    let newGroups: { type: 'set' | 'run'; cards: RaminoCard[]; points: number }[] = [];
+    if (selectedCards.length >= 3) {
+      if (srvIsValidSet(selectedCards)) {
+        newGroups = [{ type: 'set', cards: selectedCards, points: srvGetGroupPoints(selectedCards) }];
+      } else if (srvIsValidRun(selectedCards)) {
+        newGroups = [{ type: 'run', cards: selectedCards, points: srvGetGroupPoints(selectedCards) }];
+      } else {
+        newGroups = srvPartitionValidMelds(selectedCards).melds;
+      }
+    } else {
+      newGroups = srvPartitionValidMelds(me.hand).melds;
+    }
+    if (newGroups.length === 0) return { ok: false, error: 'ትክክለኛ ትሪስ ወይም ካትሪስ አልተገኘም!' };
+    const totalPts = newGroups.reduce((s, g) => s + g.points, 0);
+    const meldedCount = newGroups.reduce((s, g) => s + g.cards.length, 0);
+    const isFinishing = meldedCount >= me.hand.length - 1;
+    if (!me.hasMelded && totalPts < 41) {
+      return { ok: false, error: `ለመውረድ ቢያንስ 41 ነጥብ ያስፈልጋል (${totalPts}/41)!` };
+    }
+    if (!session.hasDrawn && !session.drawnFromDiscardCardId && !isFinishing) {
+      return { ok: false, error: 'መጀመሪያ ካርታ ይሳቡ!' };
+    }
+
+    session.meldTurnCounter += 1;
+    const nextSeq = session.meldTurnCounter;
+    const ownerColor =
+      me.avatarColor.replace('bg-', 'border-') || 'border-amber-400';
+
+    const addedMelds: RaminoMeldGroup[] = newGroups.map((g, idx) => ({
+      id: `meld_${Date.now()}_${idx}`,
+      type: g.type,
+      rank: g.cards.find((c) => !c.isJoker)?.rank,
+      suit: g.cards.find((c) => !c.isJoker)?.suit,
+      cards: g.cards,
+      ownerId: me.id,
+      ownerColor,
+      meldTurnSeq: nextSeq,
+    }));
+
+    const meldedIds = new Set(newGroups.flatMap((g) => g.cards.map((c) => c.id)));
+    me.hand = me.hand.filter((c) => !meldedIds.has(c.id));
+    me.hasMelded = true;
+    session.drawnFromDiscardCardId = null;
+
+    const { remainingMelds, badgesToAdd } = srvPartitionCollapsedFourSuitSets(session.tableMelds, nextSeq);
+    session.tableMelds = [...remainingMelds, ...addedMelds];
+    if (badgesToAdd.length > 0) session.closedSetBadges.push(...badgesToAdd);
+
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: 'meld',
+      actorId: me.id,
+      actorName: me.name,
+      detail: String(totalPts),
+    };
+
+    if (me.hand.length === 0) {
+      finishServerRaminoRound(session, me, 1, 'normal');
+      return { ok: true };
+    }
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'layoff_card') {
+    if (!me.hasMelded) return { ok: false, error: 'ሳትወርድ ገቢ አይቻልም!' };
+    const meldId = String(payload.meldId || '');
+    const cardId = String(payload.cardId || '');
+    const cardIdx = Number(payload.cardIdx ?? 0);
+    const targetMeld = session.tableMelds.find((m) => m.id === meldId);
+    const selCard = me.hand.find((c) => c.id === cardId);
+    if (!targetMeld || !selCard) return { ok: false, error: 'ቡድን ወይም ካርታ አልተገኘም።' };
+
+    let updatedCards: RaminoCard[] | null = null;
+    if (selCard.isJoker) {
+      if (targetMeld.type === 'set') {
+        if (targetMeld.cards.length >= 4) return { ok: false, error: 'ይህ ትሪስ 4 ካርድ ሞልቷል።' };
+        updatedCards = [...targetMeld.cards, selCard];
+      } else {
+        updatedCards = srvInsertCardIntoRunMeld(targetMeld.cards, selCard, cardIdx);
+      }
+    } else if (targetMeld.type === 'set') {
+      const candidate = [...targetMeld.cards, selCard];
+      if (srvIsValidSet(candidate)) updatedCards = candidate;
+    } else {
+      updatedCards = srvInsertCardIntoRunMeld(targetMeld.cards, selCard, cardIdx);
+    }
+
+    if (!updatedCards) return { ok: false, error: 'ይህ ካርድ ከቡድኑ ጋር አይገጥምም!' };
+    targetMeld.cards = updatedCards;
+    me.hand = me.hand.filter((c) => c.id !== cardId);
+    session.drawnFromDiscardCardId = null;
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: 'layoff',
+      actorId: me.id,
+      actorName: me.name,
+      detail: `${selCard.rank}${selCard.suit}`,
+    };
+    if (me.hand.length === 0) {
+      finishServerRaminoRound(session, me, 1, 'normal');
+      return { ok: true };
+    }
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'swap_joker') {
+    if (!me.hasMelded) return { ok: false, error: 'ሳትወርድ ገቢ አይቻልም!' };
+    const meldId = String(payload.meldId || '');
+    const cardIdx = Number(payload.cardIdx ?? 0);
+    const preferredCardId = payload.cardId ? String(payload.cardId) : null;
+    const targetMeld = session.tableMelds.find((m) => m.id === meldId);
+    if (!targetMeld) return { ok: false, error: 'ቡድኑ አልተገኘም።' };
+    const targetCard = targetMeld.cards[cardIdx];
+    if (!targetCard || !targetCard.isJoker) return { ok: false, error: 'የተመረጠው ካርታ ጆከር አይደለም።' };
+
+    const info = srvGetTableMeldJokerInfo(targetMeld, cardIdx);
+    const nonJokers = targetMeld.cards.filter((c) => !c.isJoker);
+    const reqRank = info?.rank || targetMeld.rank || 'J';
+
+    const matchIdx = me.hand.findIndex((c) => {
+      if (preferredCardId && c.id !== preferredCardId) return false;
+      if (c.isJoker || c.rank !== reqRank) return false;
+      if (targetMeld.type === 'run' && info?.suit) return c.suit === info.suit;
+      return !nonJokers.some((n) => n.suit === c.suit);
+    });
+    if (matchIdx === -1) return { ok: false, error: 'ትክክለኛው መቀየሪያ ካርድ በእጅዎ ላይ የለም!' };
+
+    const natural = me.hand[matchIdx];
+    me.hand.splice(matchIdx, 1, targetCard);
+    targetMeld.cards[cardIdx] = natural;
+    session.drawnFromDiscardCardId = null;
+    session.lastEvent = { id: ++raminoEventSeq, type: 'swap_joker', actorId: me.id, actorName: me.name };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'discard') {
+    if (!session.hasDrawn) return { ok: false, error: 'ከመጣልዎ በፊት መጀመሪያ ካርታ ይሳቡ!' };
+    const cardId = String(payload.cardId || '');
+    const cardIdx = me.hand.findIndex((c) => c.id === cardId);
+    if (cardIdx === -1) return { ok: false, error: 'ካርታው በእጅዎ ላይ አልተገኘም።' };
+    const cardToDiscard = me.hand[cardIdx];
+    const nextHand = me.hand.filter((c) => c.id !== cardId);
+    const closesDopey = !me.hasMelded && nextHand.length === 13 && srvIsExact13CardDopey(nextHand, allowSameRankDopey);
+
+    if (!me.hasMelded && session.drawnFromDiscardCardId !== null && !closesDopey && nextHand.length > 0) {
+      return { ok: false, error: 'ከተጣለ ካርታ ስለወሰዱ ግድ መውረድ ወይም "መልስ" መጫን አለብዎት!' };
+    }
+
+    const isJoker = cardToDiscard.isJoker || cardToDiscard.rank === 'JOKER';
+    const isLastCard = me.hand.length === 1;
+    const allMatch = me.hand.every((c) => srvDoesCardMatchTableMelds(c, session.tableMelds));
+    const matchesTable = srvDoesCardMatchTableMelds(cardToDiscard, session.tableMelds);
+
+    if (matchesTable && !isJoker && !isLastCard && !allMatch && !closesDopey) {
+      return { ok: false, error: 'በጠረጴዛው ላይ ካለ ቡድን ጋር የሚገጥም ካርድ መጣል አይቻልም!' };
+    }
+
+    me.hand = nextHand;
+    session.discardPile.push(cardToDiscard);
+    session.hasDrawn = false;
+    session.drawnFromDiscardCardId = null;
+
+    if (nextHand.length === 0 || closesDopey) {
+      const dopey = srvCheckDopey(nextHand, cardToDiscard, allowSameRankDopey);
+      const mult = dopey.isJokerFinished ? 3 : dopey.isDopey ? 2 : 1;
+      finishServerRaminoRound(
+        session,
+        me,
+        mult,
+        dopey.isJokerFinished ? 'dopey_joker' : dopey.isDopey ? 'dopey' : 'normal'
+      );
+      return { ok: true };
+    }
+
+    if (session.deck.length === 0 && session.discardPile.length > 1) {
+      const top = session.discardPile[session.discardPile.length - 1];
+      const pool = [...session.discardPile.slice(0, -1)];
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = crypto.randomInt(0, i + 1);
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      session.deck = pool;
+      session.discardPile = [top];
+      session.reshuffleCount += 1;
+    }
+
+    session.currentTurnIdx = (session.currentTurnIdx + 1) % session.players.length;
+    session.turnSeconds = 120;
+    session.hasDiscarded = false;
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: 'discard',
+      actorId: me.id,
+      actorName: me.name,
+      detail: `${cardToDiscard.rank}${cardToDiscard.suit}`,
+    };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  return { ok: false, error: 'Unknown action' };
+}
+
+function startRaminoServerLoop() {
+  setInterval(() => {
+    // 1. Tick public lobby open rooms
+    if (raminoPublicRooms.size > 0) {
+      let lobbyChanged = false;
+      for (const [id, rm] of raminoPublicRooms.entries()) {
+        if (rm.timeRemaining <= 1) {
+          raminoPublicRooms.delete(id);
+          lobbyChanged = true;
+          if (!rm.isDemo) {
+            for (const p of rm.players) {
+              if (p.phone) {
+                const pl = ensurePlayerRecord(p.phone, p.name);
+                pl.balance = Number((pl.balance + rm.stake).toFixed(2));
+                serverTransactions.unshift({
+                  id: `rref-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+                  userId: pl.id,
+                  userName: pl.name,
+                  userPhone: pl.phone,
+                  type: 'win',
+                  method: 'Conker Ramino',
+                  amount: rm.stake,
+                  referenceNumber: `Room Refund ${rm.name}`,
+                  status: 'approved',
+                  timestamp: new Date().toLocaleString(),
+                });
+              }
+            }
+            saveBotsToDisk();
+            broadcastRealtimeSync();
+          }
+        } else {
+          rm.timeRemaining -= 1;
+          lobbyChanged = true;
+        }
+      }
+      if (lobbyChanged) broadcastRaminoLobbySync();
+    }
+
+    // 2. Tick active multiplayer Ramino tables
+    for (const session of raminoTables.values()) {
+      if (session.phase !== 'game') continue;
+      if (session.turnSeconds > 0) {
+        session.turnSeconds -= 1;
+        if (session.turnSeconds === 30 || session.turnSeconds % 5 === 0 || session.turnSeconds <= 10) {
+          broadcastRaminoTableState(session);
+        }
+      }
+      if (session.turnSeconds === 0 && !session.hasDrawn) {
+        const timedOutPlayer = session.players[session.currentTurnIdx];
+        if (!timedOutPlayer) continue;
+        // Auto-draw & discard 1 non-joker card so multiplayer human games recover cleanly, or notify timeout
+        session.lastEvent = {
+          id: ++raminoEventSeq,
+          type: 'turn_timeout',
+          actorId: timedOutPlayer.id,
+          actorName: timedOutPlayer.name,
+        };
+        if (session.players.length > 2) {
+          handleServerRaminoAction(session, timedOutPlayer.id, 'leave_table');
+        } else {
+          const other = session.players.find((p) => p.id !== timedOutPlayer.id);
+          if (other) {
+            finishServerRaminoRound(session, other, 1, 'normal');
+          }
+        }
+      }
+    }
+  }, 1000);
+}
 
 // Active Game Presence Tracking for Accurate Real-Time Player Counts
 type TrackedGameKey = 'hub' | 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo';
@@ -6525,17 +8305,6 @@ const pruneStaleGamePresence = () => {
       activeGamePresence.delete(cid);
     }
   }
-};
-
-// Keno Admin Controls State
-const kenoAdminConfig = {
-  isPaused: false,
-  defaultCountdownSec: 60,
-  speed: 'normal' as 'normal' | 'fast' | 'turbo',
-  resetToken: 0,
-  totalBetsCount: 0,
-  totalWagered: 0,
-  totalPaidOut: 0,
 };
 
 // Track ramino voice peers in module scope so HTTP admin inspection can also read live voice peer counts
@@ -6559,7 +8328,6 @@ function computeLiveGameCounts() {
     presenceByGame[info.game]?.add(cid);
   }
 
-  // Fast Bingo unique active players (presence + locked cartelas across 10/20/50/100 rooms)
   const fastPlayers = new Set<string>(presenceByGame.fast);
   for (const stk of FAST_STAKE_TIERS) {
     const lMap = fastLockedCartelasByStake[stk];
@@ -6570,13 +8338,11 @@ function computeLiveGameCounts() {
     }
   }
 
-  // Liyu Bingo (Regular) unique active players (presence + locked cartelas)
   const regularPlayers = new Set<string>(presenceByGame.regular);
   for (const item of regularRoomLockedCartelas.values()) {
     regularPlayers.add(item.clientId || item.ownerPhone);
   }
 
-  // Ramino active players (presence + non-admin voice peers + private room players)
   const raminoPlayers = new Set<string>(presenceByGame.ramino);
   for (const meta of raminoVoicePeers.values()) {
     if (!meta.isAdminMonitor) {
@@ -6585,7 +8351,12 @@ function computeLiveGameCounts() {
   }
   for (const room of raminoPrivateRooms.values()) {
     for (const p of room.players) {
-      raminoPlayers.add(`room:${room.code}:${p.name}`);
+      raminoPlayers.add(`room:${room.code}:${p.id}`);
+    }
+  }
+  for (const tbl of raminoTables.values()) {
+    for (const p of tbl.players) {
+      raminoPlayers.add(`table:${tbl.roomCode}:${p.id}`);
     }
   }
 
@@ -6619,6 +8390,7 @@ app.post('/api/wallet/game-tx', (req, res) => {
   const name = String(req.body?.name || 'Player').trim() || 'Player';
   const delta = Number(req.body?.delta);
   const game = String(req.body?.game || 'game');
+  const reason = String(req.body?.reason || '').trim();
   if (!phone || !Number.isFinite(delta)) {
     return res.status(400).json({ ok: false, error: 'Invalid wallet update' });
   }
@@ -6633,9 +8405,81 @@ app.post('/api/wallet/game-tx', (req, res) => {
       kenoAdminConfig.totalPaidOut += delta;
     }
   }
+  let createdTx: ServerTransactionRecord | null = null;
+  if (delta !== 0) {
+    const methodLabel =
+      game === 'keno' ? 'Fast Keno' : game === 'ramino' ? 'Conker Ramino' : game;
+    const txType: 'bet' | 'win' = delta < 0 ? 'bet' : 'win';
+    createdTx = {
+      id: `gtx-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      userId: player.id,
+      userName: player.name,
+      userPhone: player.phone,
+      type: txType,
+      method: methodLabel,
+      amount: Math.abs(Number(delta.toFixed(2))),
+      referenceNumber:
+        reason ||
+        (game === 'keno'
+          ? txType === 'bet'
+            ? 'Keno Bet'
+            : 'Keno Win'
+          : game === 'ramino'
+          ? txType === 'bet'
+            ? 'Ramino Entry'
+            : 'Ramino Win'
+          : 'Game Tx'),
+      status: 'approved',
+      timestamp: new Date().toLocaleString(),
+    };
+    serverTransactions.unshift(createdTx);
+    if (serverTransactions.length > 600) {
+      serverTransactions.length = 600;
+    }
+  }
   saveBotsToDisk();
   broadcastRealtimeSync();
-  res.json({ ok: true, balance: player.balance, phone: player.phone });
+  res.json({ ok: true, balance: player.balance, phone: player.phone, transaction: createdTx });
+});
+
+// Synchronized Fast Keno Live Endpoints
+app.get('/api/keno/live-state', (_req, res) => {
+  res.json({ ok: true, state: serializeKenoLiveState() });
+});
+
+app.post('/api/keno/tickets', (req, res) => {
+  const playerId = String(req.body?.playerId || 'guest').trim();
+  const handle = String(req.body?.handle || 'Player').trim() || 'Player';
+  const numbersRaw = Array.isArray(req.body?.numbers) ? req.body.numbers : [];
+  const numbers = numbersRaw
+    .map((n: unknown) => Number(n))
+    .filter((n: number) => Number.isInteger(n) && n >= 1 && n <= 80)
+    .slice(0, 10);
+  const bet = Math.max(1, Number(req.body?.bet || 2));
+
+  if (kenoLiveState.phase !== 'betting') {
+    return res.status(400).json({ ok: false, error: 'Draw in progress, wait for next round' });
+  }
+  if (numbers.length === 0) {
+    return res.status(400).json({ ok: false, error: 'Select at least 1 number' });
+  }
+
+  const maskedHandle =
+    handle.length >= 2 ? `${handle[0]}***${handle[handle.length - 1]}` : `${handle}***`;
+
+  const ticket: ServerKenoTicket = {
+    id: `kt_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+    handle: maskedHandle,
+    playerId,
+    numbers: [...numbers].sort((a, b) => a - b),
+    bet,
+    status: 'Waiting',
+    timestamp: Date.now(),
+  };
+  kenoLiveState.liveTickets.unshift(ticket);
+  if (kenoLiveState.liveTickets.length > 80) kenoLiveState.liveTickets.length = 80;
+  broadcastKenoLiveState();
+  res.json({ ok: true, ticket, state: serializeKenoLiveState() });
 });
 
 // Keno Admin Controls API
@@ -6659,6 +8503,13 @@ app.post('/api/keno/admin/control', (req, res) => {
   } else if (action === 'reset_round') {
     kenoAdminConfig.resetToken += 1;
     kenoAdminConfig.isPaused = false;
+    kenoLiveState.phase = 'betting';
+    kenoLiveState.countdownSeconds = kenoAdminConfig.defaultCountdownSec;
+    kenoLiveState.cooldownSeconds = 0;
+    kenoLiveState.drawnBalls = [];
+    kenoLiveState.currentRevealedIndex = -1;
+    kenoLiveState.liveTickets = [];
+    kenoLiveState.lastStepAt = Date.now();
   }
   if (typeof countdownSec === 'number' && countdownSec >= 10 && countdownSec <= 180) {
     kenoAdminConfig.defaultCountdownSec = Math.round(countdownSec);
@@ -6677,6 +8528,7 @@ app.post('/api/keno/admin/control', (req, res) => {
       } catch {}
     }
   }
+  broadcastKenoLiveState();
   res.json({ ok: true, ...kenoAdminConfig });
 });
 
@@ -6696,16 +8548,25 @@ app.get('/api/ramino/admin/rooms', (_req, res) => {
     };
   });
 
-  // Also capture any voice-only rooms not in private rooms store
   for (const meta of raminoVoicePeers.values()) {
     if (meta.isAdminMonitor) continue;
     if (!rooms.some((r) => r.code === meta.roomCode)) {
       rooms.push({
         code: meta.roomCode,
+        hostId: meta.peerId,
         hostName: meta.playerName,
         maxPlayers: 4,
         stake: 30,
-        players: [{ name: meta.playerName, isHost: true, joinedAt: Date.now() }],
+        players: [
+          {
+            id: meta.peerId,
+            name: meta.playerName,
+            avatarLetter: meta.playerName[0]?.toUpperCase() || 'P',
+            avatarColor: 'bg-amber-400',
+            isHost: true,
+            joinedAt: Date.now(),
+          },
+        ],
         status: 'started',
         createdAt: Date.now(),
         voiceCount: 1,
@@ -6725,12 +8586,25 @@ app.post('/api/ramino/admin/rooms/:code/control', (req, res) => {
   const code = String(req.params.code || '').trim().toUpperCase();
   const action = String(req.body?.action || '').trim() as 'force_start' | 'reset' | 'close';
   const room = raminoPrivateRooms.get(code);
-  if (action === 'close' && room) {
-    raminoPrivateRooms.delete(code);
-  } else if (action === 'force_start' && room) {
-    room.status = 'started';
+  const tbl = raminoTables.get(code);
+  if (action === 'close') {
+    if (room) raminoPrivateRooms.delete(code);
+    if (tbl) {
+      if (tbl.ceremonyTimer) clearTimeout(tbl.ceremonyTimer);
+      raminoTables.delete(code);
+    }
+  } else if (action === 'force_start') {
+    if (room) room.status = 'started';
+    if (tbl && tbl.phase === 'waiting' && tbl.players.length >= 2) {
+      startServerRaminoCeremony(tbl);
+    }
   } else if (action === 'reset' && room) {
     room.status = 'waiting';
+    if (tbl) {
+      if (tbl.ceremonyTimer) clearTimeout(tbl.ceremonyTimer);
+      tbl.phase = 'waiting';
+      broadcastRaminoTableState(tbl);
+    }
   }
 
   const ctrlPayload = JSON.stringify({
@@ -6748,9 +8622,236 @@ app.post('/api/ramino/admin/rooms/:code/control', (req, res) => {
   res.json({ ok: true, code, action });
 });
 
+// Ramino Public Open Rooms Lobby API
+app.get('/api/ramino/rooms', (_req, res) => {
+  res.json({ ok: true, rooms: serializePublicRoomsList() });
+});
+
+app.post('/api/ramino/rooms', (req, res) => {
+  const creatorId = String(req.body?.creatorId || 'guest').trim();
+  const creatorPhone = String(req.body?.creatorPhone || '').trim();
+  const creatorName = String(req.body?.creatorName || 'Player').trim() || 'Player';
+  const rawSeats = Number(req.body?.maxPlayers || 3);
+  const max = ([2, 3, 4, 5].includes(rawSeats) ? rawSeats : 3) as 2 | 3 | 4 | 5;
+  const stake = Math.max(10, Number(req.body?.stake || 30));
+  const duration = RAMINO_SEAT_DURATION_MAP[max] || 180;
+  const roomNum = Math.floor(1000 + Math.random() * 9000);
+  const id = `r_${Date.now()}_${roomNum}`;
+
+  const room: RaminoPublicRoomRecord = {
+    id,
+    name: `#${roomNum}`,
+    creatorId,
+    creatorPhone,
+    creator: creatorName,
+    avatarLetter: creatorName[0]?.toUpperCase() || 'P',
+    avatarColor: 'bg-amber-400',
+    stake,
+    max,
+    current: 1,
+    duration,
+    timeRemaining: duration,
+    isDemo: false,
+    players: [
+      {
+        id: creatorId,
+        name: creatorName,
+        phone: creatorPhone,
+        avatarLetter: creatorName[0]?.toUpperCase() || 'P',
+        avatarColor: 'bg-amber-400',
+        isHost: true,
+        joinedAt: Date.now(),
+      },
+    ],
+    createdAt: Date.now(),
+  };
+  raminoPublicRooms.set(id, room);
+
+  // Create backing human multiplayer table
+  const tableCode = `PUB_${id.toUpperCase()}`;
+  raminoTables.set(tableCode, {
+    roomCode: tableCode,
+    isPrivate: false,
+    hostId: creatorId,
+    hostName: creatorName,
+    maxPlayers: max,
+    stake,
+    phase: 'waiting',
+    roundIndex: 0,
+    privateRoundCount: 1,
+    reshuffleCount: 0,
+    players: room.players.map((p, idx) => ({
+      ...p,
+      isBot: false,
+      avatarColor: RAMINO_SEAT_AVATAR_COLORS[idx % RAMINO_SEAT_AVATAR_COLORS.length],
+      hand: [],
+      hasMelded: false,
+      winStreak: 0,
+      isDealer: false,
+    })),
+    cutParticipants: [],
+    ceremonyRevealedCount: 0,
+    ceremonyDealerId: creatorId,
+    ceremonyDealerName: creatorName,
+    deck: [],
+    bottomCard: {
+      id: 'placeholder_10c',
+      rank: '10',
+      suit: '♣',
+      suitName: 'clubs',
+      color: 'black',
+      value: 10,
+      points: 10,
+      isJoker: false,
+    },
+    discardPile: [],
+    tableMelds: [],
+    closedSetBadges: [],
+    meldTurnCounter: 0,
+    currentTurnIdx: 0,
+    hasDrawn: false,
+    drawnFromDiscardCardId: null,
+    hasDiscarded: false,
+    turnSeconds: 120,
+    winnerCelebration: null,
+    postDayRequest: null,
+    lastEvent: null,
+  });
+
+  broadcastRaminoLobbySync();
+  res.json({ ok: true, room, tableCode, rooms: serializePublicRoomsList() });
+});
+
+app.post('/api/ramino/rooms/:id/cancel', (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const room = raminoPublicRooms.get(id);
+  if (room) {
+    raminoPublicRooms.delete(id);
+    raminoTables.delete(`PUB_${id.toUpperCase()}`);
+    broadcastRaminoLobbySync();
+  }
+  res.json({ ok: true, rooms: serializePublicRoomsList() });
+});
+
+app.post('/api/ramino/rooms/:id/join', (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const playerId = String(req.body?.playerId || '').trim();
+  const playerPhone = String(req.body?.playerPhone || '').trim();
+  const playerName = String(req.body?.playerName || 'Player').trim() || 'Player';
+  const room = raminoPublicRooms.get(id);
+  if (!room) {
+    return res.status(404).json({ ok: false, error: 'ክፍሉ አልተገኘም' });
+  }
+  const pid = playerId || `p_${playerName}_${Date.now()}`;
+  const tableCode = `PUB_${id.toUpperCase()}`;
+
+  if (!room.players.some((p) => p.id === pid)) {
+    if (room.players.length >= room.max) {
+      return res.status(400).json({ ok: false, error: 'ክፍሉ ሞልቷል!' });
+    }
+    const nextColor = RAMINO_SEAT_AVATAR_COLORS[room.players.length % RAMINO_SEAT_AVATAR_COLORS.length];
+    room.players.push({
+      id: pid,
+      name: playerName,
+      phone: playerPhone,
+      avatarLetter: playerName[0]?.toUpperCase() || 'P',
+      avatarColor: nextColor,
+      isHost: false,
+      joinedAt: Date.now(),
+    });
+    room.current = room.players.length;
+  }
+
+  let tbl = raminoTables.get(tableCode);
+  if (!tbl) {
+    tbl = {
+      roomCode: tableCode,
+      isPrivate: false,
+      hostId: room.creatorId,
+      hostName: room.creator,
+      maxPlayers: room.max,
+      stake: room.stake,
+      phase: 'waiting',
+      roundIndex: 0,
+      privateRoundCount: 1,
+      reshuffleCount: 0,
+      players: room.players.map((p, idx) => ({
+        ...p,
+        isBot: false,
+        avatarColor: RAMINO_SEAT_AVATAR_COLORS[idx % RAMINO_SEAT_AVATAR_COLORS.length],
+        hand: [],
+        hasMelded: false,
+        winStreak: 0,
+        isDealer: false,
+      })),
+      cutParticipants: [],
+      ceremonyRevealedCount: 0,
+      ceremonyDealerId: room.creatorId,
+      ceremonyDealerName: room.creator,
+      deck: [],
+      bottomCard: {
+        id: 'placeholder_10c',
+        rank: '10',
+        suit: '♣',
+        suitName: 'clubs',
+        color: 'black',
+        value: 10,
+        points: 10,
+        isJoker: false,
+      },
+      discardPile: [],
+      tableMelds: [],
+      closedSetBadges: [],
+      meldTurnCounter: 0,
+      currentTurnIdx: 0,
+      hasDrawn: false,
+      drawnFromDiscardCardId: null,
+      hasDiscarded: false,
+      turnSeconds: 120,
+      winnerCelebration: null,
+      postDayRequest: null,
+      lastEvent: null,
+    };
+    raminoTables.set(tableCode, tbl);
+  } else if (!tbl.players.some((p) => p.id === pid)) {
+    tbl.players.push({
+      id: pid,
+      name: playerName,
+      phone: playerPhone,
+      avatarLetter: playerName[0]?.toUpperCase() || 'P',
+      avatarColor: RAMINO_SEAT_AVATAR_COLORS[tbl.players.length % RAMINO_SEAT_AVATAR_COLORS.length],
+      isHost: false,
+      isBot: false,
+      joinedAt: Date.now(),
+      hand: [],
+      hasMelded: false,
+      winStreak: 0,
+      isDealer: false,
+    });
+  }
+
+  if (tbl.players.length >= room.max && tbl.phase === 'waiting') {
+    raminoPublicRooms.delete(id);
+    startServerRaminoCeremony(tbl);
+  } else {
+    broadcastRaminoTableState(tbl);
+  }
+
+  broadcastRaminoLobbySync();
+  res.json({
+    ok: true,
+    room,
+    tableCode,
+    table: serializeRaminoTableForPlayer(tbl, pid),
+  });
+});
+
+// Ramino Private Room Endpoints (Human-Only — Strictly Zero Computer Bots)
 app.post('/api/ramino/private-rooms', (req, res) => {
   try {
     const rawCode = String(req.body?.code || '').trim().toUpperCase();
+    const hostId = String(req.body?.hostId || req.body?.playerId || '').trim() || `host_${Date.now()}`;
+    const hostPhone = String(req.body?.hostPhone || '').trim();
     const hostName = String(req.body?.hostName || 'Player').trim() || 'Player';
     const rawSeats = Number(req.body?.maxPlayers || 3);
     const maxPlayers = ([2, 3, 4, 5].includes(rawSeats) ? rawSeats : 3) as 2 | 3 | 4 | 5;
@@ -6758,27 +8859,56 @@ app.post('/api/ramino/private-rooms', (req, res) => {
     if (!rawCode) {
       return res.status(400).json({ ok: false, error: 'Room code is required' });
     }
+
     const existing = raminoPrivateRooms.get(rawCode);
     if (existing) {
       existing.maxPlayers = maxPlayers;
       existing.stake = stake;
       existing.hostName = hostName;
-      if (existing.players.length === 0) {
-        existing.players.push({ name: hostName, isHost: true, joinedAt: Date.now() });
+      existing.hostId = hostId;
+      if (!existing.players.some((p) => p.id === hostId)) {
+        const idx = existing.players.length;
+        existing.players.unshift({
+          id: hostId,
+          name: hostName,
+          phone: hostPhone,
+          avatarLetter: hostName[0]?.toUpperCase() || 'H',
+          avatarColor: RAMINO_SEAT_AVATAR_COLORS[idx % RAMINO_SEAT_AVATAR_COLORS.length],
+          isHost: true,
+          joinedAt: Date.now(),
+        });
       }
-      return res.json({ ok: true, room: existing });
+      const tbl = createOrSyncRaminoTableFromPrivateRoom(existing);
+      broadcastPrivateRoomSnapshot(existing);
+      broadcastRaminoTableState(tbl);
+      return res.json({ ok: true, room: existing, table: serializeRaminoTableForPlayer(tbl, hostId) });
     }
+
     const room: RaminoPrivateRoomRecord = {
       code: rawCode,
+      hostId,
       hostName,
       maxPlayers,
       stake,
-      players: [{ name: hostName, isHost: true, joinedAt: Date.now() }],
+      players: [
+        {
+          id: hostId,
+          name: hostName,
+          phone: hostPhone,
+          avatarLetter: hostName[0]?.toUpperCase() || 'H',
+          avatarColor: 'bg-amber-400',
+          isHost: true,
+          joinedAt: Date.now(),
+        },
+      ],
       status: 'waiting',
       createdAt: Date.now(),
     };
     raminoPrivateRooms.set(rawCode, room);
-    res.json({ ok: true, room });
+    const tbl = createOrSyncRaminoTableFromPrivateRoom(room);
+    broadcastPrivateRoomSnapshot(room);
+    broadcastRaminoTableState(tbl);
+    res.json({ ok: true, room, table: serializeRaminoTableForPlayer(tbl, hostId) });
   } catch (err) {
     console.error('Create ramino private room error:', err);
     res.status(500).json({ ok: false, error: 'Failed to create private room' });
@@ -6796,29 +8926,84 @@ app.get('/api/ramino/private-rooms/:code', (req, res) => {
 
 app.post('/api/ramino/private-rooms/:code/join', (req, res) => {
   const code = String(req.params.code || '').trim().toUpperCase();
+  const playerId = String(req.body?.playerId || '').trim() || `guest_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  const playerPhone = String(req.body?.playerPhone || '').trim();
   const playerName = String(req.body?.playerName || 'Friend').trim() || 'Friend';
   const room = raminoPrivateRooms.get(code);
   if (!room) {
-    return res.status(404).json({ ok: false, error: 'ክፍሉ አልተገኘም' });
+    return res.status(404).json({ ok: false, error: 'በዚህ ኮድ የተፈጠረ ክፍል አልተገኘም!' });
   }
-  const alreadyJoined = room.players.some((p) => p.name.toLowerCase() === playerName.toLowerCase());
+  const alreadyJoined = room.players.some((p) => p.id === playerId);
   if (!alreadyJoined) {
     if (room.players.length >= room.maxPlayers) {
       return res.status(400).json({ ok: false, error: 'ክፍሉ ሞልቷል!' });
     }
-    room.players.push({ name: playerName, isHost: false, joinedAt: Date.now() });
+    const idx = room.players.length;
+    room.players.push({
+      id: playerId,
+      name: playerName,
+      phone: playerPhone,
+      avatarLetter: playerName[0]?.toUpperCase() || 'F',
+      avatarColor: RAMINO_SEAT_AVATAR_COLORS[idx % RAMINO_SEAT_AVATAR_COLORS.length],
+      isHost: false,
+      joinedAt: Date.now(),
+    });
   }
-  res.json({ ok: true, room });
+  const tbl = createOrSyncRaminoTableFromPrivateRoom(room);
+  if (tbl.phase === 'waiting' && room.players.length >= room.maxPlayers) {
+    startServerRaminoCeremony(tbl);
+  } else {
+    broadcastPrivateRoomSnapshot(room);
+    broadcastRaminoTableState(tbl);
+  }
+  res.json({ ok: true, room, table: serializeRaminoTableForPlayer(tbl, playerId) });
 });
 
 app.post('/api/ramino/private-rooms/:code/start', (req, res) => {
   const code = String(req.params.code || '').trim().toUpperCase();
+  const playerId = String(req.body?.playerId || '').trim();
   const room = raminoPrivateRooms.get(code);
   if (!room) {
     return res.status(404).json({ ok: false, error: 'ክፍሉ አልተገኘም' });
   }
-  room.status = 'started';
-  res.json({ ok: true, room });
+  const tbl = createOrSyncRaminoTableFromPrivateRoom(room);
+  if (tbl.players.length >= 2 && tbl.phase === 'waiting') {
+    startServerRaminoCeremony(tbl);
+  } else {
+    broadcastPrivateRoomSnapshot(room);
+    broadcastRaminoTableState(tbl);
+  }
+  res.json({
+    ok: true,
+    room,
+    waitingForFriends: tbl.phase === 'waiting',
+    table: serializeRaminoTableForPlayer(tbl, playerId || room.hostId),
+  });
+});
+
+app.get('/api/ramino/tables/:code/state', (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  const playerId = String(req.query?.playerId || '').trim();
+  const tbl = raminoTables.get(code);
+  if (!tbl) {
+    return res.status(404).json({ ok: false, error: 'Table not found' });
+  }
+  res.json({ ok: true, table: serializeRaminoTableForPlayer(tbl, playerId) });
+});
+
+app.post('/api/ramino/tables/:code/action', (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  const playerId = String(req.body?.playerId || '').trim();
+  const action = String(req.body?.action || '').trim();
+  const tbl = raminoTables.get(code);
+  if (!tbl) {
+    return res.status(404).json({ ok: false, error: 'ጠረጴዛው አልተገኘም።' });
+  }
+  const result = handleServerRaminoAction(tbl, playerId, action, req.body || {});
+  if (!result.ok) {
+    return res.status(400).json({ ok: false, error: result.error, table: serializeRaminoTableForPlayer(tbl, playerId) });
+  }
+  res.json({ ok: true, table: serializeRaminoTableForPlayer(tbl, playerId) });
 });
 
 // Game Visibility (Hide/Show Games & Soon status from Home Hub)
@@ -7139,6 +9324,8 @@ async function startServer() {
 
   // Automatically restore and poll any saved Telegram bots across server restarts
   loadBotsFromDisk();
+  startKenoServerLoop();
+  startRaminoServerLoop();
 
   // Render.com Free Tier Keep-Alive / Wake-Up Self-Ping (runs every 4 minutes)
   setInterval(() => {
@@ -7202,6 +9389,19 @@ async function startServer() {
           timestamp: Date.now(),
         })
       );
+      ws.send(
+        JSON.stringify({
+          type: 'keno:state:sync',
+          state: serializeKenoLiveState(),
+        })
+      );
+      ws.send(
+        JSON.stringify({
+          type: 'ramino:lobby:sync',
+          rooms: serializePublicRoomsList(),
+          timestamp: Date.now(),
+        })
+      );
     } catch {
       // ignore
     }
@@ -7212,7 +9412,42 @@ async function startServer() {
         const msg = JSON.parse(String(raw));
         if (!msg || typeof msg.type !== 'string') return;
 
-        if (msg.type === 'ramino:voice:join') {
+        if (msg.type === 'ramino:table:join') {
+          const roomCode = String(msg.roomCode || '').trim().toUpperCase();
+          const playerId = String(msg.playerId || '').trim();
+          if (roomCode && playerId) {
+            raminoTableSockets.set(ws, { roomCode, playerId });
+            const tbl = raminoTables.get(roomCode);
+            if (tbl && ws.readyState === WebSocket.OPEN) {
+              ws.send(
+                JSON.stringify({
+                  type: 'ramino:table:sync',
+                  table: serializeRaminoTableForPlayer(tbl, playerId),
+                })
+              );
+            }
+          }
+        } else if (msg.type === 'ramino:table:leave') {
+          raminoTableSockets.delete(ws);
+        } else if (msg.type === 'ramino:game:action') {
+          const bound = raminoTableSockets.get(ws);
+          const roomCode = String(msg.roomCode || bound?.roomCode || '').trim().toUpperCase();
+          const playerId = String(msg.playerId || bound?.playerId || '').trim();
+          const action = String(msg.action || '').trim();
+          const tbl = raminoTables.get(roomCode);
+          if (tbl && playerId && action) {
+            const resAction = handleServerRaminoAction(tbl, playerId, action, msg.payload || {});
+            if (!resAction.ok && ws.readyState === WebSocket.OPEN) {
+              ws.send(
+                JSON.stringify({
+                  type: 'ramino:action:error',
+                  roomCode,
+                  error: resAction.error || 'Action failed',
+                })
+              );
+            }
+          }
+        } else if (msg.type === 'ramino:voice:join') {
           leaveRaminoVoiceRoom(ws);
           const roomCode = String(msg.roomCode || '').trim().toUpperCase();
           const peerId = String(msg.peerId || '').trim();
@@ -7325,12 +9560,14 @@ async function startServer() {
     });
 
     ws.on('close', () => {
+      raminoTableSockets.delete(ws);
       leaveRaminoVoiceRoom(ws);
       wsClients.delete(ws);
       broadcastRealtimeSync();
     });
 
     ws.on('error', () => {
+      raminoTableSockets.delete(ws);
       leaveRaminoVoiceRoom(ws);
       wsClients.delete(ws);
     });

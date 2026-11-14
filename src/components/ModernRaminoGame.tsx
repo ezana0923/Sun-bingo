@@ -29,14 +29,15 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { Language, UserAccount } from '../types/bingo';
-import { buildApiUrl } from '../utils/realtimeRoomClient';
+import { buildApiUrl, getDeviceClientId } from '../utils/realtimeRoomClient';
 
 interface RaminoPrivateRoomSnapshot {
   code: string;
+  hostId?: string;
   hostName: string;
   maxPlayers: 2 | 3 | 4 | 5;
   stake: number;
-  players: { name: string; isHost: boolean; joinedAt: number }[];
+  players: { id?: string; name: string; isHost: boolean; joinedAt: number }[];
   status: 'waiting' | 'started';
 }
 
@@ -111,6 +112,8 @@ export interface ModernRaminoGameProps {
   sharedUsers?: UserAccount[];
   onUpdateSharedUsers?: React.Dispatch<React.SetStateAction<UserAccount[]>>;
   onBackToLobby?: () => void;
+  onOpenWallet?: (tab?: 'deposit' | 'withdraw' | 'transfer' | 'history') => void;
+  onRecordWalletTx?: (delta: number, reason: string) => void;
 }
 
 const SUITS: { symbol: SuitSymbol; name: 'spades' | 'clubs' | 'diamonds' | 'hearts'; color: CardColor }[] = [
@@ -893,6 +896,9 @@ const RAMINO_T: Record<Language, any> = {
     activeRoomsSub: 'ንቁ ክፍሎች',
     balanceCardLabel: 'ቀሪ ሂሳብ',
     walletSub: 'ዋሌት',
+    depositShort: 'ገቢ',
+    withdrawShort: 'ወጪ',
+    openWalletBtn: 'ዋሌት (ገቢ እና ወጪ)',
     openRoomsHeader: (count: number) => `ክፍት ክፍሎች (${count})`,
     refreshBtn: 'አድስ',
     roomsRefreshed: 'የክፍሎች ዝርዝር ታድሷል!',
@@ -963,6 +969,12 @@ const RAMINO_T: Record<Language, any> = {
     joinedFriendsHeader: (curr: number, max: number) => `የተቀላቀሉ ጓደኞች (${curr}/${max})`,
     voiceChannelReady: 'የግል ድምፅ ቻናል ዝግጁ',
     waitingFriendSlot: (idx: number) => `ጓደኛ #${idx} በመጠበቅ ላይ...`,
+    privateStakeStep: '2. የዚህ የግል ክፍል መደብ (ብር):',
+    waitingRoomTitle: (priv: boolean) => (priv ? 'የግል ክፍል መጠበቂያ' : 'የጠረጴዛ መጠበቂያ'),
+    waitingPlayersNeeded: 'ጨዋታውን ለመጀመር ቢያንስ 2 እውነተኛ ተጫዋቾች መግባት አለባቸው',
+    waitingHostStartBtn: (stake: number, curr: number) => `▶️ አሁኑኑ ጀምር (${curr} ተጫዋቾች • ${stake} ብር)`,
+    waitingForHostMsg: 'ጋባዡ ወይም የተቀሩት ተጫዋቾች ሲገቡ ጨዋታው በራሱ ይጀምራል...',
+    cancelLeaveRefundBtn: 'ውጣ እና ብር መልስ',
     startPrivateRoomBtn: (stake: number, seats: number) => `ክፍሉን ጀምር (${stake} ብር • ${seats} ተጫዋቾች)`,
     joinModalTitle: 'በኮድ ወይም በሊንክ ተቀላቀል',
     enterCodeLabel: 'የክፍሉን ኮድ ያስገቡ:',
@@ -1117,6 +1129,9 @@ const RAMINO_T: Record<Language, any> = {
     activeRoomsSub: 'ንጡፋት ክፍልታት',
     balanceCardLabel: 'ቀሪ ሕሳብ',
     walletSub: 'ዋሌት',
+    depositShort: 'ኣታዊ',
+    withdrawShort: 'ወጻኢ',
+    openWalletBtn: 'ዋሌት (ኣታዊን ወጻኢን)',
     openRoomsHeader: (count: number) => `ክፉታት ክፍልታት (${count})`,
     refreshBtn: 'ኣሐድስ',
     roomsRefreshed: 'ዝርዝር ክፍልታት ተሓዲሱ!',
@@ -1187,6 +1202,12 @@ const RAMINO_T: Record<Language, any> = {
     joinedFriendsHeader: (curr: number, max: number) => `ዝተጸንበሩ ኣዕሩኽ (${curr}/${max})`,
     voiceChannelReady: 'ናይ ብሕቲ ድምጺ ድሉው',
     waitingFriendSlot: (idx: number) => `ዓርኪ #${idx} ይጽበ ኣሎ...`,
+    privateStakeStep: '2. ናይዚ ብሕታዊ ክፍሊ መወራረዲ (ብር):',
+    waitingRoomTitle: (priv: boolean) => (priv ? 'መጸበዪ ብሕታዊ ክፍሊ' : 'መጸበዪ ጠረጴዛ'),
+    waitingPlayersNeeded: 'ጸወታ ንምጅማር ብውሑዱ 2 ናይ ብሓቂ ተጻወትቲ ክኣትዉ ኣለዎም',
+    waitingHostStartBtn: (stake: number, curr: number) => `▶️ ሕጂ ጀምር (${curr} ተጻወትቲ • ${stake} ብር)`,
+    waitingForHostMsg: 'ዓዳሚ ወይ ዝተረፉ ተጻወትቲ ምስ ኣተዉ ጸወታ ብቀጥታ ክጅምር እዩ...',
+    cancelLeaveRefundBtn: 'ውጻእ እሞ ብር ምለስ',
     startPrivateRoomBtn: (stake: number, seats: number) => `ክፍሊ ጀምር (${stake} ብር • ${seats} ተጻወትቲ)`,
     joinModalTitle: 'ብኮድ ወይ ብሊንክ ተጸንበር',
     enterCodeLabel: 'ኮድ ክፍሊ ኣእትዉ:',
@@ -1341,6 +1362,9 @@ const RAMINO_T: Record<Language, any> = {
     activeRoomsSub: 'Kutaalee Qophii',
     balanceCardLabel: 'Haftee Qarshii',
     walletSub: 'Waaletii',
+    depositShort: 'Galii',
+    withdrawShort: 'Baasii',
+    openWalletBtn: 'Waaletii (Galii fi Baasii)',
     openRoomsHeader: (count: number) => `Kutaalee Banaa (${count})`,
     refreshBtn: 'Haaromsi',
     roomsRefreshed: 'Tarreen kutaalee haaromfameera!',
@@ -1411,6 +1435,12 @@ const RAMINO_T: Record<Language, any> = {
     joinedFriendsHeader: (curr: number, max: number) => `Hiriyoota seenan (${curr}/${max})`,
     voiceChannelReady: 'Sararri sagalee dhuunfaa qophiidha',
     waitingFriendSlot: (idx: number) => `Hiriyaa #${idx} eegaa jira...`,
+    privateStakeStep: '2. Hamma Qabsiisaa Kutaa Dhuunfaa (ETB):',
+    waitingRoomTitle: (priv: boolean) => (priv ? 'Kutaa Eeggannoo Dhuunfaa' : 'Kutaa Eeggannoo'),
+    waitingPlayersNeeded: 'Tapha jalqabuuf yoo xiqqaate taphattoonni dhugaa 2 seenuu qabu',
+    waitingHostStartBtn: (stake: number, curr: number) => `▶️ Amma Jalqabi (Taphattoota ${curr} • ${stake} ETB)`,
+    waitingForHostMsg: 'Yeroo hundi seenan ykn abbaan kutaa jalqabu taphni kallattiin ni jalqaba...',
+    cancelLeaveRefundBtn: 'Bahi & Qarshii Deebisi',
     startPrivateRoomBtn: (stake: number, seats: number) => `Kutaa Jalqabi (${stake} ETB • Taphattoota ${seats})`,
     joinModalTitle: 'Koodii ykn Liinkiidhaan Seeni',
     enterCodeLabel: 'Koodii kutaa galchi:',
@@ -1565,6 +1595,9 @@ const RAMINO_T: Record<Language, any> = {
     activeRoomsSub: 'Active Tables',
     balanceCardLabel: 'Balance',
     walletSub: 'Wallet',
+    depositShort: 'Deposit',
+    withdrawShort: 'Withdraw',
+    openWalletBtn: 'Wallet (Deposit & Withdraw)',
     openRoomsHeader: (count: number) => `Open Rooms (${count})`,
     refreshBtn: 'Refresh',
     roomsRefreshed: 'Rooms list refreshed!',
@@ -1635,6 +1668,12 @@ const RAMINO_T: Record<Language, any> = {
     joinedFriendsHeader: (curr: number, max: number) => `Joined Friends (${curr}/${max})`,
     voiceChannelReady: 'Private Voice Channel Ready',
     waitingFriendSlot: (idx: number) => `Waiting for Friend #${idx}...`,
+    privateStakeStep: '2. Private Room Stake (ETB):',
+    waitingRoomTitle: (priv: boolean) => (priv ? 'Private Room Waiting Area' : 'Table Waiting Room'),
+    waitingPlayersNeeded: 'At least 2 real players must join to start the match',
+    waitingHostStartBtn: (stake: number, curr: number) => `▶️ Start Now (${curr} Players • ${stake} ETB)`,
+    waitingForHostMsg: 'Game starts automatically once friends join or host starts...',
+    cancelLeaveRefundBtn: 'Leave & Refund Stake',
     startPrivateRoomBtn: (stake: number, seats: number) => `Start Room (${stake} ETB • ${seats} Players)`,
     joinModalTitle: 'Join by Code or Invite Link',
     enterCodeLabel: 'Enter Room Code:',
@@ -1788,10 +1827,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   sharedUsers,
   onUpdateSharedUsers,
   onBackToLobby,
+  onOpenWallet,
+  onRecordWalletTx,
 }) => {
   const t = RAMINO_T[language] || RAMINO_T.am;
-  // Navigation Flow: 1. Lobby -> 2. Dealer Cut Ceremony -> 3. Game (Mandatory Landscape)
-  const [view, setView] = useState<'lobby' | 'ceremony' | 'game'>('lobby');
+  // Navigation Flow: 1. Lobby -> (Optional Waiting) -> 2. Dealer Cut Ceremony -> 3. Game
+  const [view, setView] = useState<'lobby' | 'waiting' | 'ceremony' | 'game'>('lobby');
   const [tableTheme, setTableTheme] = useState<TableTheme>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('sun_ramino_table_theme');
@@ -1886,11 +1927,21 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   }, [view]);
 
   const shouldRotateToLandscape = isPortrait && forceLandscapeRotate && (view === 'game' || view === 'ceremony');
+  const modalMaxHeightPx = shouldRotateToLandscape ? Math.max(220, viewportSize.w - 20) : undefined;
 
   // Player Profile & Balance
   const player = sharedUsers?.[0];
   const balance = player?.balance ?? 500;
   const playerName = player?.name || 'Sun Player';
+  const playerPhone = player?.phone?.trim() || '';
+  const myPlayerId = useMemo(() => {
+    const ph = player?.phone?.trim();
+    if (ph) return `p_${ph}`;
+    if (player?.id) return String(player.id);
+    return `cid_${getDeviceClientId()}`;
+  }, [player?.phone, player?.id]);
+  const myPlayerIdRef = useRef(myPlayerId);
+  myPlayerIdRef.current = myPlayerId;
 
   // Private-Room-Only Live Voice Chat States & WebRTC Signaling
   const [isPrivateRoomGame, setIsPrivateRoomGame] = useState(false);
@@ -2052,30 +2103,35 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         t.enabled = false; // caller toggles unmute immediately after attaching
       });
 
-      // Attach local audio track to existing WebRTC peer connections & renegotiate
-      for (const [peerId, pc] of voicePeerConnsRef.current.entries()) {
-        const senders = pc.getSenders();
-        for (const track of stream.getAudioTracks()) {
-          const existingAudioSender = senders.find((s) => s.track?.kind === 'audio');
-          if (existingAudioSender) {
-            await existingAudioSender.replaceTrack(track);
+      // Attach local audio track to existing WebRTC peer connections & renegotiate cleanly
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack) {
+        for (const [peerId, pc] of voicePeerConnsRef.current.entries()) {
+          const audioTransceiver = pc.getTransceivers().find(
+            (tr) =>
+              tr.sender?.track?.kind === 'audio' ||
+              tr.receiver?.track?.kind === 'audio'
+          );
+          if (audioTransceiver) {
+            audioTransceiver.direction = 'sendrecv';
+            await audioTransceiver.sender.replaceTrack(audioTrack);
           } else {
-            pc.addTrack(track, stream);
+            pc.addTrack(audioTrack, stream);
           }
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
+              voiceWsRef.current.send(
+                JSON.stringify({
+                  type: 'ramino:voice:signal',
+                  toPeerId: peerId,
+                  signal: { sdp: pc.localDescription },
+                })
+              );
+            }
+          } catch {}
         }
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
-            voiceWsRef.current.send(
-              JSON.stringify({
-                type: 'ramino:voice:signal',
-                toPeerId: peerId,
-                signal: { sdp: pc.localDescription },
-              })
-            );
-          }
-        } catch {}
       }
       return true;
     } catch {
@@ -2087,6 +2143,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const handleTogglePrivateMic = async () => {
     raminoAudio.playCardSnap();
     if (!isPrivateRoomGame || !activePrivateRoomCode) return;
+    // Unlock playback on remote audio elements via user interaction
+    remoteAudioMapRef.current.forEach((audioEl) => {
+      audioEl.muted = isDeafenedRef.current;
+      audioEl.play().catch(() => {});
+    });
     if (isMicMuted) {
       const ok = await ensureLocalMicAndAttach();
       if (!ok) return;
@@ -2106,10 +2167,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   };
 
   // Connect real-time WebRTC + WebSocket Voice Channel ONLY inside Private Room games
+  const inPrivateVoiceArena =
+    (view === 'waiting' || view === 'ceremony' || view === 'game') &&
+    isPrivateRoomGame &&
+    Boolean(activePrivateRoomCode);
+
   useEffect(() => {
-    const inPrivateArena =
-      (view === 'ceremony' || view === 'game') && isPrivateRoomGame && Boolean(activePrivateRoomCode);
-    if (!inPrivateArena || !activePrivateRoomCode) {
+    if (!inPrivateVoiceArena || !activePrivateRoomCode) {
       stopVoiceChatSession();
       return;
     }
@@ -2145,7 +2209,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         });
       } else {
         try {
-          pc.addTransceiver('audio', { direction: 'recvonly' });
+          pc.addTransceiver('audio', { direction: 'sendrecv' });
         } catch {}
       }
 
@@ -2162,7 +2226,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       };
 
       pc.ontrack = (ev) => {
-        const remoteStream = ev.streams?.[0];
+        const remoteStream = ev.streams?.[0] || (ev.track ? new MediaStream([ev.track]) : null);
         if (!remoteStream) return;
         let audioEl = remoteAudioMapRef.current.get(remotePeerId);
         if (!audioEl) {
@@ -2236,7 +2300,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               }
             } catch {}
           }
-          setVoiceConnectedCount(1 + voicePeerConnsRef.current.size);
+          setVoiceConnectedCount(
+            1 + Array.from(voicePeerConnsRef.current.keys()).filter((id) => !id.startsWith('adm_mon_')).length
+          );
         } else if (msg.type === 'ramino:voice:peer-joined') {
           if (msg.peerId && msg.peerId !== myVoicePeerIdRef.current) {
             getOrCreatePeer(msg.peerId, msg.playerName || 'Friend');
@@ -2247,6 +2313,15 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           const pc = getOrCreatePeer(fromPeerId, msg.playerName || 'Friend');
           const sig = msg.signal;
           if (sig?.sdp) {
+            if (sig.sdp.type === 'offer' && pc.signalingState !== 'stable') {
+              if (myVoicePeerIdRef.current < fromPeerId) {
+                try {
+                  await pc.setLocalDescription({ type: 'rollback' });
+                } catch {}
+              } else {
+                return;
+              }
+            }
             await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp));
             if (sig.sdp.type === 'offer') {
               const answer = await pc.createAnswer();
@@ -2296,7 +2371,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             } catch {}
             remoteAudioMapRef.current.delete(leftId);
           }
-          setVoiceConnectedCount(1 + voicePeerConnsRef.current.size);
+          setVoiceConnectedCount(
+            1 + Array.from(voicePeerConnsRef.current.keys()).filter((id) => !id.startsWith('adm_mon_')).length
+          );
           // Any player leaving the table resets consecutive win streak back to 0
           if (winStreakRef.current > 0) {
             winStreakRef.current = 0;
@@ -2342,38 +2419,22 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       stopVoiceChatSession();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, isPrivateRoomGame, activePrivateRoomCode]);
+  }, [inPrivateVoiceArena, activePrivateRoomCode]);
 
-  // Lobby Rooms State with Real 1s Countdowns & Auto-Refund at 0:00
-  const [openRooms, setOpenRooms] = useState<RaminoRoom[]>([
-    {
-      id: 'r_7714',
-      name: '#7714',
-      creator: 'S',
-      avatarLetter: 'S',
-      avatarColor: 'bg-amber-500',
-      stake: 200,
-      max: 4,
-      current: 2,
-      duration: 240,
-      timeRemaining: 215,
-    },
-    {
-      id: 'r_9201',
-      name: '#9201',
-      creator: 'H',
-      avatarLetter: 'H',
-      avatarColor: 'bg-orange-500',
-      stake: 500,
-      max: 5,
-      current: 3,
-      duration: 300,
-      timeRemaining: 265,
-    },
-  ]);
+  // Lobby Rooms State (Synchronized live across all connected players via /api/ramino/rooms + WS)
+  const [openRooms, setOpenRooms] = useState<RaminoRoom[]>([]);
 
   const [playerSeatCount, setPlayerSeatCount] = useState<2 | 3 | 4 | 5>(3);
   const [selectedStake, setSelectedStake] = useState<number>(30);
+  const [privateStake, setPrivateStake] = useState<number>(30);
+  const [activeTableStake, setActiveTableStake] = useState<number>(30);
+  const [activeMultiplayerRoomCode, setActiveMultiplayerRoomCode] = useState<string | null>(null);
+  const activeMultiplayerRoomCodeRef = useRef<string | null>(null);
+  activeMultiplayerRoomCodeRef.current = activeMultiplayerRoomCode;
+
+  const [waitingRoomPlayers, setWaitingRoomPlayers] = useState<
+    { id: string; name: string; avatarLetter: string; avatarColor: string; isHost: boolean }[]
+  >([]);
   const [isPrivateModalOpen, setIsPrivateModalOpen] = useState(false);
   const [isJoinCodeModalOpen, setIsJoinCodeModalOpen] = useState(false);
   const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
@@ -2433,6 +2494,16 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   openRoomsRef.current = openRooms;
   const onUpdateSharedUsersRef = useRef(onUpdateSharedUsers);
   onUpdateSharedUsersRef.current = onUpdateSharedUsers;
+  const gameWsRef = useRef<WebSocket | null>(null);
+  const lastSyncedRoundIndexRef = useRef<number>(-1);
+  const debitedRoundIndexRef = useRef<number>(0);
+  const creditedRoundKeyRef = useRef<string | null>(null);
+  const lastProcessedEventIdRef = useRef<number>(0);
+  const heldWaitingStakeRef = useRef<number>(0);
+  const balanceRef = useRef<number>(balance);
+  balanceRef.current = balance;
+  const viewRef = useRef(view);
+  viewRef.current = view;
 
   // Notification banner helper
   const triggerNotification = (text: string) => {
@@ -2442,8 +2513,15 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }, 3800);
   };
 
+  const onRecordWalletTxRef = useRef(onRecordWalletTx);
+  onRecordWalletTxRef.current = onRecordWalletTx;
+
   // Wallet helper (Unified across all games & synced with server)
-  const adjustWalletBalance = (delta: number) => {
+  const adjustWalletBalance = (delta: number, reason?: string) => {
+    if (onRecordWalletTxRef.current) {
+      onRecordWalletTxRef.current(delta, reason || (delta < 0 ? 'Ramino Entry' : 'Ramino Win'));
+      return;
+    }
     if (onUpdateSharedUsersRef.current) {
       onUpdateSharedUsersRef.current((prev) =>
         prev.map((u, idx) => (idx === 0 ? { ...u, balance: Math.max(0, u.balance + delta) } : u))
@@ -2454,10 +2532,461 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       fetch(buildApiUrl('/api/wallet/game-tx'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, name: playerName, delta, game: 'ramino' }),
+        body: JSON.stringify({
+          phone,
+          name: playerName,
+          delta,
+          game: 'ramino',
+          reason: reason || (delta < 0 ? 'Ramino Entry' : 'Ramino Win'),
+        }),
       }).catch(() => {});
     }
   };
+
+  const mapServerLobbyRooms = (roomsRaw: any[]): RaminoRoom[] => {
+    if (!Array.isArray(roomsRaw)) return [];
+    return roomsRaw.map((rm) => ({
+      id: String(rm.id),
+      name: String(rm.name || '#Room'),
+      creator: String(rm.creator || 'Player'),
+      avatarLetter: String(rm.avatarLetter || rm.creator?.[0] || 'P'),
+      avatarColor: String(rm.avatarColor || 'bg-amber-400'),
+      stake: Number(rm.stake || 30),
+      max: ([2, 3, 4, 5].includes(Number(rm.max)) ? Number(rm.max) : 3) as 2 | 3 | 4 | 5,
+      current: Number(rm.current || 1),
+      duration: Number(rm.duration || 180),
+      timeRemaining: Number(rm.timeRemaining || 0),
+      isUserCreated:
+        rm.creatorId === myPlayerIdRef.current ||
+        (Boolean(playerPhone) && rm.creatorPhone === playerPhone),
+    }));
+  };
+
+  const fetchServerOpenRooms = async () => {
+    try {
+      const res = await fetch(buildApiUrl(`/api/ramino/rooms?_t=${Date.now()}`), { cache: 'no-store' });
+      const data = await res.json();
+      if (data?.ok && Array.isArray(data.rooms)) {
+        setOpenRooms(mapServerLobbyRooms(data.rooms));
+      }
+    } catch {}
+  };
+
+  const reconcileHandOrder = (prevHand: PlayingCard[], incomingHand: PlayingCard[]): PlayingCard[] => {
+    if (!Array.isArray(incomingHand)) return prevHand;
+    if (prevHand.length === 0) return incomingHand;
+    const byId = new Map(incomingHand.map((c) => [c.id, c]));
+    const kept = prevHand.filter((c) => byId.has(c.id)).map((c) => byId.get(c.id)!);
+    const keptIds = new Set(kept.map((c) => c.id));
+    const added = incomingHand.filter((c) => !keptIds.has(c.id));
+    return [...kept, ...added];
+  };
+
+  const applyServerTableSnapshot = (tbl: any) => {
+    if (!tbl || typeof tbl !== 'object') return;
+    const stk = Number(tbl.stake || 30);
+    setActiveTableStake(stk);
+    const seats = ([2, 3, 4, 5].includes(Number(tbl.seatCount))
+      ? Number(tbl.seatCount)
+      : [2, 3, 4, 5].includes(Number(tbl.maxPlayers))
+      ? Number(tbl.maxPlayers)
+      : 3) as 2 | 3 | 4 | 5;
+    setPlayerSeatCount(seats);
+    setIsPrivateRoomGame(Boolean(tbl.isPrivate));
+    if (tbl.isPrivate && tbl.roomCode) {
+      setActivePrivateRoomCode(String(tbl.roomCode));
+    }
+    if (Array.isArray(tbl.playersSummary)) {
+      setWaitingRoomPlayers(tbl.playersSummary);
+    }
+
+    const srvRoundCount = Number(tbl.privateRoundCount ?? 1);
+    privateRoundCountRef.current = srvRoundCount;
+    setPrivateRoundCount(srvRoundCount);
+    setReshuffleCount(Number(tbl.reshuffleCount ?? 0));
+
+    if (Array.isArray(tbl.cutParticipants)) setCutParticipants(tbl.cutParticipants);
+    if (typeof tbl.ceremonyRevealedCount === 'number') setCeremonyRevealedCount(tbl.ceremonyRevealedCount);
+    if (tbl.ceremonyDealer) setCeremonyDealer(String(tbl.ceremonyDealer));
+
+    const myStreak = Number(tbl.myWinStreak ?? 0);
+    winStreakRef.current = myStreak;
+    setWinStreak(myStreak);
+
+    if (tbl.bottomCard) setBottomCard(tbl.bottomCard);
+    const nextDiscard = Array.isArray(tbl.discardPile) ? tbl.discardPile : [];
+    discardPileRef.current = nextDiscard;
+    setDiscardPile(nextDiscard);
+
+    const deckLen = Number(tbl.deckCount ?? 0);
+    setDeckCards((prev) => {
+      if (prev.length === deckLen) return prev;
+      return Array.from({ length: deckLen }, (_, idx) => ({
+        id: `srv_deck_${idx}`,
+        rank: '2',
+        suit: '♠' as const,
+        suitName: 'spades' as const,
+        color: 'black' as const,
+        value: 2,
+        points: 2,
+        isJoker: false,
+      }));
+    });
+
+    const nextMelds = Array.isArray(tbl.tableMelds) ? tbl.tableMelds : [];
+    tableMeldsRef.current = nextMelds;
+    setTableMelds(nextMelds);
+    if (Array.isArray(tbl.closedSetBadges)) setClosedSetBadges(tbl.closedSetBadges);
+
+    const nextOpps = Array.isArray(tbl.opponents) ? tbl.opponents : [];
+    opponentsRef.current = nextOpps;
+    setOpponents(nextOpps);
+
+    setCurrentTurn(Number(tbl.currentTurn ?? 0));
+    const drawnNow = Boolean(tbl.hasDrawn);
+    hasDrawnRef.current = drawnNow;
+    setHasDrawn(drawnNow);
+    setDrawnFromDiscardCard(tbl.drawnFromDiscardCard || null);
+    setHasMelded(Boolean(tbl.myHasMelded));
+    setHasDiscarded(Boolean(tbl.hasDiscarded));
+    if (typeof tbl.turnSeconds === 'number') setTurnSeconds(tbl.turnSeconds);
+
+    const srvRoundIdx = Number(tbl.roundIndex ?? 0);
+    if (Array.isArray(tbl.myHand)) {
+      if (srvRoundIdx !== lastSyncedRoundIndexRef.current) {
+        lastSyncedRoundIndexRef.current = srvRoundIdx;
+        setPlayerHand(tbl.myHand);
+        setSelectedCardIds(new Set());
+      } else {
+        setPlayerHand((prev) => reconcileHandOrder(prev, tbl.myHand));
+      }
+    }
+
+    // Charge stake once per new round (>1) if triggered by another player at the table
+    if (tbl.phase === 'game' && srvRoundIdx > 1 && debitedRoundIndexRef.current !== srvRoundIdx) {
+      debitedRoundIndexRef.current = srvRoundIdx;
+      heldWaitingStakeRef.current = 0;
+      adjustWalletBalance(-stk, `Ramino Round #${srvRoundIdx} (${stk} ETB)`);
+    } else if (tbl.phase === 'game' && srvRoundIdx === 1) {
+      debitedRoundIndexRef.current = 1;
+      heldWaitingStakeRef.current = 0;
+    }
+
+    // Post Day Request sync
+    if (tbl.postDayRequest) {
+      setPostDayRequest({
+        requestedBy: String(tbl.postDayRequest.requestedBy || ''),
+        source: tbl.postDayRequest.source === 'winner' ? 'winner' : 'header',
+        acceptedIds: Array.isArray(tbl.postDayRequest.acceptedNames)
+          ? tbl.postDayRequest.acceptedNames
+          : [],
+        needsMyAccept: Boolean(tbl.postDayRequest.needsMyAccept),
+        allAccepted: Boolean(tbl.postDayRequest.allAccepted),
+      });
+    } else {
+      setPostDayRequest(null);
+    }
+
+    // Winner celebration + idempotent payout crediting
+    if (tbl.winnerCelebration && tbl.winnerCelebration.show) {
+      const wc = tbl.winnerCelebration;
+      const isMe = wc.winnerId === myPlayerIdRef.current;
+      let resolvedTitle = t.winTitleNormal;
+      if (!isMe) {
+        resolvedTitle = t.loseTitle(String(wc.winnerName || 'Opponent'));
+      } else if (wc.titleKey === 'bottom_dopey_joker') {
+        resolvedTitle = t.winBottomJokerDopey(String(wc.bottomCardStr || '🃏').slice(-1));
+      } else if (wc.titleKey === 'bottom_dopey') {
+        resolvedTitle = t.winBottomDopey(String(wc.bottomCardStr || ''));
+      } else if (wc.titleKey === 'bottom_normal') {
+        resolvedTitle = t.winBottomNormal(String(wc.bottomCardStr || ''));
+      } else if (wc.titleKey === 'dopey_joker') {
+        resolvedTitle = t.winTitleDopeyJoker;
+      } else if (wc.titleKey === 'dopey') {
+        resolvedTitle = t.winTitleDopey;
+      } else if (wc.titleKey === 'streak') {
+        resolvedTitle = t.winTitleStreak(Number(wc.streakCount || 3));
+      }
+
+      setWinnerCelebration({
+        show: true,
+        title: resolvedTitle,
+        winnerId: String(wc.winnerId),
+        winnerName: String(wc.winnerName),
+        isOpponentWin: !isMe,
+        multiplier: Number(wc.dopeyMultiplier || 1) * Number(wc.streakMultiplier || 1),
+        dopeyMultiplier: Number(wc.dopeyMultiplier || 1),
+        streakMultiplier: Number(wc.streakMultiplier || 1),
+        streakCount: Number(wc.streakCount || 0),
+        winAmount: isMe ? Number(wc.winAmount || 0) : 0,
+        rakeAmount: Number(wc.rakeAmount || 0),
+      });
+
+      if (wc.roundKey && creditedRoundKeyRef.current !== wc.roundKey) {
+        creditedRoundKeyRef.current = wc.roundKey;
+        if (isMe) {
+          raminoAudio.playVictory();
+          adjustWalletBalance(
+            Number(wc.winAmount || 0),
+            `Ramino Win (${Number(wc.dopeyMultiplier || 1) * Number(wc.streakMultiplier || 1)}x)`
+          );
+        } else {
+          raminoAudio.playBuzzer();
+        }
+      }
+    } else {
+      setWinnerCelebration(null);
+    }
+
+    // One-time audio + notification dispatch for authoritative server events
+    if (tbl.lastEvent && typeof tbl.lastEvent.id === 'number' && tbl.lastEvent.id > lastProcessedEventIdRef.current) {
+      lastProcessedEventIdRef.current = tbl.lastEvent.id;
+      const ev = tbl.lastEvent;
+      if (ev.type === 'round_started') {
+        raminoAudio.playDraw();
+        if (tbl.currentTurn === 0) {
+          triggerNotification(t.notifyYourTurnStart(String(tbl.ceremonyDealer || '')));
+        } else {
+          triggerNotification(t.notifyDealerStarted(String(tbl.ceremonyDealer || '')));
+        }
+      } else if (ev.type === 'draw_deck' || ev.type === 'draw_discard') {
+        raminoAudio.playDraw();
+      } else if (ev.type === 'return_discard' || ev.type === 'layoff') {
+        raminoAudio.playCardSnap();
+      } else if (ev.type === 'meld') {
+        raminoAudio.playVictory();
+        if (ev.actorId !== myPlayerIdRef.current) {
+          triggerNotification(t.notifyOppMelded(String(ev.actorName || ''), Number(ev.detail || 0)));
+        }
+      } else if (ev.type === 'discard') {
+        raminoAudio.playCardSnap();
+        if (tbl.currentTurn === 0) {
+          triggerNotification(t.notifyYourTurnFull);
+        }
+      } else if (ev.type === 'postday_request' && ev.actorId !== myPlayerIdRef.current) {
+        raminoAudio.playSwap();
+        triggerNotification(t.notifyPostDayAsked(String(ev.actorName || '')));
+      } else if (ev.type === 'postday_applied') {
+        raminoAudio.playVictory();
+        triggerNotification(t.notifyPostDayApplied);
+      } else if (ev.type === 'player_left') {
+        triggerNotification(t.notifyStreakResetLeft);
+      }
+    }
+
+    if (tbl.phase === 'waiting') {
+      setView('waiting');
+    } else if (tbl.phase === 'ceremony') {
+      setIsPrivateModalOpen(false);
+      setIsJoinCodeModalOpen(false);
+      setView('ceremony');
+    } else if (tbl.phase === 'game' || tbl.phase === 'finished') {
+      setIsPrivateModalOpen(false);
+      setIsJoinCodeModalOpen(false);
+      setIsBannedModalOpen(false);
+      setView('game');
+    }
+  };
+  const applyServerTableSnapshotRef = useRef(applyServerTableSnapshot);
+  applyServerTableSnapshotRef.current = applyServerTableSnapshot;
+
+  const sendRaminoGameAction = async (
+    action: string,
+    payload: Record<string, any> = {}
+  ): Promise<boolean> => {
+    const code = activeMultiplayerRoomCodeRef.current;
+    if (!code) return false;
+    try {
+      const res = await fetch(buildApiUrl(`/api/ramino/tables/${encodeURIComponent(code)}/action`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId: myPlayerIdRef.current,
+          action,
+          ...payload,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        raminoAudio.playBuzzer();
+        if (data?.error) triggerNotification(data.error);
+        if (data?.table) applyServerTableSnapshotRef.current(data.table);
+        return false;
+      }
+      if (data?.table) {
+        applyServerTableSnapshotRef.current(data.table);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const leaveMultiplayerTable = async (refundWaitingStake = true) => {
+    const code = activeMultiplayerRoomCodeRef.current;
+    const held = heldWaitingStakeRef.current;
+    if (code) {
+      if (gameWsRef.current?.readyState === WebSocket.OPEN) {
+        try {
+          gameWsRef.current.send(JSON.stringify({ type: 'ramino:table:leave' }));
+        } catch {}
+      }
+      try {
+        await fetch(buildApiUrl(`/api/ramino/tables/${encodeURIComponent(code)}/action`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playerId: myPlayerIdRef.current,
+            action: 'leave_table',
+          }),
+        });
+      } catch {}
+    }
+    if (refundWaitingStake && held > 0 && viewRef.current === 'waiting') {
+      heldWaitingStakeRef.current = 0;
+      adjustWalletBalance(held, `Ramino Leave Waiting Refund (${code || ''})`);
+    } else {
+      heldWaitingStakeRef.current = 0;
+    }
+    stopVoiceChatSession();
+    setActiveMultiplayerRoomCode(null);
+    activeMultiplayerRoomCodeRef.current = null;
+    setIsPrivateRoomGame(false);
+    setActivePrivateRoomCode(null);
+    setIsMicMuted(true);
+    winStreakRef.current = 0;
+    setWinStreak(0);
+    privateRoundCountRef.current = 1;
+    setPrivateRoundCount(1);
+    debitedRoundIndexRef.current = 0;
+    lastSyncedRoundIndexRef.current = -1;
+    creditedRoundKeyRef.current = null;
+    lastProcessedEventIdRef.current = 0;
+    setWinnerCelebration(null);
+    setPostDayRequest(null);
+    setIsBannedModalOpen(false);
+    setView('lobby');
+    fetchServerOpenRooms();
+  };
+
+  // Persistent Ramino Game & Lobby WebSocket Synchronization
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let active = true;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let wsOpen = false;
+
+    const connectGameWs = () => {
+      if (!active) return;
+      try {
+        const apiRoot = buildApiUrl('');
+        const wsUrl = apiRoot
+          ? `${apiRoot.replace(/^http/, 'ws')}/ws/bingo`
+          : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/bingo`;
+        ws = new WebSocket(wsUrl);
+        gameWsRef.current = ws;
+
+        ws.onopen = () => {
+          wsOpen = true;
+          const activeCode = activeMultiplayerRoomCodeRef.current;
+          if (activeCode) {
+            ws?.send(
+              JSON.stringify({
+                type: 'ramino:table:join',
+                roomCode: activeCode,
+                playerId: myPlayerIdRef.current,
+              })
+            );
+          }
+        };
+
+        ws.onmessage = (evt) => {
+          if (!active) return;
+          try {
+            const msg = JSON.parse(String(evt.data));
+            if (msg?.type === 'ramino:lobby:sync' && Array.isArray(msg.rooms)) {
+              setOpenRooms(mapServerLobbyRooms(msg.rooms));
+            } else if (msg?.type === 'ramino:private-room:sync' && msg.room) {
+              const roomSnap = msg.room as RaminoPrivateRoomSnapshot;
+              if (roomSnap.code === privateCode.trim().toUpperCase()) {
+                setPrivateRoomState(roomSnap);
+              }
+            } else if (msg?.type === 'ramino:table:sync' && msg.table) {
+              const curCode = activeMultiplayerRoomCodeRef.current;
+              if (!curCode || msg.table.roomCode === curCode) {
+                applyServerTableSnapshotRef.current(msg.table);
+              }
+            } else if (msg?.type === 'ramino:action:error' && msg.error) {
+              raminoAudio.playBuzzer();
+              triggerNotification(String(msg.error));
+            }
+          } catch {}
+        };
+
+        ws.onclose = () => {
+          wsOpen = false;
+          if (gameWsRef.current === ws) gameWsRef.current = null;
+          if (active) {
+            reconnectTimer = setTimeout(connectGameWs, 1500);
+          }
+        };
+
+        ws.onerror = () => {
+          wsOpen = false;
+        };
+      } catch {}
+    };
+
+    fetchServerOpenRooms();
+    connectGameWs();
+
+    const backupPoll = window.setInterval(async () => {
+      if (!active) return;
+      const code = activeMultiplayerRoomCodeRef.current;
+      if (code && !wsOpen) {
+        try {
+          const res = await fetch(
+            buildApiUrl(`/api/ramino/tables/${encodeURIComponent(code)}/state?playerId=${encodeURIComponent(myPlayerIdRef.current)}&_t=${Date.now()}`),
+            { cache: 'no-store' }
+          );
+          const data = await res.json();
+          if (data?.ok && data.table) {
+            applyServerTableSnapshotRef.current(data.table);
+          }
+        } catch {}
+      } else if (!code && !wsOpen) {
+        fetchServerOpenRooms();
+      }
+    }, 2500);
+
+    return () => {
+      active = false;
+      window.clearInterval(backupPoll);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) {
+        try {
+          ws.close();
+        } catch {}
+      }
+      if (gameWsRef.current === ws) gameWsRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Automatically bind active table room to Game WebSocket whenever activeMultiplayerRoomCode changes
+  useEffect(() => {
+    if (!activeMultiplayerRoomCode) return;
+    if (gameWsRef.current?.readyState === WebSocket.OPEN) {
+      gameWsRef.current.send(
+        JSON.stringify({
+          type: 'ramino:table:join',
+          roomCode: activeMultiplayerRoomCode,
+          playerId: myPlayerIdRef.current,
+        })
+      );
+    }
+  }, [activeMultiplayerRoomCode]);
 
   // Private Room Helpers (Server + LocalStorage mirror for invite links & code entry)
   const saveLocalPrivateRoom = (room: RaminoPrivateRoomSnapshot) => {
@@ -2488,10 +3017,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     const cleanCode = code.trim().toUpperCase();
     const fallbackRoom: RaminoPrivateRoomSnapshot = {
       code: cleanCode,
+      hostId: myPlayerId,
       hostName: playerName,
       maxPlayers: seats,
       stake,
-      players: [{ name: playerName, isHost: true, joinedAt: Date.now() }],
+      players: [{ id: myPlayerId, name: playerName, isHost: true, joinedAt: Date.now() }],
       status: 'waiting',
     };
     saveLocalPrivateRoom(fallbackRoom);
@@ -2502,6 +3032,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           code: cleanCode,
+          hostId: myPlayerId,
+          hostPhone: playerPhone,
           hostName: playerName,
           maxPlayers: seats,
           stake,
@@ -2519,7 +3051,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     const clean = code.trim().toUpperCase();
     if (!clean) return null;
     try {
-      const res = await fetch(buildApiUrl(`/api/ramino/private-rooms/${encodeURIComponent(clean)}`));
+      const res = await fetch(buildApiUrl(`/api/ramino/private-rooms/${encodeURIComponent(clean)}?_t=${Date.now()}`), {
+        cache: 'no-store',
+      });
       if (res.ok) {
         const data = await res.json();
         if (data?.ok && data.room) {
@@ -2547,17 +3081,42 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     } catch {}
   }, []);
 
-  // Poll Private Room while host modal is open so joined friends appear live
+  // Poll Private Room while host modal is open so joined friends appear live (and syncs dedicated privateStake)
   useEffect(() => {
     if (!isPrivateModalOpen) return;
-    syncPrivateRoomToHost(privateCode, playerSeatCount, selectedStake);
+    syncPrivateRoomToHost(privateCode, playerSeatCount, privateStake);
     const timer = setInterval(async () => {
       const room = await lookupPrivateRoomByCode(privateCode);
-      if (room) setPrivateRoomState(room);
-    }, 2000);
+      if (room) {
+        setPrivateRoomState(room);
+        if (room.status === 'started' && activeMultiplayerRoomCodeRef.current !== room.code.trim().toUpperCase()) {
+          const cleanCode = room.code.trim().toUpperCase();
+          if (balanceRef.current >= room.stake) {
+            heldWaitingStakeRef.current = room.stake;
+            adjustWalletBalance(-room.stake, `Ramino Private ${cleanCode}`);
+            setIsPrivateRoomGame(true);
+            setActivePrivateRoomCode(cleanCode);
+            setActiveMultiplayerRoomCode(cleanCode);
+            activeMultiplayerRoomCodeRef.current = cleanCode;
+            setActiveTableStake(room.stake);
+            setIsPrivateModalOpen(false);
+            try {
+              const stRes = await fetch(
+                buildApiUrl(`/api/ramino/tables/${encodeURIComponent(cleanCode)}/state?playerId=${encodeURIComponent(myPlayerIdRef.current)}`),
+                { cache: 'no-store' }
+              );
+              const stData = await stRes.json();
+              if (stData?.ok && stData.table) {
+                applyServerTableSnapshotRef.current(stData.table);
+              }
+            } catch {}
+          }
+        }
+      }
+    }, 1500);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPrivateModalOpen, privateCode, playerSeatCount, selectedStake]);
+  }, [isPrivateModalOpen, privateCode, playerSeatCount, privateStake]);
 
   // Live lookup of room details inside Join by Code modal
   useEffect(() => {
@@ -2575,40 +3134,22 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         setJoinLookupError(null);
       } else {
         setJoinedRoomPreview(null);
-        setJoinLookupError('በዚህ ኮድ የተፈጠረ ክፍል አልተገኘም ወይም ሊንኩን በትክክል ያረጋግጡ።');
+        setJoinLookupError(t.notifyJoinLookupErr);
       }
     }, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isJoinCodeModalOpen, joinCodeInput]);
 
-  // Lobby 1-Second Live Timer & Auto-Refund at 0:00 (no side effects inside state updater)
+  // Smooth 1-Second Display Countdown for Lobby Open Rooms (Server owns authoritative expiry/refund)
   useEffect(() => {
     const interval = setInterval(() => {
-      const curRooms = openRoomsRef.current;
-      if (curRooms.length === 0) return;
-
-      const next: RaminoRoom[] = [];
-      const expiredCreated: RaminoRoom[] = [];
-
-      for (const rm of curRooms) {
-        if (rm.timeRemaining <= 1) {
-          if (rm.isUserCreated) {
-            expiredCreated.push(rm);
-          }
-        } else {
-          next.push({ ...rm, timeRemaining: rm.timeRemaining - 1 });
-        }
-      }
-
-      setOpenRooms(next);
-
-      if (expiredCreated.length > 0) {
-        const totalRefund = expiredCreated.reduce((s, r) => s + r.stake, 0);
-        adjustWalletBalance(totalRefund);
-        const lastExpired = expiredCreated[expiredCreated.length - 1];
-        triggerNotification(`⏰ ክፍል ${lastExpired.name} ሰዓቱ ስላለቀ ተዘግቷል፤ ${totalRefund} ETB ወደ ዋሌትዎ ተመልሷል!`);
-      }
+      setOpenRooms((prev) => {
+        if (prev.length === 0) return prev;
+        return prev
+          .map((rm) => ({ ...rm, timeRemaining: Math.max(0, rm.timeRemaining - 1) }))
+          .filter((rm) => rm.timeRemaining > 0);
+      });
     }, 1000);
     return () => clearInterval(interval);
   }, []);
@@ -2701,6 +3242,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     tableSeatOrderRef.current = initialSeats;
     setTableSeatOrder(initialSeats);
     setSelectedStake(stake);
+    setActiveTableStake(stake);
     setPlayerSeatCount(seatCount);
 
     const cutDeck = buildShuffledDeck(1).filter((c) => !c.isJoker);
@@ -2849,7 +3391,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Dealer Cut Ceremony: Start face-down (SUN GAMES cover) -> Open one by one sequentially -> Auto-enter game!
   useEffect(() => {
-    if (view !== 'ceremony') return;
+    if (view !== 'ceremony' || activeMultiplayerRoomCode) return;
     const count = cutParticipants.length || playerSeatCount;
     setCeremonyRevealedCount(0);
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -2876,14 +3418,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Turn Countdown Timer: 90s Thinking + 30s Warning -> Ban if no card drawn!
   useEffect(() => {
-    if (view !== 'game' || currentTurn !== 0 || isBannedModalOpen || winnerCelebration?.show) return;
+    if (view !== 'game' || currentTurn !== 0 || isBannedModalOpen || winnerCelebration?.show || activeMultiplayerRoomCode) return;
 
     const interval = setInterval(() => {
       setTurnSeconds((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [view, currentTurn, isBannedModalOpen, winnerCelebration]);
+  }, [view, currentTurn, isBannedModalOpen, winnerCelebration, activeMultiplayerRoomCode]);
 
   useEffect(() => {
     if (view !== 'game' || currentTurn !== 0 || isBannedModalOpen || winnerCelebration?.show) return;
@@ -2996,6 +3538,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     if (!isBottomCardFinisherReady) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyBottomNotReady);
+      return;
+    }
+
+    if (activeMultiplayerRoomCode) {
+      void sendRaminoGameAction('bottom_win');
       return;
     }
 
@@ -3123,7 +3670,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         triggerNotification(t.notifyInsufficientNext);
         return;
       }
-      adjustWalletBalance(-selectedStake);
+      adjustWalletBalance(-selectedStake, `Ramino Round (${selectedStake} ETB)`);
       const dealer = winnerCelebration.winnerName;
       setPostDayRequest(null);
       dealRoundWithDealer(dealer);
@@ -3137,6 +3684,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const requestPostDayConsensus = (source: 'header' | 'winner') => {
     if (!isPrivateRoomGame || privateRoundCountRef.current < 5) return;
     raminoAudio.playSwap();
+
+    if (activeMultiplayerRoomCode) {
+      void sendRaminoGameAction('postday_request', { source });
+      return;
+    }
 
     setPostDayRequest({
       requestedBy: playerName,
@@ -3180,6 +3732,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const handleAcceptIncomingPostDay = () => {
     if (!postDayRequest) return;
     raminoAudio.playCardSnap();
+    if (activeMultiplayerRoomCode) {
+      void sendRaminoGameAction('postday_accept');
+      return;
+    }
     if (voiceWsRef.current?.readyState === WebSocket.OPEN && activePrivateRoomCode) {
       voiceWsRef.current.send(
         JSON.stringify({
@@ -3231,6 +3787,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       return;
     }
 
+    if (activeMultiplayerRoomCode) {
+      void sendRaminoGameAction('draw_deck');
+      return;
+    }
+
     let sourceDeck = [...deckCardsRef.current];
     if (sourceDeck.length === 0) {
       if (discardPileRef.current.length <= 1) {
@@ -3270,6 +3831,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }
     if (discardPile.length === 0) return;
 
+    if (activeMultiplayerRoomCode) {
+      void sendRaminoGameAction('draw_discard');
+      return;
+    }
+
     const top = discardPile[discardPile.length - 1];
     raminoAudio.playDraw();
     setPlayerHand((prev) => [...prev, top]);
@@ -3288,6 +3854,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   // Return Picked-Up Discard Card
   const handleReturnDiscardCard = () => {
     if (!drawnFromDiscardCard || hasDiscarded) return;
+    if (activeMultiplayerRoomCode) {
+      void sendRaminoGameAction('return_discard');
+      return;
+    }
     raminoAudio.playCardSnap();
     const returned = drawnFromDiscardCard;
     const nextDiscard = [...discardPileRef.current, returned];
@@ -3314,6 +3884,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     if (!calculatedMeldStats.canMeld) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyMeldNeed41(calculatedMeldStats.points));
+      return;
+    }
+
+    if (activeMultiplayerRoomCode) {
+      const selectedIdsArr = selectedCardIds.size >= 3 ? Array.from(selectedCardIds) : [];
+      void sendRaminoGameAction('meld', { cardIds: selectedIdsArr }).then((ok) => {
+        if (ok) setSelectedCardIds(new Set());
+      });
       return;
     }
 
@@ -3410,6 +3988,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           }
         }
 
+        if (activeMultiplayerRoomCode) {
+          void sendRaminoGameAction('layoff_card', { meldId, cardId: selId, cardIdx }).then((ok) => {
+            if (ok) setSelectedCardIds(new Set());
+          });
+          return;
+        }
+
         raminoAudio.playCardSnap();
         const nextHand = playerHand.filter((c) => c.id !== selId);
         setPlayerHand(nextHand);
@@ -3434,6 +4019,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             ? selCard.suit === info.suit
             : !nonJokers.some((c) => c.suit === selCard.suit));
         if (matchesSwap) {
+          if (activeMultiplayerRoomCode) {
+            void sendRaminoGameAction('swap_joker', { meldId, cardIdx, cardId: selId }).then((ok) => {
+              if (ok) setSelectedCardIds(new Set());
+            });
+            return;
+          }
           raminoAudio.playSwap();
           setPlayerHand((prev) => prev.map((c) => (c.id === selId ? targetCard : c)));
           setSelectedCardIds(new Set());
@@ -3463,6 +4054,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       if (!combined) {
         raminoAudio.playBuzzer();
         triggerNotification(t.notifyMismatchGroup);
+        return;
+      }
+
+      if (activeMultiplayerRoomCode) {
+        void sendRaminoGameAction('layoff_card', { meldId, cardId: selId, cardIdx }).then((ok) => {
+          if (ok) setSelectedCardIds(new Set());
+        });
         return;
       }
 
@@ -3500,6 +4098,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         raminoAudio.playBuzzer();
         const label = targetMeld.type === 'run' && info?.suit ? `${requiredRank}${info.suit}` : requiredRank;
         triggerNotification(t.notifyNeedSwapNatural(label));
+        return;
+      }
+      if (activeMultiplayerRoomCode) {
+        void sendRaminoGameAction('swap_joker', { meldId, cardIdx });
         return;
       }
       const naturalCard = playerHand[matchIdx];
@@ -3547,7 +4149,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       const streakMultiplier = nextStreak >= 3 ? 2 : 1;
       const totalMultiplier = dopeyMultiplier * streakMultiplier;
       const netWin = (pot - rake) * totalMultiplier;
-      adjustWalletBalance(netWin);
+      adjustWalletBalance(netWin, `Ramino Win (${totalMultiplier}x)`);
 
       raminoAudio.playVictory();
       setWinnerCelebration({
@@ -3743,6 +4345,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       return;
     }
 
+    if (activeMultiplayerRoomCode) {
+      void sendRaminoGameAction('discard', { cardId }).then((ok) => {
+        if (ok) setSelectedCardIds(new Set());
+      });
+      return;
+    }
+
     // Valid discard!
     raminoAudio.playCardSnap();
     const nextDiscardPile = [...discardPileRef.current, cardToDiscard];
@@ -3769,6 +4378,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Final Win Check (Dopey 2x/3x & 3+ Win Streak 2x & 10% Conker Rake)
   const handleFinalWinCheck = (handSnapshot: PlayingCard[], closingCard?: PlayingCard | null) => {
+    if (activeMultiplayerRoomCode) {
+      void sendRaminoGameAction('dopey_win');
+      return;
+    }
     const dopey = checkDopey(handSnapshot, closingCard, allowSameRankDopey);
     const dopeyMultiplier = dopey.isJokerFinished ? 3 : dopey.isDopey ? 2 : 1;
     triggerRoundWin({
@@ -3954,60 +4567,143 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }, 80);
   };
 
-  // Lobby Actions: Create Room (Adds to Open Rooms + Deducts Stake + Cancelable Refund)
-  const handleCreateRoom = () => {
+  // Lobby Actions: Create Server-Synced Public Room (+ Deduct Stake + Cancelable Refund)
+  const handleCreateRoom = async () => {
     if (balance < selectedStake) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyInsufficientStake(selectedStake));
       return;
     }
 
-    const duration = SEAT_DURATION_MAP[playerSeatCount];
-    const roomNum = Math.floor(1000 + Math.random() * 9000);
-    const newRoom: RaminoRoom = {
-      id: `r_${Date.now()}`,
-      name: `#${roomNum}`,
-      creator: playerName,
-      avatarLetter: playerName[0]?.toUpperCase() || 'P',
-      avatarColor: 'bg-amber-400',
-      stake: selectedStake,
-      max: playerSeatCount,
-      current: 1,
-      duration,
-      timeRemaining: duration,
-      isUserCreated: true,
-    };
-
-    adjustWalletBalance(-selectedStake);
-    setOpenRooms((prev) => [newRoom, ...prev]);
-    raminoAudio.playDraw();
-    triggerNotification(t.notifyRoomCreated(roomNum, selectedStake));
+    try {
+      const res = await fetch(buildApiUrl('/api/ramino/rooms'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          creatorId: myPlayerId,
+          creatorPhone: playerPhone,
+          creatorName: playerName,
+          maxPlayers: playerSeatCount,
+          stake: selectedStake,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok || !data.room) {
+        raminoAudio.playBuzzer();
+        triggerNotification(data?.error || t.notifyInsufficientStake(selectedStake));
+        return;
+      }
+      heldWaitingStakeRef.current = selectedStake;
+      adjustWalletBalance(-selectedStake, `Ramino Room ${data.room.name}`);
+      if (Array.isArray(data.rooms)) {
+        setOpenRooms(mapServerLobbyRooms(data.rooms));
+      }
+      setIsPrivateRoomGame(false);
+      setActivePrivateRoomCode(null);
+      setActiveTableStake(selectedStake);
+      if (data.tableCode) {
+        setActiveMultiplayerRoomCode(String(data.tableCode));
+        activeMultiplayerRoomCodeRef.current = String(data.tableCode);
+      }
+      raminoAudio.playDraw();
+      const roomNum = parseInt(String(data.room.name || '').replace('#', ''), 10) || 1000;
+      triggerNotification(t.notifyRoomCreated(roomNum, selectedStake));
+    } catch {
+      raminoAudio.playBuzzer();
+    }
   };
 
-  // Cancel Created Room -> Immediate Refund
-  const handleCancelCreatedRoom = (room: RaminoRoom) => {
-    setOpenRooms((prev) => prev.filter((r) => r.id !== room.id));
-    adjustWalletBalance(room.stake);
+  // Cancel Created Room -> Server Delete & Immediate Refund
+  const handleCancelCreatedRoom = async (room: RaminoRoom) => {
+    try {
+      const res = await fetch(buildApiUrl(`/api/ramino/rooms/${encodeURIComponent(room.id)}/cancel`), {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (Array.isArray(data?.rooms)) {
+        setOpenRooms(mapServerLobbyRooms(data.rooms));
+      } else {
+        setOpenRooms((prev) => prev.filter((r) => r.id !== room.id));
+      }
+    } catch {
+      setOpenRooms((prev) => prev.filter((r) => r.id !== room.id));
+    }
+    const pubTableCode = `PUB_${room.id.toUpperCase()}`;
+    if (activeMultiplayerRoomCodeRef.current === pubTableCode) {
+      setActiveMultiplayerRoomCode(null);
+      activeMultiplayerRoomCodeRef.current = null;
+    }
+    heldWaitingStakeRef.current = 0;
+    adjustWalletBalance(room.stake, `Ramino Cancel Refund ${room.name}`);
     raminoAudio.playSwap();
     const dispName = room.name.startsWith('#') ? `${t.roomPrefix}${room.name.slice(1)}` : room.name;
     triggerNotification(t.notifyRoomCancelled(dispName, room.stake));
   };
 
-  // Join or Start Public Room -> Transitions Lobby -> Dealer Cut Ceremony (Voice Chat disabled in Public Rooms)
-  const handleJoinOrStartRoom = (room: RaminoRoom) => {
+  // Join or Enter Public Room -> Server-Synced Human Table (enters Waiting Room or Ceremony when full)
+  const handleJoinOrStartRoom = async (room: RaminoRoom) => {
+    const pubTableCode = `PUB_${room.id.toUpperCase()}`;
     if (!room.isUserCreated) {
       if (balance < room.stake) {
         raminoAudio.playBuzzer();
         triggerNotification(t.notifyInsufficientJoin(room.stake));
         return;
       }
-      adjustWalletBalance(-room.stake);
+      try {
+        const res = await fetch(buildApiUrl(`/api/ramino/rooms/${encodeURIComponent(room.id)}/join`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playerId: myPlayerId,
+            playerPhone,
+            playerName,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data?.ok || !data.table) {
+          raminoAudio.playBuzzer();
+          triggerNotification(data?.error || t.notifyRoomFull);
+          fetchServerOpenRooms();
+          return;
+        }
+        heldWaitingStakeRef.current = room.stake;
+        adjustWalletBalance(-room.stake, `Ramino Join ${room.name}`);
+        setIsPrivateRoomGame(false);
+        setActivePrivateRoomCode(null);
+        setIsMicMuted(true);
+        setActiveTableStake(room.stake);
+        setActiveMultiplayerRoomCode(String(data.tableCode || pubTableCode));
+        activeMultiplayerRoomCodeRef.current = String(data.tableCode || pubTableCode);
+        raminoAudio.playDraw();
+        applyServerTableSnapshot(data.table);
+      } catch {
+        raminoAudio.playBuzzer();
+      }
+      return;
     }
-    setOpenRooms((prev) => prev.filter((r) => r.id !== room.id));
-    setIsPrivateRoomGame(false);
-    setActivePrivateRoomCode(null);
-    setIsMicMuted(true);
-    raminoAudio.playDraw();
+
+    // Host clicking Start on their own public room -> open server waiting/table view
+    try {
+      setIsPrivateRoomGame(false);
+      setActivePrivateRoomCode(null);
+      setIsMicMuted(true);
+      setActiveTableStake(room.stake);
+      setActiveMultiplayerRoomCode(pubTableCode);
+      activeMultiplayerRoomCodeRef.current = pubTableCode;
+      const stRes = await fetch(
+        buildApiUrl(`/api/ramino/tables/${encodeURIComponent(pubTableCode)}/state?playerId=${encodeURIComponent(myPlayerId)}&_t=${Date.now()}`),
+        { cache: 'no-store' }
+      );
+      const stData = await stRes.json();
+      if (stRes.ok && stData?.ok && stData.table) {
+        raminoAudio.playDraw();
+        applyServerTableSnapshot(stData.table);
+        if ((stData.table.playersSummary?.length || 0) >= 2 && stData.table.phase === 'waiting') {
+          await sendRaminoGameAction('start_game');
+        }
+        return;
+      }
+    } catch {}
     startDealerCutCeremony(room.max, room.stake);
   };
 
@@ -4091,7 +4787,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             }
       }
       className={`select-none flex flex-col font-sans transition-colors duration-500 relative ${
-        view === 'lobby'
+        view === 'lobby' || view === 'waiting'
           ? 'bg-[#0f0728] text-slate-50 overflow-y-auto overflow-x-hidden'
           : tableTheme === 'emerald'
           ? 'bg-[#03150d] text-emerald-50 overflow-hidden'
@@ -4294,15 +4990,43 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               <span className="text-[9px] text-purple-300/70 font-semibold mt-0.5">{t.activeRoomsSub}</span>
             </div>
 
-            <div className="p-3 rounded-2xl bg-[#1b0d36]/90 border border-purple-500/30 flex flex-col items-center justify-center text-center shadow-lg">
-              <div className="flex items-center gap-1 text-yellow-300 text-xs font-bold mb-1">
-                <span>🪙</span>
-                <span>{t.balanceCardLabel}</span>
+            <div className="p-2.5 sm:p-3 rounded-2xl bg-[#1b0d36]/90 border border-purple-500/30 flex flex-col items-center justify-center text-center shadow-lg">
+              <button
+                type="button"
+                onClick={() => onOpenWallet?.('history')}
+                className="flex flex-col items-center cursor-pointer hover:opacity-90 transition"
+                title={t.walletSub}
+              >
+                <div className="flex items-center gap-1 text-yellow-300 text-xs font-bold mb-0.5">
+                  <span>🪙</span>
+                  <span>{t.balanceCardLabel}</span>
+                </div>
+                <span className="text-sm sm:text-base font-black text-amber-400 font-mono">
+                  {balance.toLocaleString()} {t.currencyUnit}
+                </span>
+              </button>
+              <div className="flex items-center gap-1 mt-1.5 w-full">
+                <button
+                  type="button"
+                  onClick={() => {
+                    raminoAudio.playCardSnap();
+                    onOpenWallet?.('deposit');
+                  }}
+                  className="flex-1 py-1 px-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[10px] transition cursor-pointer"
+                >
+                  + {t.depositShort}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    raminoAudio.playCardSnap();
+                    onOpenWallet?.('withdraw');
+                  }}
+                  className="flex-1 py-1 px-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-[10px] transition cursor-pointer"
+                >
+                  - {t.withdrawShort}
+                </button>
               </div>
-              <span className="text-sm sm:text-base font-black text-amber-400 font-mono">
-                {balance.toLocaleString()} {t.currencyUnit}
-              </span>
-              <span className="text-[9px] text-purple-300/70 font-semibold mt-0.5">{t.walletSub}</span>
             </div>
           </div>
 
@@ -4316,6 +5040,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               <button
                 onClick={() => {
                   raminoAudio.playCardSnap();
+                  void fetchServerOpenRooms();
                   triggerNotification(t.roomsRefreshed);
                 }}
                 className="text-xs font-bold text-gray-300 hover:text-white flex items-center gap-1 cursor-pointer"
@@ -4521,6 +5246,182 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       )}
 
       {/* ========================================================
+          VIEW 1.5: MULTIPLAYER HUMAN WAITING ROOM (ZERO COMPUTER BOTS)
+         ======================================================== */}
+      {view === 'waiting' && (
+        <div className="flex-1 w-full min-h-screen flex flex-col bg-gradient-to-b from-[#0b041c] via-[#13082f] to-[#080316] text-slate-50">
+          <header className="w-full px-3 sm:px-5 py-2.5 bg-black/80 border-b border-teal-500/25 flex items-center justify-between gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                raminoAudio.playCardSnap();
+                void leaveMultiplayerTable(true);
+              }}
+              className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/35 border border-rose-400/40 text-rose-200 font-black text-xs flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>{t.cancelLeaveRefundBtn}</span>
+            </button>
+
+            <div className="flex items-center gap-1.5">
+              {isPrivateRoomGame && activePrivateRoomCode && (
+                <div className="flex items-center gap-1.5 px-2 py-1 rounded-2xl bg-black/60 border border-emerald-500/30">
+                  <button
+                    type="button"
+                    onClick={handleTogglePrivateMic}
+                    className={`px-2 py-0.5 rounded-xl text-[10px] font-black flex items-center gap-1 transition cursor-pointer ${
+                      !isMicMuted ? 'bg-emerald-500 text-slate-950' : 'bg-white/10 text-rose-300'
+                    }`}
+                  >
+                    {!isMicMuted ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
+                    <span>{!isMicMuted ? t.micOpen : t.micOpenBtn}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      raminoAudio.playCardSnap();
+                      setIsDeafened(!isDeafened);
+                    }}
+                    className={`p-1 rounded-xl text-xs transition cursor-pointer ${
+                      isDeafened ? 'bg-rose-500/20 text-rose-300' : 'bg-white/5 text-gray-300'
+                    }`}
+                    title={isDeafened ? t.deafenOpenTip : t.deafenMuteTip}
+                  >
+                    <Headphones className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setIsRulesModalOpen(true)}
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 transition cursor-pointer"
+                title={t.rulesTooltip}
+              >
+                <HelpCircle className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsSettingsModalOpen(true)}
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 transition cursor-pointer"
+                title={t.settingsBtn}
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+            </div>
+          </header>
+
+          <div className="flex-1 flex items-center justify-center p-4">
+            <div className="max-w-md w-full rounded-3xl bg-[#190a33]/95 border-2 border-teal-400/50 p-5 space-y-4 shadow-2xl">
+              <div className="text-center space-y-1.5">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/15 border border-teal-400/40 text-teal-300 text-xs font-black">
+                  {isPrivateRoomGame ? <Lock className="w-3.5 h-3.5" /> : <Users className="w-3.5 h-3.5" />}
+                  <span>{t.waitingRoomTitle(isPrivateRoomGame)}</span>
+                </div>
+                <div className="flex items-center justify-center gap-2 flex-wrap pt-1">
+                  {(activePrivateRoomCode || activeMultiplayerRoomCode) && (
+                    <span className="px-3 py-1 rounded-xl bg-black/60 border border-amber-400/40 text-amber-300 font-mono font-black text-sm">
+                      🔑 {activePrivateRoomCode || activeMultiplayerRoomCode}
+                    </span>
+                  )}
+                  <span className="px-3 py-1 rounded-xl bg-amber-400/15 border border-amber-400/40 text-yellow-300 font-black text-xs">
+                    🪙 {activeTableStake.toLocaleString()} {t.currencyUnit}
+                  </span>
+                </div>
+              </div>
+
+              {isPrivateRoomGame && activePrivateRoomCode && (
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(activePrivateRoomCode).catch(() => {});
+                      setCodeCopied(true);
+                      setTimeout(() => setCodeCopied(false), 1800);
+                    }}
+                    className="py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-teal-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    {codeCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{codeCopied ? t.copiedBtn : t.copyCodeBtn}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = `${window.location.origin}/?game=ramino&raminoRoom=${encodeURIComponent(activePrivateRoomCode)}`;
+                      navigator.clipboard?.writeText(url).catch(() => {});
+                      setLinkCopied(true);
+                      triggerNotification(t.notifyLinkCopied);
+                      setTimeout(() => setLinkCopied(false), 1800);
+                    }}
+                    className="py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-sky-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    {linkCopied ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
+                    <span>{linkCopied ? t.copiedBtn : t.copyLinkBtn}</span>
+                  </button>
+                </div>
+              )}
+
+              <div className="p-3 rounded-2xl bg-black/45 border border-white/10 space-y-2">
+                <div className="flex items-center justify-between text-xs font-black text-gray-200">
+                  <span>{t.joinedFriendsHeader(waitingRoomPlayers.length, playerSeatCount)}</span>
+                  <span className="text-[11px] text-amber-300">
+                    {playerSeatCount === 2 ? t.oneDeckShort : t.twoDecksShort}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {Array.from({ length: playerSeatCount }).map((_, idx) => {
+                    const occupant = waitingRoomPlayers[idx];
+                    return (
+                      <div
+                        key={idx}
+                        className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 ${
+                          occupant
+                            ? 'bg-emerald-500/15 border-emerald-400/45 text-emerald-100'
+                            : 'bg-white/5 border-white/10 text-gray-400 animate-pulse'
+                        }`}
+                      >
+                        <div
+                          className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-black shrink-0 ${
+                            occupant ? `${occupant.avatarColor || 'bg-amber-400'} text-slate-950` : 'bg-white/10 text-gray-400'
+                          }`}
+                        >
+                          {occupant ? occupant.avatarLetter : '?'}
+                        </div>
+                        <span className="truncate">
+                          {occupant
+                            ? `${occupant.isHost ? '👑 ' : '✓ '}${occupant.name}${occupant.id === myPlayerId ? ` (${t.yoursTag})` : ''}`
+                            : t.waitingFriendSlot(idx)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {waitingRoomPlayers.length < 2 && (
+                <div className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-400/40 text-amber-200 text-xs font-bold text-center">
+                  {t.waitingPlayersNeeded}
+                </div>
+              )}
+
+              {waitingRoomPlayers.find((p) => p.isHost)?.id === myPlayerId && waitingRoomPlayers.length >= 2 ? (
+                <button
+                  type="button"
+                  onClick={() => void sendRaminoGameAction('start_game')}
+                  className="w-full py-3 rounded-2xl bg-gradient-to-r from-emerald-400 via-teal-400 to-emerald-500 text-slate-950 font-black text-sm shadow-xl hover:brightness-105 transition cursor-pointer"
+                >
+                  {t.waitingHostStartBtn(activeTableStake, waitingRoomPlayers.length)}
+                </button>
+              ) : (
+                <div className="text-center text-xs font-bold text-teal-200/90 animate-pulse py-1">
+                  {t.waitingForHostMsg}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
           VIEW 2: DEALER CUT CEREMONY (FACE-DOWN -> REVEAL -> AUTO-START GAME)
          ======================================================== */}
       {view === 'ceremony' && (
@@ -4530,6 +5431,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             <button
               onClick={() => {
                 raminoAudio.playCardSnap();
+                if (activeMultiplayerRoomCode) {
+                  void leaveMultiplayerTable(false);
+                  return;
+                }
                 stopVoiceChatSession();
                 setIsPrivateRoomGame(false);
                 setActivePrivateRoomCode(null);
@@ -4577,15 +5482,19 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               )}
 
               <button
+                type="button"
                 onClick={() => setIsRulesModalOpen(true)}
-                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 transition cursor-pointer"
+                style={{ touchAction: 'manipulation' }}
+                className="relative z-[60] shrink-0 pointer-events-auto p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 transition cursor-pointer"
                 title={t.rulesTooltip}
               >
                 <HelpCircle className="w-3.5 h-3.5" />
               </button>
               <button
+                type="button"
                 onClick={() => setIsSettingsModalOpen(true)}
-                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 transition cursor-pointer"
+                style={{ touchAction: 'manipulation' }}
+                className="relative z-[60] shrink-0 pointer-events-auto p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 transition cursor-pointer"
                 title={t.settingsBtn}
               >
                 <Settings className="w-3.5 h-3.5" />
@@ -4679,11 +5588,15 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       {view === 'game' && (
         <div className="flex-1 w-full h-full flex flex-col relative overflow-hidden">
           {/* Slim Ramino Header: Back + Streak + Private Voice Chat + Rules + Settings */}
-          <header className="w-full px-2.5 py-0.5 bg-black/85 backdrop-blur-md border-b border-emerald-500/20 flex items-center justify-between gap-2 z-40 shrink-0">
+          <header className="relative z-50 w-full px-2.5 py-0.5 bg-black/85 backdrop-blur-md border-b border-emerald-500/20 flex items-center justify-between gap-2 shrink-0 pointer-events-auto">
             <div className="flex items-center gap-2">
               <button
                 onClick={() => {
                   raminoAudio.playCardSnap();
+                  if (activeMultiplayerRoomCode) {
+                    void leaveMultiplayerTable(false);
+                    return;
+                  }
                   stopVoiceChatSession();
                   setIsPrivateRoomGame(false);
                   setActivePrivateRoomCode(null);
@@ -4786,11 +5699,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               </button>
 
               <button
+                type="button"
                 onClick={() => {
                   raminoAudio.playCardSnap();
                   setIsRulesModalOpen(true);
                 }}
-                className="px-2 py-0.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 font-black text-[10px] flex items-center gap-1 transition cursor-pointer"
+                style={{ touchAction: 'manipulation' }}
+                className="relative z-[60] shrink-0 pointer-events-auto px-2 py-0.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 font-black text-[10px] flex items-center gap-1 transition cursor-pointer"
                 title={t.rulesTooltip}
               >
                 <BookOpen className="w-3 h-3" />
@@ -4798,11 +5713,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               </button>
 
               <button
+                type="button"
                 onClick={() => {
                   raminoAudio.playCardSnap();
                   setIsSettingsModalOpen(true);
                 }}
-                className="px-2 py-0.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-300 font-black text-[10px] flex items-center gap-1 transition cursor-pointer"
+                style={{ touchAction: 'manipulation' }}
+                className="relative z-[60] shrink-0 pointer-events-auto px-2 py-0.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-300 font-black text-[10px] flex items-center gap-1 transition cursor-pointer"
                 title={t.settingsBtn}
               >
                 <Settings className="w-3 h-3" />
@@ -5408,6 +6325,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             <button
               onClick={() => {
                 setIsBannedModalOpen(false);
+                if (activeMultiplayerRoomCode) {
+                  void leaveMultiplayerTable(false);
+                  return;
+                }
                 setView('lobby');
               }}
               className="w-full py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs cursor-pointer"
@@ -5447,9 +6368,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               ];
               const friendSlotsCount = playerSeatCount - 1;
 
-              const inviteMessage = `${t.inviteTextHeader}\n👥 ${t.seatOptionLabel(playerSeatCount)} • 🪙 ${selectedStake} ${t.currencyUnit}\n🔑 ${privateCode}\n🔗 ${privateInviteLink}`;
+              const inviteMessage = `${t.inviteTextHeader}\n👥 ${t.seatOptionLabel(playerSeatCount)} • 🪙 ${privateStake} ${t.currencyUnit}\n🔑 ${privateCode}\n🔗 ${privateInviteLink}`;
               const telegramInviteUrl = `https://t.me/share/url?url=${encodeURIComponent(privateInviteLink)}&text=${encodeURIComponent(
-                `${t.inviteTextHeader}\n👥 ${t.seatOptionLabel(playerSeatCount)} • 🪙 ${selectedStake} ${t.currencyUnit}\n🔑 ${privateCode}`
+                `${t.inviteTextHeader}\n👥 ${t.seatOptionLabel(playerSeatCount)} • 🪙 ${privateStake} ${t.currencyUnit}\n🔑 ${privateCode}`
               )}`;
               const whatsappInviteUrl = `https://wa.me/?text=${encodeURIComponent(inviteMessage)}`;
 
@@ -5507,7 +6428,50 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                     </div>
                   </div>
 
-                  {/* Step 2: Room Code */}
+                  {/* Step 2: Dedicated Private Room Stake */}
+                  <div className="space-y-1.5">
+                    <label className="text-gray-200 font-black flex items-center justify-between">
+                      <span>🪙 {t.privateStakeStep}</span>
+                      <span className="text-[11px] font-mono font-black text-amber-300">
+                        {privateStake.toLocaleString()} {t.currencyUnit}
+                      </span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="10"
+                        step="10"
+                        value={privateStake}
+                        onChange={(e) => setPrivateStake(Math.max(10, parseInt(e.target.value, 10) || 10))}
+                        placeholder={t.stakePlaceholder}
+                        className="w-full px-3 py-2 rounded-xl bg-black/60 border border-teal-500/40 text-amber-300 font-mono font-bold text-sm focus:outline-none focus:border-yellow-400"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono font-black text-yellow-400 text-[11px]">
+                        {t.currencyUnit}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[30, 50, 100, 200, 500, 1000, 2000, 5000].map((stakeOpt) => (
+                        <button
+                          key={stakeOpt}
+                          type="button"
+                          onClick={() => {
+                            raminoAudio.playCardSnap();
+                            setPrivateStake(stakeOpt);
+                          }}
+                          className={`py-1.5 rounded-lg text-[11px] font-black transition cursor-pointer border ${
+                            privateStake === stakeOpt
+                              ? 'bg-amber-400 text-slate-950 border-amber-300 shadow'
+                              : 'bg-black/40 text-gray-200 border-white/10 hover:border-teal-400/50'
+                          }`}
+                        >
+                          {stakeOpt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Step 3: Room Code */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-gray-200 font-black">{t.roomCodeStep}</label>
@@ -5635,26 +6599,47 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
             <button
               onClick={async () => {
-                if (balance < selectedStake) {
+                const cleanCode = privateCode.trim().toUpperCase();
+                const targetStake = Math.max(10, privateStake);
+                if (balance < targetStake) {
                   raminoAudio.playBuzzer();
                   triggerNotification(t.notifyInsufficientWallet);
                   return;
                 }
                 try {
-                  await fetch(buildApiUrl(`/api/ramino/private-rooms/${encodeURIComponent(privateCode)}/start`), {
-                    method: 'POST',
-                  });
-                } catch {}
-                setIsPrivateRoomGame(true);
-                setActivePrivateRoomCode(privateCode.trim().toUpperCase());
-                setIsMicMuted(true);
-                adjustWalletBalance(-selectedStake);
-                setIsPrivateModalOpen(false);
-                startDealerCutCeremony(playerSeatCount, selectedStake);
+                  await syncPrivateRoomToHost(cleanCode, playerSeatCount, targetStake);
+                  const res = await fetch(
+                    buildApiUrl(`/api/ramino/private-rooms/${encodeURIComponent(cleanCode)}/start`),
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ playerId: myPlayerId }),
+                    }
+                  );
+                  const data = await res.json();
+                  if (!res.ok || !data?.ok || !data.table) {
+                    raminoAudio.playBuzzer();
+                    triggerNotification(data?.error || t.notifyJoinLookupErr);
+                    return;
+                  }
+                  heldWaitingStakeRef.current = targetStake;
+                  adjustWalletBalance(-targetStake, `Ramino Private ${cleanCode}`);
+                  setIsPrivateRoomGame(true);
+                  setActivePrivateRoomCode(cleanCode);
+                  setActiveMultiplayerRoomCode(cleanCode);
+                  activeMultiplayerRoomCodeRef.current = cleanCode;
+                  setActiveTableStake(targetStake);
+                  setIsMicMuted(true);
+                  setIsPrivateModalOpen(false);
+                  applyServerTableSnapshot(data.table);
+                } catch {
+                  raminoAudio.playBuzzer();
+                  triggerNotification(t.notifyJoinLookupErr);
+                }
               }}
               className="w-full py-3 rounded-2xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-sm shadow-xl transition cursor-pointer"
             >
-              {t.startPrivateRoomBtn(selectedStake, playerSeatCount)}
+              {t.startPrivateRoomBtn(privateStake, playerSeatCount)}
             </button>
           </div>
         </div>
@@ -5723,40 +6708,66 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   triggerNotification(t.notifyEnterValidCode);
                   return;
                 }
-                let roomToJoin = joinedRoomPreview || (await lookupPrivateRoomByCode(cleanCode));
                 try {
-                  const res = await fetch(buildApiUrl(`/api/ramino/private-rooms/${encodeURIComponent(cleanCode)}/join`), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ playerName }),
-                  });
-                  const data = await res.json();
-                  if (res.ok && data?.ok && data.room) {
-                    roomToJoin = data.room;
-                    saveLocalPrivateRoom(data.room);
-                  } else if (res.status === 400) {
+                  const previewRoom = joinedRoomPreview || (await lookupPrivateRoomByCode(cleanCode));
+                  const preCheckStake = Number(previewRoom?.stake || 0);
+                  if (preCheckStake > 0 && balance < preCheckStake) {
                     raminoAudio.playBuzzer();
-                    triggerNotification(data?.error || t.notifyRoomFull);
+                    triggerNotification(t.notifyInsufficientWallet);
                     return;
                   }
-                } catch {}
-
-                const targetSeats = roomToJoin?.maxPlayers || playerSeatCount;
-                const targetStake = roomToJoin?.stake || selectedStake;
-                if (balance < targetStake) {
+                  const res = await fetch(
+                    buildApiUrl(`/api/ramino/private-rooms/${encodeURIComponent(cleanCode)}/join`),
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        playerId: myPlayerId,
+                        playerPhone,
+                        playerName,
+                      }),
+                    }
+                  );
+                  const data = await res.json();
+                  if (!res.ok || !data?.ok || !data.room || !data.table) {
+                    raminoAudio.playBuzzer();
+                    triggerNotification(data?.error || t.notifyJoinLookupErr);
+                    return;
+                  }
+                  const targetSeats = ([2, 3, 4, 5].includes(Number(data.room.maxPlayers))
+                    ? Number(data.room.maxPlayers)
+                    : 3) as 2 | 3 | 4 | 5;
+                  const targetStake = Number(data.table.stake || data.room.stake || 30);
+                  if (balance < targetStake) {
+                    await fetch(
+                      buildApiUrl(`/api/ramino/tables/${encodeURIComponent(cleanCode)}/action`),
+                      {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ playerId: myPlayerId, action: 'leave_table' }),
+                      }
+                    ).catch(() => {});
+                    raminoAudio.playBuzzer();
+                    triggerNotification(t.notifyInsufficientWallet);
+                    return;
+                  }
+                  saveLocalPrivateRoom(data.room);
+                  heldWaitingStakeRef.current = targetStake;
+                  adjustWalletBalance(-targetStake, `Ramino Private Join ${cleanCode}`);
+                  setPlayerSeatCount(targetSeats);
+                  setActiveTableStake(targetStake);
+                  setIsPrivateRoomGame(true);
+                  setActivePrivateRoomCode(cleanCode);
+                  setActiveMultiplayerRoomCode(cleanCode);
+                  activeMultiplayerRoomCodeRef.current = cleanCode;
+                  setIsMicMuted(true);
+                  setIsJoinCodeModalOpen(false);
+                  triggerNotification(t.notifyJoinedPrivateCode(cleanCode));
+                  applyServerTableSnapshot(data.table);
+                } catch {
                   raminoAudio.playBuzzer();
-                  triggerNotification(t.notifyInsufficientWallet);
-                  return;
+                  triggerNotification(t.notifyJoinLookupErr);
                 }
-                setPlayerSeatCount(targetSeats);
-                setSelectedStake(targetStake);
-                setIsPrivateRoomGame(true);
-                setActivePrivateRoomCode(cleanCode);
-                setIsMicMuted(true);
-                adjustWalletBalance(-targetStake);
-                setIsJoinCodeModalOpen(false);
-                triggerNotification(t.notifyJoinedPrivateCode(cleanCode));
-                startDealerCutCeremony(targetSeats, targetStake);
               }}
               className="w-full py-3 rounded-2xl bg-blue-500 hover:bg-blue-400 text-white font-black text-sm shadow-xl transition cursor-pointer"
             >
@@ -5770,9 +6781,16 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           WINNER CELEBRATION MODAL (Winner Deals Next Round + Dopey & 3+ Streak Multipliers)
          ======================================================== */}
       {winnerCelebration?.show && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100000] flex items-center justify-center p-4">
-          <div className="bg-[#121626] border-2 border-yellow-400 rounded-[32px] p-5 sm:p-6 max-w-sm w-full text-center space-y-3.5 shadow-2xl">
-            <span className="text-5xl">{winnerCelebration.isOpponentWin ? '🃏' : '👑'}</span>
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100000] flex items-center justify-center p-2 sm:p-4 overflow-hidden">
+          <div
+            style={{ maxHeight: modalMaxHeightPx ? `${modalMaxHeightPx}px` : '88dvh' }}
+            className="bg-[#121626] border-2 border-yellow-400 rounded-[28px] p-4 sm:p-6 max-w-sm w-full text-center flex flex-col overflow-hidden shadow-2xl"
+          >
+            <div
+              style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-3.5 pr-0.5"
+            >
+            <span className="text-5xl block">{winnerCelebration.isOpponentWin ? '🃏' : '👑'}</span>
             <h2 className="text-lg sm:text-xl font-black text-yellow-300 leading-snug">
               {winnerCelebration.title}
             </h2>
@@ -5780,7 +6798,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             <div className="p-3.5 rounded-2xl bg-black/60 border border-yellow-500/30 space-y-1.5 text-xs">
               <div className="flex justify-between text-gray-300">
                 <span>{t.potAmountLabel}</span>
-                <span className="font-mono">{selectedStake * playerSeatCount} {t.currencyUnit}</span>
+                <span className="font-mono">
+                  {(activeMultiplayerRoomCode ? activeTableStake : selectedStake) *
+                    (activeMultiplayerRoomCode ? Math.max(2, opponents.length + 1) : playerSeatCount)}{' '}
+                  {t.currencyUnit}
+                </span>
               </div>
               <div className="flex justify-between text-rose-400">
                 <span>{t.rakeLabel}</span>
@@ -5819,9 +6841,22 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
-                  if (balance < selectedStake) {
+                  const tableStakeAmt = activeMultiplayerRoomCode ? activeTableStake : selectedStake;
+                  if (balance < tableStakeAmt) {
                     raminoAudio.playBuzzer();
                     triggerNotification(t.notifyInsufficientNext);
+                    return;
+                  }
+                  if (activeMultiplayerRoomCode) {
+                    const nextIdx = (lastSyncedRoundIndexRef.current >= 0 ? lastSyncedRoundIndexRef.current : 1) + 1;
+                    debitedRoundIndexRef.current = nextIdx;
+                    adjustWalletBalance(-tableStakeAmt, `Ramino Next Round (${tableStakeAmt} ETB)`);
+                    void sendRaminoGameAction('next_round').then((ok) => {
+                      if (!ok) {
+                        debitedRoundIndexRef.current = lastSyncedRoundIndexRef.current;
+                        adjustWalletBalance(tableStakeAmt, `Ramino Next Round Revert`);
+                      }
+                    });
                     return;
                   }
                   if (isPrivateRoomGame) {
@@ -5829,7 +6864,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                     privateRoundCountRef.current = nextRound;
                     setPrivateRoundCount(nextRound);
                   }
-                  adjustWalletBalance(-selectedStake);
+                  adjustWalletBalance(-tableStakeAmt, `Ramino Next Round (${tableStakeAmt} ETB)`);
                   dealRoundWithDealer(winnerCelebration.winnerName);
                 }}
                 className="w-full py-3 rounded-2xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 text-slate-950 font-black text-sm shadow-xl hover:brightness-105 transition cursor-pointer"
@@ -5851,6 +6886,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
               <button
                 onClick={() => {
+                  if (activeMultiplayerRoomCode) {
+                    void leaveMultiplayerTable(false);
+                    return;
+                  }
                   winStreakRef.current = 0;
                   setWinStreak(0);
                   privateRoundCountRef.current = 1;
@@ -5863,6 +6902,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 {t.backToLobbyResetBtn}
               </button>
             </div>
+            </div>
           </div>
         </div>
       )}
@@ -5871,8 +6911,15 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           POST DAY MUTUAL ACCEPTANCE MODAL (All Players Accept)
          ======================================================== */}
       {postDayRequest && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100001] flex items-center justify-center p-4">
-          <div className="bg-[#121626] border-2 border-teal-400 rounded-3xl p-5 max-w-sm w-full space-y-3.5 shadow-2xl">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100001] flex items-center justify-center p-2 sm:p-4 overflow-hidden">
+          <div
+            style={{ maxHeight: modalMaxHeightPx ? `${modalMaxHeightPx}px` : '88dvh' }}
+            className="bg-[#121626] border-2 border-teal-400 rounded-3xl p-4 sm:p-5 max-w-sm w-full flex flex-col overflow-hidden shadow-2xl"
+          >
+            <div
+              style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-3.5 pr-0.5"
+            >
             <div className="text-center space-y-1">
               <span className="text-3xl">🪑</span>
               <h3 className="text-base font-black text-teal-300">{t.postDayModalTitle}</h3>
@@ -5920,6 +6967,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 {postDayRequest.allAccepted ? t.allAcceptedPostDay : t.waitingAllPostDay}
               </div>
             )}
+            </div>
           </div>
         </div>
       )}
@@ -5928,22 +6976,29 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           RAMINO SETTINGS MODAL (ቅንብር)
          ======================================================== */}
       {isSettingsModalOpen && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-[100002]">
-          <div className="bg-[#121626] border-2 border-amber-400/45 rounded-[28px] p-5 max-w-md w-full text-left space-y-4 shadow-2xl max-h-[88vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 z-[100002] overflow-hidden">
+          <div
+            style={{ maxHeight: modalMaxHeightPx ? `${modalMaxHeightPx}px` : '88dvh' }}
+            className="bg-[#121626] border-2 border-amber-400/45 rounded-[24px] sm:rounded-[28px] p-4 sm:p-5 max-w-md w-full text-left flex flex-col overflow-hidden shadow-2xl"
+          >
+            <div className="shrink-0 flex items-center justify-between border-b border-white/10 pb-2.5 mb-2.5">
               <div className="flex items-center gap-2">
                 <Settings className="w-5 h-5 text-amber-400" />
                 <h3 className="text-base font-black text-amber-300">{t.settingsTitle}</h3>
               </div>
               <button
+                type="button"
                 onClick={() => setIsSettingsModalOpen(false)}
-                className="text-gray-400 hover:text-white font-black text-lg cursor-pointer"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-gray-200 hover:text-white font-black text-sm flex items-center justify-center cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
+            <div
+              style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-3 text-xs pr-1"
+            >
               {/* Language Switcher */}
               <div className="p-3 rounded-2xl bg-black/45 border border-white/10 space-y-2">
                 <div className="flex items-center gap-1.5 font-black text-slate-200">
@@ -6085,8 +7140,35 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 </button>
               </div>
 
-              {/* Quick Actions: Open Full Rules + Back to Hub */}
+              {/* Quick Actions: Wallet Deposit/Withdraw + Open Full Rules + Back to Hub */}
               <div className="grid grid-cols-1 gap-2 pt-1">
+                {onOpenWallet && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        raminoAudio.playCardSnap();
+                        setIsSettingsModalOpen(false);
+                        onOpenWallet('deposit');
+                      }}
+                      className="py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1 cursor-pointer transition shadow"
+                    >
+                      <span>+ {t.depositShort}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        raminoAudio.playCardSnap();
+                        setIsSettingsModalOpen(false);
+                        onOpenWallet('withdraw');
+                      }}
+                      className="py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center justify-center gap-1 cursor-pointer transition shadow"
+                    >
+                      <span>- {t.withdrawShort}</span>
+                    </button>
+                  </div>
+                )}
+
                 <button
                   type="button"
                   onClick={() => {
@@ -6117,8 +7199,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             </div>
 
             <button
+              type="button"
               onClick={() => setIsSettingsModalOpen(false)}
-              className="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-black text-xs hover:bg-amber-400 transition cursor-pointer"
+              className="shrink-0 mt-3 w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-black text-xs hover:bg-amber-400 transition cursor-pointer"
             >
               {t.understoodCloseBtn}
             </button>
@@ -6130,9 +7213,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           AWESOME PLAYER-FRIENDLY RULES MODAL (VISUAL + CRYSTAL CLEAR)
          ======================================================== */}
       {isRulesModalOpen && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-[100003]">
-          <div className="bg-[#121626] border-2 border-yellow-500/45 rounded-[28px] p-4 sm:p-6 max-w-xl w-full text-left space-y-3.5 shadow-2xl max-h-[88vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 z-[100003] overflow-hidden">
+          <div
+            style={{ maxHeight: modalMaxHeightPx ? `${modalMaxHeightPx}px` : '88dvh' }}
+            className="bg-[#121626] border-2 border-yellow-500/45 rounded-[24px] sm:rounded-[28px] p-4 sm:p-5 max-w-xl w-full text-left flex flex-col overflow-hidden shadow-2xl"
+          >
+            <div className="shrink-0 flex items-center justify-between border-b border-white/10 pb-2.5 mb-2.5">
               <div className="flex items-center gap-2">
                 <span className="text-2xl">🃏</span>
                 <div>
@@ -6143,12 +7229,18 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => setIsRulesModalOpen(false)}
-                className="text-gray-400 hover:text-white font-black text-lg cursor-pointer"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-gray-200 hover:text-white font-black text-sm flex items-center justify-center cursor-pointer"
               >
                 ✕
               </button>
             </div>
+
+            <div
+              style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-3.5 pr-1"
+            >
 
             {/* Visual Card Point Values Quick Reference */}
             <div className="p-3 rounded-2xl bg-gradient-to-br from-amber-500/15 via-slate-900/80 to-emerald-500/10 border border-amber-400/35 space-y-2">
@@ -6249,9 +7341,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               <span>{t.rulesProTipBody}</span>
             </div>
 
+            </div>
+
             <button
+              type="button"
               onClick={() => setIsRulesModalOpen(false)}
-              className="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-black text-xs hover:bg-amber-400 transition cursor-pointer"
+              className="shrink-0 mt-3 w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-black text-xs hover:bg-amber-400 transition cursor-pointer"
             >
               {t.understoodCloseBtn}
             </button>

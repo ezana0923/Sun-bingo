@@ -7,6 +7,7 @@ import { ModernRaminoGame } from './components/ModernRaminoGame';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AdminPanelView } from './components/AdminPanelView';
 import { PlayerAuthScreen, AuthenticatedPlayerPayload } from './components/PlayerAuthScreen';
+import { WalletView } from './components/WalletView';
 import {
   getOrCreateDevicePlayerIdentity,
   saveDevicePlayerIdentity,
@@ -867,6 +868,100 @@ export default function App() {
   });
 
   const [sharedTransactions, setSharedTransactions] = useState<TransactionRecord[]>([]);
+  const [requireDepositApproval, setRequireDepositApproval] = useState<boolean>(true);
+  const [isGlobalWalletOpen, setIsGlobalWalletOpen] = useState<boolean>(false);
+  const [globalWalletTab, setGlobalWalletTab] = useState<'deposit' | 'withdraw' | 'transfer' | 'history'>('deposit');
+  const [globalWalletNotice, setGlobalWalletNotice] = useState<string | null>(null);
+
+  const sharedUsersRef = useRef<UserAccount[]>(sharedUsers);
+  sharedUsersRef.current = sharedUsers;
+
+  const openGlobalWallet = useCallback(
+    (tab: 'deposit' | 'withdraw' | 'transfer' | 'history' = 'deposit') => {
+      setGlobalWalletTab(tab);
+      setGlobalWalletNotice(null);
+      setIsGlobalWalletOpen(true);
+    },
+    []
+  );
+
+  const mergeGlobalTransactions = useCallback((serverTxs: TransactionRecord[]) => {
+    if (!Array.isArray(serverTxs)) return;
+    setSharedTransactions((prev) => {
+      const seen = new Set<string>();
+      const combined: TransactionRecord[] = [];
+      for (const tx of serverTxs) {
+        if (!tx?.id || seen.has(tx.id)) continue;
+        seen.add(tx.id);
+        combined.push(tx);
+      }
+      for (const tx of prev) {
+        if (!tx?.id || seen.has(tx.id)) continue;
+        // Keep optimistic local txs only briefly if not replaced yet
+        if (!tx.id.startsWith('gtx-') && !tx.id.startsWith('ftx-')) continue;
+        seen.add(tx.id);
+        combined.push(tx);
+      }
+      return combined.slice(0, 600);
+    });
+  }, []);
+
+  const recordGameWalletDelta = useCallback(
+    (delta: number, game: 'keno' | 'ramino', reason?: string) => {
+      if (!Number.isFinite(delta) || delta === 0) return;
+      const curUser = sharedUsersRef.current[0];
+      const tempId = `gtx-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const txType: 'bet' | 'win' = delta < 0 ? 'bet' : 'win';
+      const methodLabel = game === 'keno' ? 'Fast Keno' : 'Conker Ramino';
+
+      setSharedUsers((prev) =>
+        prev.map((u, idx) =>
+          idx === 0 ? { ...u, balance: Math.max(0, Number((u.balance + delta).toFixed(2))) } : u
+        )
+      );
+
+      if (curUser) {
+        const optimisticTx: TransactionRecord = {
+          id: tempId,
+          userId: curUser.id,
+          userName: curUser.name,
+          userPhone: curUser.phone,
+          type: txType,
+          method: methodLabel,
+          amount: Math.abs(Number(delta.toFixed(2))),
+          referenceNumber: reason || (txType === 'bet' ? `${methodLabel} Bet` : `${methodLabel} Win`),
+          status: 'approved',
+          timestamp: new Date().toLocaleString(),
+        };
+        setSharedTransactions((prev) => [optimisticTx, ...prev].slice(0, 600));
+      }
+
+      if (curUser?.phone) {
+        fetch(buildApiUrl('/api/wallet/game-tx'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phone: curUser.phone,
+            name: curUser.name,
+            delta,
+            game,
+            reason,
+          }),
+        })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data?.ok && data.transaction) {
+              setSharedTransactions((prev) => {
+                const filtered = prev.filter((t) => t.id !== tempId && t.id !== data.transaction.id);
+                return [data.transaction as TransactionRecord, ...filtered].slice(0, 600);
+              });
+            }
+          })
+          .catch(() => {});
+      }
+    },
+    []
+  );
 
   const currentUserPhone = sharedUsers[0]?.phone;
   const currentUserBalance = sharedUsers[0]?.balance;
@@ -880,10 +975,73 @@ export default function App() {
     }
   }, [currentUserBalance]);
 
-  // Keep unified wallet synced with server across Home Hub, Bingo, Keno, and Ramino
+  // Keep unified wallet & transactions synced with server across Home Hub, Bingo, Keno, and Ramino
   useEffect(() => {
     if (!isLoggedIn) return;
+    const clientId = getDeviceClientId();
+    const phoneParam = encodeURIComponent(sharedUsersRef.current[0]?.phone || '');
+    const nameParam = encodeURIComponent(sharedUsersRef.current[0]?.name || 'Sun Player');
+
+    fetch(
+      buildApiUrl(
+        `/api/live-room/state?mode=fast&phone=${phoneParam}&name=${nameParam}&clientId=${encodeURIComponent(clientId)}`
+      )
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data?.ok) return;
+        if (typeof data.requireDepositApproval === 'boolean') {
+          setRequireDepositApproval(data.requireDepositApproval);
+        }
+        if (Array.isArray(data.transactions)) {
+          mergeGlobalTransactions(data.transactions);
+        }
+        if (Array.isArray(data.players) && data.players.length > 0) {
+          const syncedPlayers = data.players as NonNullable<
+            Parameters<Parameters<typeof subscribeRealtimeRoomSync>[0]>[0]['players']
+          >;
+          setSharedUsers((prev) => {
+            const myPhone = prev[0]?.phone;
+            if (!myPhone) return prev;
+            const serverMe = syncedPlayers.find((p) => p.phone === myPhone);
+            const others = syncedPlayers
+              .filter((p) => p.phone !== myPhone)
+              .map((p, idx) => ({
+                id: p.id || `u-${p.phone || idx}`,
+                name: p.name || `User_${idx}`,
+                phone: p.phone || `091100000${idx}`,
+                passwordHash: '****',
+                balance: typeof p.balance === 'number' ? p.balance : 0,
+                bonusBalance: typeof p.bonusBalance === 'number' ? p.bonusBalance : 0,
+                referralCode: `SUN${(p.phone || '0000').slice(-4)}`,
+                referredCount: 0,
+                referralEarnings: 0,
+                isBlocked: !!p.isBlocked,
+                isAdmin: false,
+                joinedAt: new Date().toISOString().slice(0, 10),
+              }));
+            const updatedMe = serverMe
+              ? {
+                  ...prev[0],
+                  balance: typeof serverMe.balance === 'number' ? serverMe.balance : prev[0].balance,
+                  bonusBalance:
+                    typeof serverMe.bonusBalance === 'number' ? serverMe.bonusBalance : prev[0].bonusBalance,
+                  isBlocked: !!serverMe.isBlocked,
+                }
+              : prev[0];
+            return [updatedMe, ...others];
+          });
+        }
+      })
+      .catch(() => {});
+
     const unsubscribe = subscribeRealtimeRoomSync((msg) => {
+      if (typeof msg?.requireDepositApproval === 'boolean') {
+        setRequireDepositApproval(msg.requireDepositApproval);
+      }
+      if (Array.isArray(msg?.transactions)) {
+        mergeGlobalTransactions(msg.transactions);
+      }
       if (msg?.type === 'room:sync' && Array.isArray(msg.players) && msg.players.length > 0) {
         const syncedPlayers = msg.players;
         setSharedUsers((prev) => {
@@ -920,7 +1078,7 @@ export default function App() {
       }
     });
     return () => unsubscribe();
-  }, [isLoggedIn]);
+  }, [isLoggedIn, mergeGlobalTransactions]);
 
   // Report live player presence heartbeat & poll accurate live counts on Home Hub
   useEffect(() => {
@@ -1440,10 +1598,10 @@ export default function App() {
                   : 'bg-white/95 border-slate-200'
               }`}
             >
-              {/* Left: Wallet Balance */}
+              {/* Left: Wallet Balance -> Opens Unified Global Wallet */}
               <button
                 type="button"
-                onClick={() => handleSwitchMode('fast')}
+                onClick={() => openGlobalWallet('deposit')}
                 className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-sm font-extrabold tabular-nums transition-all cursor-pointer active:scale-95 ${
                   isDark
                     ? 'bg-slate-900/90 hover:bg-slate-800 border-slate-700/80 text-white'
@@ -1861,27 +2019,21 @@ export default function App() {
                   language={language}
                   onChangeLanguage={handleUpdateLanguage}
                   initialBalance={sharedUsers[0]?.balance ?? 500}
-                  onBalanceChange={(newBal) => {
-                    const prevBal = sharedUsers[0]?.balance ?? 0;
+                  playerPhone={sharedUsers[0]?.phone}
+                  playerName={sharedUsers[0]?.name}
+                  onOpenWallet={(tab) => openGlobalWallet(tab || 'deposit')}
+                  onBalanceChange={(newBal, reason) => {
+                    const prevBal = sharedUsersRef.current[0]?.balance ?? 0;
                     const clamped = Math.max(0, newBal);
                     const delta = Number((clamped - prevBal).toFixed(2));
-                    setSharedUsers((prev) =>
-                      prev.map((u, idx) => (idx === 0 ? { ...u, balance: clamped } : u))
-                    );
-                    if (delta !== 0 && sharedUsers[0]?.phone) {
-                      fetch(buildApiUrl('/api/wallet/game-tx'), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          phone: sharedUsers[0].phone,
-                          delta,
-                          game: 'keno',
-                          reason: delta > 0 ? 'Keno payout' : 'Keno wager',
-                        }),
-                      }).catch(() => {});
+                    if (delta !== 0) {
+                      recordGameWalletDelta(
+                        delta,
+                        'keno',
+                        reason || (delta > 0 ? 'Keno payout' : 'Keno wager')
+                      );
                     }
                   }}
-                  onOpenBingo={() => handleSwitchMode('fast')}
                   onBackToLudo={handleReturnToHub}
                 />
               </div>
@@ -1913,11 +2065,262 @@ export default function App() {
                 sharedUsers={sharedUsers}
                 onUpdateSharedUsers={setSharedUsers}
                 onBackToLobby={handleReturnToHub}
+                onOpenWallet={(tab) => openGlobalWallet(tab || 'deposit')}
+                onRecordWalletTx={(delta, reason) =>
+                  recordGameWalletDelta(delta, 'ramino', reason)
+                }
               />
             </div>
           )
         )}
       </div>
+
+      {/* Unified Global Wallet Modal (Accessible from Home Hub, Fast Keno, and Conker Ramino) */}
+      {isLoggedIn && isGlobalWalletOpen && sharedUsers[0] && (
+        <div
+          className="fixed inset-0 z-[200000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-hidden"
+          onClick={() => setIsGlobalWalletOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-2xl max-h-[92dvh] rounded-3xl border shadow-2xl flex flex-col overflow-hidden ${
+              isDark
+                ? 'bg-[#0B1120] border-slate-700 text-slate-100'
+                : 'bg-white border-slate-200 text-slate-900'
+            }`}
+          >
+            <div
+              className={`shrink-0 px-4 py-3 border-b flex items-center justify-between ${
+                isDark ? 'border-slate-800 bg-slate-900/80' : 'border-slate-200 bg-slate-50'
+              }`}
+            >
+              <div className="flex items-center gap-2 font-black text-sm sm:text-base">
+                <Wallet className="w-5 h-5 text-amber-400" />
+                <span>{tHub.walletTitle}</span>
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 font-mono text-xs">
+                  {Math.floor(sharedUsers[0].balance)} {tHub.currencyUnit}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsGlobalWalletOpen(false)}
+                className={`p-1.5 rounded-xl transition cursor-pointer ${
+                  isDark ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-200 text-slate-700'
+                }`}
+                aria-label="Close Wallet"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {globalWalletNotice && (
+              <div className="shrink-0 mx-3 mt-3 px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-400/40 text-amber-300 text-xs font-bold">
+                {globalWalletNotice}
+              </div>
+            )}
+
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 sm:p-4">
+              <WalletView
+                currentUser={sharedUsers[0]}
+                transactions={sharedTransactions.filter((tx) => tx.userPhone === sharedUsers[0].phone)}
+                language={language}
+                isDark={isDark}
+                initialSubTab={globalWalletTab}
+                requireAdminApproval={requireDepositApproval}
+                bankAccounts={bankAccounts}
+                onSubmitDeposit={(method, amount, refNumber, fullSms) => {
+                  const me = sharedUsersRef.current[0];
+                  if (!me) return;
+                  const txStatus: 'pending' | 'approved' = requireDepositApproval ? 'pending' : 'approved';
+                  const tempId = `ftx-${Date.now()}`;
+                  const newTx: TransactionRecord = {
+                    id: tempId,
+                    userId: me.id,
+                    userName: me.name,
+                    userPhone: me.phone,
+                    type: 'deposit',
+                    method,
+                    amount,
+                    referenceNumber: refNumber,
+                    fullSmsText: fullSms,
+                    status: txStatus,
+                    timestamp: new Date().toLocaleString(),
+                  };
+                  setSharedTransactions((prev) => [newTx, ...prev]);
+                  if (txStatus === 'approved') {
+                    setSharedUsers((prev) =>
+                      prev.map((u, i) => (i === 0 ? { ...u, balance: u.balance + amount } : u))
+                    );
+                    setGlobalWalletNotice(`✅ ${amount} ETB ወደ ዋሌትዎ ገቢ ሆኗል!`);
+                  } else {
+                    setGlobalWalletNotice(
+                      `⏳ የ ${amount} ETB ገቢ ጥያቄዎ ተልኳል! ሲጸድቅ ወዲያውኑ ወደ ዋሌትዎ ይገባል።`
+                    );
+                  }
+                  fetch(buildApiUrl('/api/transactions/submit'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      userId: me.id,
+                      userName: me.name,
+                      userPhone: me.phone,
+                      type: 'deposit',
+                      method,
+                      amount,
+                      referenceNumber: refNumber,
+                      fullSmsText: fullSms,
+                    }),
+                  })
+                    .then((r) => r.json())
+                    .then((data) => {
+                      if (!data?.ok) {
+                        setSharedTransactions((prev) => prev.filter((t) => t.id !== tempId));
+                        if (txStatus === 'approved') {
+                          setSharedUsers((prev) =>
+                            prev.map((u, i) =>
+                              i === 0 ? { ...u, balance: Math.max(0, u.balance - amount) } : u
+                            )
+                          );
+                        }
+                        setGlobalWalletNotice(
+                          data?.error || '❌ የተደገመ የክፍያ ደረሰኝ (Duplicate Transaction) ተቀባይነት የለውም!'
+                        );
+                        return;
+                      }
+                      if (Array.isArray(data.transactions)) {
+                        mergeGlobalTransactions(data.transactions);
+                      }
+                    })
+                    .catch(() => {});
+                }}
+                onSubmitWithdraw={(method, amount, accountNumber) => {
+                  const me = sharedUsersRef.current[0];
+                  if (!me) return;
+                  const txStatus: 'pending' | 'approved' = requireDepositApproval ? 'pending' : 'approved';
+                  const tempId = `ftx-${Date.now()}`;
+                  const newTx: TransactionRecord = {
+                    id: tempId,
+                    userId: me.id,
+                    userName: me.name,
+                    userPhone: me.phone,
+                    type: 'withdraw',
+                    method,
+                    amount,
+                    referenceNumber: accountNumber,
+                    status: txStatus,
+                    timestamp: new Date().toLocaleString(),
+                  };
+                  setSharedTransactions((prev) => [newTx, ...prev]);
+                  if (txStatus === 'approved') {
+                    setSharedUsers((prev) =>
+                      prev.map((u, i) =>
+                        i === 0 ? { ...u, balance: Math.max(0, u.balance - amount) } : u
+                      )
+                    );
+                    setGlobalWalletNotice(`✅ ${amount} ETB ወጪ ተከናውኗል!`);
+                  } else {
+                    setGlobalWalletNotice(
+                      `⏳ የ ${amount} ETB ወጪ ጥያቄዎ እየተጣራ ነው (Pending Approval)።`
+                    );
+                  }
+                  fetch(buildApiUrl('/api/transactions/submit'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      userId: me.id,
+                      userName: me.name,
+                      userPhone: me.phone,
+                      type: 'withdraw',
+                      method,
+                      amount,
+                      referenceNumber: accountNumber,
+                    }),
+                  })
+                    .then((r) => r.json())
+                    .then((data) => {
+                      if (!data?.ok) {
+                        setSharedTransactions((prev) => prev.filter((t) => t.id !== tempId));
+                        if (txStatus === 'approved') {
+                          setSharedUsers((prev) =>
+                            prev.map((u, i) => (i === 0 ? { ...u, balance: u.balance + amount } : u))
+                          );
+                        }
+                        setGlobalWalletNotice(data?.error || '❌ የወጪ ጥያቄው አልተሳካም!');
+                        return;
+                      }
+                      if (Array.isArray(data.transactions)) {
+                        mergeGlobalTransactions(data.transactions);
+                      }
+                    })
+                    .catch(() => {});
+                }}
+                onSubmitTransfer={(recipientPhone, amount) => {
+                  const me = sharedUsersRef.current[0];
+                  if (!me) return;
+                  const rawDigits = recipientPhone.replace(/\D/g, '');
+                  const normalizedRecipient =
+                    rawDigits.startsWith('251') && rawDigits.length === 12
+                      ? `0${rawDigits.slice(3)}`
+                      : rawDigits.length === 9 && /^[79]/.test(rawDigits)
+                      ? `0${rawDigits}`
+                      : rawDigits || recipientPhone.trim();
+                  const refCode = `TR-${Date.now().toString().slice(-6)}`;
+                  const newTx: TransactionRecord = {
+                    id: `ftx-${Date.now()}`,
+                    userId: me.id,
+                    userName: me.name,
+                    userPhone: me.phone,
+                    type: 'transfer',
+                    method: 'Wallet',
+                    amount,
+                    referenceNumber: refCode,
+                    recipientPhone: normalizedRecipient,
+                    fullSmsText: `Transfer ${amount.toFixed(2)} ETB from ${me.phone} (${me.name}) to ${normalizedRecipient}`,
+                    status: 'approved',
+                    timestamp: new Date().toLocaleString(),
+                  };
+                  setSharedTransactions((prev) => [newTx, ...prev]);
+                  setSharedUsers((prev) =>
+                    prev.map((u, i) => {
+                      if (i === 0) {
+                        return { ...u, balance: Math.max(0, Number((u.balance - amount).toFixed(2))) };
+                      }
+                      if (u.phone.trim() === normalizedRecipient) {
+                        return { ...u, balance: Number((u.balance + amount).toFixed(2)) };
+                      }
+                      return u;
+                    })
+                  );
+                  setGlobalWalletNotice(
+                    `✅ ${amount.toFixed(2)} ETB ወደ ${normalizedRecipient} ዋሌት በተሳካ ሁኔታ ተልኳል!`
+                  );
+                  fetch(buildApiUrl('/api/transactions/submit'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      userId: me.id,
+                      userName: me.name,
+                      userPhone: me.phone,
+                      type: 'transfer',
+                      method: 'Wallet',
+                      amount,
+                      referenceNumber: refCode,
+                      recipientPhone: normalizedRecipient,
+                    }),
+                  })
+                    .then((r) => r.json())
+                    .then((data) => {
+                      if (data?.ok && Array.isArray(data.transactions)) {
+                        mergeGlobalTransactions(data.transactions);
+                      }
+                    })
+                    .catch(() => {});
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Secret Admin Login Modal (Unlocked via PIN 1234 or 7788) */}
       <AdminLoginModal
