@@ -1,0 +1,13 @@
+node_modules/
+dist/
+server.js
+build/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+.telegram-bots.json
+.render-deploy.json
+.aistudio/
+.github/workflows/

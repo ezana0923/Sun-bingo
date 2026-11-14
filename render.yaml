@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: sun-bingo
+    runtime: node
+    plan: free
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /api/health
+    buildCommand: npm install --legacy-peer-deps --include=dev && npm run build
+    startCommand: node server.js
+    envVars:
+      - key: NODE_VERSION
+        value: 22.23.4
+      - key: NODE_ENV
+        value: production
+      - key: SHARED_APP_URL
+        value: https://sun-bingo.onrender.com
+      - key: ADMIN_SECRET_PIN
+        value: 7788
+      - key: RENDER_DEPLOY_HOOK_URL
+        sync: false

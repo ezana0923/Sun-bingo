@@ -1,0 +1,1818 @@
+<!DOCTYPE html>
+<html lang="am">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EZI Ramino - መቀለ ራሚኖ (ሙሉ ራሱን የቻለ ፋይል)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome CDN for Crisp Vector Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts for Ethiopic and Modern Numbers -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Ethiopic:wght@400;600;700;800;900&family=Plus+Jakarta+Sans:wght@500;700;800&family=JetBrains+Mono:wght@600;800&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['"Noto Sans Ethiopic"', '"Plus Jakarta Sans"', 'sans-serif'],
+                        mono: ['"JetBrains Mono"', 'monospace'],
+                    },
+                    colors: {
+                        darkBg: '#090314',
+                        darkCard: '#121626',
+                        darkBorder: '#232a48',
+                        luxuryGold: '#fbbf24',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { font-family: 'Noto Sans Ethiopic', 'Plus Jakarta Sans', sans-serif; }
+        .card-selected { transform: translateY(-10px) !important; border-color: #facc15 !important; box-shadow: 0 10px 20px -3px rgba(250, 204, 21, 0.4); }
+        .card-dragging { opacity: 0.4; }
+        .suit-pattern {
+            background-image: radial-gradient(circle, rgba(234, 179, 8, 0.08) 1.2px, transparent 1.2px);
+            background-size: 28px 28px;
+        }
+
+        /* Smooth Floating Card Animations */
+        @keyframes cardFloat1 {
+            0%, 100% { transform: translateY(0px) rotate(-12deg) scale(1); }
+            50% { transform: translateY(-22px) rotate(-6deg) scale(1.04); }
+        }
+        @keyframes cardFloat2 {
+            0%, 100% { transform: translateY(0px) rotate(12deg) scale(1); }
+            50% { transform: translateY(-26px) rotate(17deg) scale(1.05); }
+        }
+        @keyframes cardFloat3 {
+            0%, 100% { transform: translateY(0px) rotate(6deg) scale(1); }
+            50% { transform: translateY(-18px) rotate(1deg) scale(1.03); }
+        }
+        @keyframes cardFloat4 {
+            0%, 100% { transform: translateY(0px) rotate(-8deg) scale(1); }
+            50% { transform: translateY(-24px) rotate(-13deg) scale(1.04); }
+        }
+        @keyframes cardFloat5 {
+            0%, 100% { transform: translateY(0px) rotate(3deg) scale(1); }
+            50% { transform: translateY(-16px) rotate(-3deg) scale(1.05); }
+        }
+        @keyframes suitGlowPulse {
+            0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.25; }
+            50% { transform: scale(1.15) rotate(8deg); opacity: 0.5; }
+        }
+
+        .anim-card-1 { animation: cardFloat1 9s ease-in-out infinite; }
+        .anim-card-2 { animation: cardFloat2 11s ease-in-out infinite; }
+        .anim-card-3 { animation: cardFloat3 10s ease-in-out infinite; }
+        .anim-card-4 { animation: cardFloat4 12s ease-in-out infinite; }
+        .anim-card-5 { animation: cardFloat5 8s ease-in-out infinite; }
+        .anim-suit { animation: suitGlowPulse 6s ease-in-out infinite; }
+
+        /* Table Theme Gradients */
+        .theme-emerald {
+            background: radial-gradient(circle at 50% 40%, #0d3d27 0%, #062316 65%, #02110a 100%);
+            box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.9), 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+        }
+        .theme-mahogany {
+            background: radial-gradient(circle at 50% 40%, #3f1e10 0%, #241209 65%, #130904 100%);
+            box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.9), 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+        }
+        .theme-midnight {
+            background: radial-gradient(circle at 50% 40%, #0c2144 0%, #071328 65%, #030814 100%);
+            box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.9), 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+        }
+
+        .card-selected {
+            transform: translateY(-24px) scale(1.08) !important;
+            border-color: #facc15 !important;
+            box-shadow: 0 16px 30px -4px rgba(250, 204, 21, 0.6) !important;
+            z-index: 50 !important;
+        }
+        .card-grouped {
+            border-color: #34d399 !important;
+            box-shadow: 0 0 12px rgba(52, 211, 153, 0.6) !important;
+        }
+
+        /* 3D Stacked Deck Effect */
+        .deck-3d {
+            box-shadow: 0 15px 30px -5px rgba(0,0,0,0.8), 3px 3px 0 #1b2e59, 6px 6px 0 #0d1a38, 9px 9px 0 #070e20;
+        }
+
+        /* Curved Fan Deck Hand */
+        .fan-card {
+            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease;
+            transform-origin: bottom center;
+        }
+        .fan-card:hover {
+            transform: translateY(-20px) scale(1.06) !important;
+            z-index: 45 !important;
+        }
+
+        /* Floating reaction emoji */
+        @keyframes floatEmojiUp {
+            0% { transform: translateY(0) scale(0.6); opacity: 0; }
+            30% { transform: translateY(-30px) scale(1.2); opacity: 1; }
+            70% { transform: translateY(-70px) scale(1.1); opacity: 1; }
+            100% { transform: translateY(-120px) scale(0.8); opacity: 0; }
+        }
+        .flying-emoji {
+            animation: floatEmojiUp 2s ease-out forwards;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #3b2064; border-radius: 4px; }
+    </style>
+<script src="/_aistudio-iframe.js?v=1f94f900"></script></head>
+<body class="bg-[#090314] text-white min-h-screen flex flex-col justify-between selection:bg-yellow-400 selection:text-black relative overflow-x-hidden">
+
+    <!-- Decorative Animated Playing Cards Background (ማራኪና በግልጽ የሚታዩ የካርታ ምስሎች) -->
+    <div class="fixed inset-0 pointer-events-none z-0 overflow-hidden select-none suit-pattern">
+        <!-- Ambient Glow Orbs -->
+        <div class="absolute -top-32 -left-32 w-96 h-96 bg-purple-600/20 rounded-full blur-3xl animate-pulse"></div>
+        <div class="absolute top-1/3 -right-32 w-96 h-96 bg-amber-500/15 rounded-full blur-3xl animate-pulse"></div>
+        <div class="absolute -bottom-32 left-1/4 w-96 h-96 bg-emerald-600/15 rounded-full blur-3xl animate-pulse"></div>
+
+        <!-- Animated Floating Card 1: Ace of Spades (Top-Left) -->
+        <div class="absolute -top-4 -left-6 sm:top-10 sm:left-6 anim-card-1">
+            <div class="w-32 h-48 sm:w-44 sm:h-64 rounded-2xl border-2 border-yellow-400/70 bg-gradient-to-br from-[#1e1338]/90 via-[#0e0720]/95 to-[#241744]/90 p-3 sm:p-4 shadow-2xl shadow-yellow-500/10 flex flex-col justify-between backdrop-blur-sm opacity-35 sm:opacity-45">
+                <div class="flex justify-between items-start">
+                    <div class="text-left font-black text-xl sm:text-2xl text-yellow-300 leading-tight">
+                        A<br><span class="text-base sm:text-lg">♠</span>
+                    </div>
+                    <span class="text-[10px] font-bold text-yellow-500/80 tracking-widest">EZI</span>
+                </div>
+                <div class="text-center my-auto">
+                    <div class="text-5xl sm:text-7xl text-yellow-400 drop-shadow-[0_0_12px_rgba(250,204,21,0.5)] font-serif">♠</div>
+                    <span class="text-[9px] font-black tracking-widest text-yellow-300 uppercase block mt-1">ACE OF SPADES</span>
+                </div>
+                <div class="text-right font-black text-xl sm:text-2xl text-yellow-300 leading-tight rotate-180">
+                    A<br><span class="text-base sm:text-lg">♠</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Animated Floating Card 2: King of Hearts (Top-Right) -->
+        <div class="absolute -top-2 -right-6 sm:top-14 sm:right-8 anim-card-2">
+            <div class="w-32 h-48 sm:w-44 sm:h-64 rounded-2xl border-2 border-rose-500/70 bg-gradient-to-br from-[#2a0c1a]/90 via-[#13050e]/95 to-[#380e22]/90 p-3 sm:p-4 shadow-2xl shadow-rose-500/10 flex flex-col justify-between backdrop-blur-sm opacity-35 sm:opacity-45">
+                <div class="flex justify-between items-start">
+                    <div class="text-left font-black text-xl sm:text-2xl text-rose-400 leading-tight">
+                        K<br><span class="text-base sm:text-lg">♥</span>
+                    </div>
+                    <span class="text-[10px] font-bold text-rose-400/80 tracking-widest">RAMINO</span>
+                </div>
+                <div class="text-center my-auto">
+                    <div class="text-5xl sm:text-7xl text-rose-500 drop-shadow-[0_0_12px_rgba(244,63,94,0.5)] font-serif">♥</div>
+                    <span class="text-[9px] font-black tracking-widest text-rose-300 uppercase block mt-1">KING OF HEARTS</span>
+                </div>
+                <div class="text-right font-black text-xl sm:text-2xl text-rose-400 leading-tight rotate-180">
+                    K<br><span class="text-base sm:text-lg">♥</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Animated Floating Card 3: Queen of Diamonds (Bottom-Left) -->
+        <div class="absolute bottom-16 -left-6 sm:bottom-24 sm:left-8 anim-card-3">
+            <div class="w-30 h-44 sm:w-40 sm:h-60 rounded-2xl border-2 border-amber-400/70 bg-gradient-to-br from-[#2b1b0a]/90 via-[#140b04]/95 to-[#36210b]/90 p-3 sm:p-4 shadow-2xl shadow-amber-500/10 flex flex-col justify-between backdrop-blur-sm opacity-35 sm:opacity-45">
+                <div class="flex justify-between items-start">
+                    <div class="text-left font-black text-lg sm:text-xl text-amber-300 leading-tight">
+                        Q<br><span class="text-sm sm:text-base">♦</span>
+                    </div>
+                    <span class="text-[10px] font-bold text-amber-400/80">MEKELLE</span>
+                </div>
+                <div class="text-center my-auto">
+                    <div class="text-4xl sm:text-6xl text-amber-400 drop-shadow-[0_0_12px_rgba(251,191,36,0.5)] font-serif">♦</div>
+                    <span class="text-[9px] font-black tracking-widest text-amber-300 uppercase block mt-1">QUEEN OF DIAMONDS</span>
+                </div>
+                <div class="text-right font-black text-lg sm:text-xl text-amber-300 leading-tight rotate-180">
+                    Q<br><span class="text-sm sm:text-base">♦</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Animated Floating Card 4: Jack of Clubs (Bottom-Right) -->
+        <div class="absolute bottom-12 -right-6 sm:bottom-20 sm:right-10 anim-card-4">
+            <div class="w-30 h-44 sm:w-40 sm:h-60 rounded-2xl border-2 border-emerald-400/70 bg-gradient-to-br from-[#0c2419]/90 via-[#05140e]/95 to-[#133526]/90 p-3 sm:p-4 shadow-2xl shadow-emerald-500/10 flex flex-col justify-between backdrop-blur-sm opacity-35 sm:opacity-45">
+                <div class="flex justify-between items-start">
+                    <div class="text-left font-black text-lg sm:text-xl text-emerald-300 leading-tight">
+                        J<br><span class="text-sm sm:text-base">♣</span>
+                    </div>
+                    <span class="text-[10px] font-bold text-emerald-400/80">42 PT</span>
+                </div>
+                <div class="text-center my-auto">
+                    <div class="text-4xl sm:text-6xl text-emerald-400 drop-shadow-[0_0_12px_rgba(52,211,153,0.5)] font-serif">♣</div>
+                    <span class="text-[9px] font-black tracking-widest text-emerald-300 uppercase block mt-1">JACK OF CLUBS</span>
+                </div>
+                <div class="text-right font-black text-lg sm:text-xl text-emerald-300 leading-tight rotate-180">
+                    J<br><span class="text-sm sm:text-base">♣</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Glowing Animated Floating Card Suits across middle -->
+        <div class="absolute top-1/2 left-10 text-6xl sm:text-7xl text-yellow-400 anim-suit font-serif select-none pointer-events-none drop-shadow-[0_0_15px_rgba(250,204,21,0.4)]">
+            ♠
+        </div>
+        <div class="absolute top-2/3 right-12 text-6xl sm:text-7xl text-rose-500 anim-suit font-serif select-none pointer-events-none drop-shadow-[0_0_15px_rgba(244,63,94,0.4)]" style="animation-delay: 2s">
+            ♥
+        </div>
+        <div class="absolute top-1/4 left-1/3 text-7xl sm:text-8xl text-amber-400 anim-suit font-serif select-none pointer-events-none drop-shadow-[0_0_15px_rgba(251,191,36,0.3)]" style="animation-delay: 4s">
+            ♦
+        </div>
+        <div class="absolute bottom-1/3 right-1/4 text-7xl sm:text-8xl text-emerald-400 anim-suit font-serif select-none pointer-events-none drop-shadow-[0_0_15px_rgba(52,211,153,0.3)]" style="animation-delay: 1.5s">
+            ♣
+        </div>
+    </div>
+
+    <!-- Navigation Header with 3D Themes & Orientation -->
+    <header class="px-3 sm:px-5 py-2.5 bg-black/60 border-b border-white/10 shadow-lg backdrop-blur-md sticky top-0 z-30 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 to-yellow-400 flex items-center justify-center text-slate-950 font-black shadow text-base select-none">
+                ♠
+            </div>
+            <div>
+                <div class="flex items-center gap-1.5">
+                    <h1 class="text-sm sm:text-base font-black tracking-wider bg-gradient-to-r from-yellow-400 via-amber-200 to-yellow-500 bg-clip-text text-transparent">
+                        EZI RAMINO
+                    </h1>
+                    <span class="text-[9px] bg-yellow-500/20 text-yellow-400 border border-yellow-500/40 px-1.5 py-0.2 rounded-full font-bold">
+                        3D Edition
+                    </span>
+                </div>
+                <p class="text-[10px] text-gray-400 hidden sm:block">የመቀለ ራሚኖ (13 ካርታ • 42 ነጥብ • 3D ቬልቬት ጠረጴዛ)</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-1.5 sm:gap-2">
+            <!-- Theme Selector -->
+            <div class="flex items-center bg-black/50 border border-white/10 rounded-xl p-0.5">
+                <button onclick="setGameTheme('emerald')" class="w-5 h-5 rounded-lg bg-[#0d3d27] border border-emerald-400/60 hover:scale-110 transition" title="Emerald Velvet"></button>
+                <button onclick="setGameTheme('mahogany')" class="w-5 h-5 rounded-lg bg-[#3f1e10] border border-amber-600/60 hover:scale-110 transition ml-1" title="Luxury Mahogany"></button>
+                <button onclick="setGameTheme('midnight')" class="w-5 h-5 rounded-lg bg-[#0c2144] border border-blue-400/60 hover:scale-110 transition ml-1" title="Midnight Blue"></button>
+            </div>
+
+            <!-- Orientation Switch -->
+            <button onclick="toggleOrientation()" id="orientation-btn" class="p-1.5 rounded-xl bg-black/50 border border-white/10 text-gray-300 hover:text-white transition" title="Screen Orientation">
+                <i class="fa-solid fa-mobile-screen text-emerald-400"></i>
+            </button>
+
+            <!-- Rules Modal -->
+            <button onclick="toggleRulesModal(true)" class="px-2 py-1 bg-black/50 hover:bg-black/70 border border-white/10 rounded-xl text-yellow-300 font-bold text-xs flex items-center gap-1 transition">
+                <i class="fa-solid fa-book-open text-yellow-400 text-xs"></i>
+                <span class="hidden sm:inline">ህጎች</span>
+            </button>
+
+            <!-- Sound -->
+            <button onclick="toggleSound()" id="sound-btn" class="p-1.5 bg-black/50 hover:bg-black/70 border border-white/10 rounded-xl text-purple-200 transition" title="ድምፅ">
+                <i class="fa-solid fa-volume-high text-yellow-400"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN VIEW 1: LOBBY -->
+    <main id="lobby-view" class="flex-grow my-4 max-w-md mx-auto w-full px-3 space-y-4 z-10">
+        <!-- Live Stats & Dynamic Player/Room Counter -->
+        <div class="grid grid-cols-3 gap-2 p-2.5 rounded-2xl bg-gradient-to-r from-purple-950/80 via-purple-900/60 to-purple-950/80 border border-yellow-500/30 shadow-md text-xs">
+            <div class="flex flex-col items-center justify-center p-2 rounded-xl bg-purple-950/80 border border-purple-800/60 text-center">
+                <div class="flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                    <span>ተጫዋቾች 👤</span>
+                </div>
+                <span id="stat-live-players" class="text-base font-black text-white mt-0.5">11</span>
+                <span class="text-[9px] text-gray-400">ቀጥታ ስርጭት</span>
+            </div>
+
+            <div class="flex flex-col items-center justify-center p-2 rounded-xl bg-purple-950/80 border border-purple-800/60 text-center">
+                <div class="flex items-center gap-1 text-[11px] font-semibold text-amber-300">
+                    <i class="fa-solid fa-gamepad text-amber-400"></i>
+                    <span>ክፍት ክፍሎች 🎮</span>
+                </div>
+                <span id="stat-open-rooms" class="text-base font-black text-yellow-300 mt-0.5">4</span>
+                <span class="text-[9px] text-gray-400">ንቁ ክፍሎች</span>
+            </div>
+
+            <div class="flex flex-col items-center justify-center p-2 rounded-xl bg-purple-950/80 border border-purple-800/60 text-center">
+                <div class="flex items-center gap-1 text-[11px] font-semibold text-yellow-400">
+                    <i class="fa-solid fa-coins text-yellow-400"></i>
+                    <span>ቀሪ ሂሳብ</span>
+                </div>
+                <span id="wallet-balance-display" class="text-sm font-black text-yellow-300 mt-0.5">1,500 ETB</span>
+                <span class="text-[9px] text-emerald-400 font-bold">ዋሌት</span>
+            </div>
+        </div>
+
+        <!-- Notification Banner -->
+        <div id="lobby-notice" class="hidden p-3 rounded-xl bg-purple-900/90 border border-yellow-400/50 shadow-md flex items-start justify-between gap-2 text-xs text-yellow-200">
+            <span id="lobby-notice-text"></span>
+            <button onclick="hideNotice()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <!-- Open Rooms List -->
+        <div class="p-3.5 rounded-2xl bg-purple-950/60 border border-purple-800/40 shadow-md">
+            <div class="flex justify-between items-center mb-3">
+                <span class="text-xs font-bold text-yellow-400 flex items-center gap-1.5">
+                    <i class="fa-solid fa-gamepad"></i>
+                    ክፍት ክፍሎች (Open Rooms - <span id="room-list-count">4</span>)
+                </span>
+                <button onclick="resetDefaultRooms()" class="text-xs text-purple-300 hover:text-white transition flex items-center gap-1">
+                    <i class="fa-solid fa-rotate-right"></i>
+                    <span class="text-[10px]">አድስ</span>
+                </button>
+            </div>
+            <div id="rooms-container" class="space-y-2 max-h-56 overflow-y-auto pr-1"></div>
+        </div>
+
+        <!-- Players Selection -->
+        <div class="p-3.5 rounded-2xl bg-purple-950/60 border border-purple-800/40 shadow-md">
+            <div class="flex justify-between items-center mb-2">
+                <span class="text-xs font-semibold text-purple-200 flex items-center gap-1.5">
+                    <i class="fa-solid fa-users text-yellow-400"></i>
+                    የተጨዋቾች ብዛት ይምረጡ:
+                </span>
+                <span id="deck-count-indicator" class="text-[10px] text-yellow-400 font-bold">
+                    1 ዲክ (54 ካርታ)
+                </span>
+            </div>
+            <div class="grid grid-cols-4 gap-2">
+                <button onclick="selectPlayerCount(2)" id="btn-player-2" class="player-select-btn py-2 px-1 rounded-xl font-bold text-xs transition border flex flex-col items-center justify-center bg-purple-800 text-yellow-300 border-yellow-400 font-black">
+                    <span>2 Player</span>
+                    <span class="text-[9px] text-gray-300 font-normal">⏱️ 60s</span>
+                </button>
+                <button onclick="selectPlayerCount(3)" id="btn-player-3" class="player-select-btn py-2 px-1 rounded-xl font-bold text-xs transition border flex flex-col items-center justify-center bg-purple-950/80 text-gray-300 border-purple-800">
+                    <span>3 Player</span>
+                    <span class="text-[9px] text-gray-400 font-normal">⏱️ 180s</span>
+                </button>
+                <button onclick="selectPlayerCount(4)" id="btn-player-4" class="player-select-btn py-2 px-1 rounded-xl font-bold text-xs transition border flex flex-col items-center justify-center bg-purple-950/80 text-gray-300 border-purple-800">
+                    <span>4 Player</span>
+                    <span class="text-[9px] text-gray-400 font-normal">⏱️ 240s</span>
+                </button>
+                <button onclick="selectPlayerCount(5)" id="btn-player-5" class="player-select-btn py-2 px-1 rounded-xl font-bold text-xs transition border flex flex-col items-center justify-center bg-purple-950/80 text-gray-300 border-purple-800">
+                    <span>5 Player</span>
+                    <span class="text-[9px] text-gray-400 font-normal">⏱️ 300s</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- ETB Stakes Input -->
+        <div class="p-3.5 rounded-2xl bg-purple-950/60 border border-purple-800/40 shadow-md space-y-2.5">
+            <span class="text-xs font-semibold text-purple-200 flex items-center gap-1.5">
+                <i class="fa-solid fa-coins text-yellow-400"></i>
+                የውርርድ መጠን (ETB ያስገቡ ወይም ይምረጡ):
+            </span>
+            <div class="relative">
+                <input type="number" id="custom-stake-input" oninput="onStakeInput(this.value)" placeholder="የብር መጠን ያስገቡ (ለምሳሌ: 250)" class="w-full bg-purple-900/80 border border-yellow-500/50 rounded-xl px-3 py-2.5 text-yellow-300 font-bold text-sm focus:outline-none focus:border-yellow-400">
+                <span class="absolute right-3.5 top-2.5 text-xs font-black text-yellow-400">ETB</span>
+            </div>
+            <div class="grid grid-cols-5 gap-2 text-center font-bold text-xs" id="quick-stakes-container"></div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="space-y-2 pt-1">
+            <button onclick="handleCreateRoom()" class="w-full bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-purple-950 font-black py-3 rounded-2xl shadow-xl border border-yellow-300 text-sm tracking-wide flex items-center justify-center gap-2 transition active:scale-95">
+                <i class="fa-solid fa-plus font-bold"></i>
+                <span id="create-room-btn-text">ክፍል ፍጠር (30 ETB | 2 ተጫዋቾች)</span>
+            </button>
+            <div class="grid grid-cols-2 gap-2">
+                <button onclick="openPrivateMenu()" class="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white font-bold py-2.5 rounded-xl shadow border border-emerald-400/40 text-xs flex items-center justify-center gap-1.5 active:scale-95 transition">
+                    <i class="fa-solid fa-lock text-yellow-300"></i>
+                    <span>Private Room</span>
+                </button>
+                <button onclick="openJoinModal()" class="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-2.5 rounded-xl shadow border border-blue-400/40 text-xs flex items-center justify-center gap-1.5 active:scale-95 transition">
+                    <i class="fa-solid fa-key"></i>
+                    <span>በኮድ ተቀላቀል</span>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- MAIN VIEW 2: GAMEPLAY TABLE (3D/Isometric Velvet Table with Curved Fan Deck & Glowing Timer Rings) -->
+    <main id="game-view" class="hidden flex-1 max-w-6xl w-full mx-auto p-2 sm:p-4 flex flex-col justify-between gap-3 z-10 relative">
+        <!-- 3D Felt Table Shell -->
+        <div id="table-felt-container" class="w-full flex-1 rounded-3xl p-3 sm:p-5 flex flex-col justify-between gap-3 relative transition-all duration-500 theme-emerald border border-amber-500/25">
+            <!-- Subtle Gold Bezel Inlay -->
+            <div class="absolute inset-2 sm:inset-3 rounded-2xl border border-amber-400/20 pointer-events-none"></div>
+
+            <!-- Top Floating HUD: Close Button, Circular Floating Avatars with Neon Rings & Options -->
+            <div class="px-3 py-2 rounded-2xl bg-black/60 border border-white/10 shadow-lg flex items-center justify-between z-20 backdrop-blur-md">
+                <div class="flex items-center gap-2">
+                    <button onclick="exitToLobby()" class="px-3 py-1.5 rounded-xl bg-black/50 hover:bg-black/70 border border-white/10 text-xs font-bold text-gray-200 flex items-center gap-1.5 transition">
+                        <i class="fa-solid fa-arrow-left text-gray-400"></i>
+                        <span>ውጣ (Lobby)</span>
+                    </button>
+                </div>
+
+                <!-- Opponent Seats: Circular Floating Avatars with Glowing Neon Timer Rings -->
+                <div class="flex items-center gap-4 sm:gap-8">
+                    <!-- Opponent 1: Kaleb (Turn / Dealer) -->
+                    <div class="flex flex-col items-center relative group">
+                        <div class="relative w-11 h-11 sm:w-12 sm:h-12 flex items-center justify-center">
+                            <!-- Neon Progress Ring -->
+                            <svg class="w-11 h-11 transform -rotate-90">
+                                <circle cx="22" cy="22" r="18" stroke="#ffffff15" stroke-width="3" fill="transparent" />
+                                <circle id="opponent-timer-ring" cx="22" cy="22" r="18" stroke="#f59e0b" stroke-width="3" stroke-dasharray="113" stroke-dashoffset="30" stroke-linecap="round" fill="transparent" class="transition-all duration-1000" />
+                            </svg>
+                            <div class="w-8 h-8 rounded-full bg-sky-400 text-slate-950 font-black flex items-center justify-center text-xs shadow-md">
+                                K
+                            </div>
+                            <span class="absolute -top-1 -right-1 bg-amber-400 text-slate-950 text-[8px] font-black px-1 rounded-full border border-black shadow">
+                                👑
+                            </span>
+                        </div>
+                        <span class="font-bold text-gray-200 text-xs mt-0.5 leading-tight">Kaleb</span>
+                        <div class="flex items-center gap-1 text-[9px] text-gray-400 font-mono mt-0.5">
+                            <span class="text-yellow-400 font-black">🂠 <span id="kaleb-card-count">14</span></span>
+                            <span class="text-emerald-400 font-bold bg-emerald-950/60 px-1 rounded border border-emerald-500/30">68pt</span>
+                        </div>
+                    </div>
+
+                    <!-- Latency indicator -->
+                    <div class="hidden sm:flex items-center gap-1 bg-black/70 border border-emerald-500/30 px-2 py-0.5 rounded-full text-[10px] text-emerald-400 font-mono shadow">
+                        <i class="fa-solid fa-wifi text-emerald-400"></i>
+                        <span>154 ms</span>
+                    </div>
+
+                    <!-- Opponent 2: Amanuel -->
+                    <div class="flex flex-col items-center relative group">
+                        <div class="relative w-11 h-11 sm:w-12 sm:h-12 flex items-center justify-center">
+                            <div class="w-9 h-9 rounded-full bg-rose-400 text-slate-950 font-black flex items-center justify-center text-xs shadow-md border border-white/20">
+                                A
+                            </div>
+                        </div>
+                        <span class="font-bold text-gray-200 text-xs mt-0.5 leading-tight">Amanuel</span>
+                        <div class="flex items-center gap-1 text-[9px] text-gray-400 font-mono mt-0.5">
+                            <span class="text-yellow-400 font-black">🂠 13</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-1.5">
+                    <button onclick="toggleEmojiWheel()" class="p-2 rounded-xl bg-black/50 hover:bg-black/70 border border-white/10 text-amber-300 transition" title="Reaction Emoji">
+                        <i class="fa-solid fa-face-smile text-amber-400"></i>
+                    </button>
+                    <button onclick="toggleRulesModal(true)" class="w-8 h-8 rounded-xl bg-black/50 hover:bg-black/70 border border-white/10 flex items-center justify-center text-gray-300">
+                        <i class="fa-solid fa-ellipsis"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Emoji Wheel Popup -->
+            <div id="emoji-wheel-popup" class="hidden absolute right-4 top-16 bg-[#121626]/95 border border-[#232a48] rounded-2xl p-2.5 shadow-2xl z-40 backdrop-blur-md flex items-center gap-2 flex-wrap max-w-xs">
+                <button onclick="sendEmoji('🔥')" class="text-2xl p-1 hover:scale-125 transition">🔥</button>
+                <button onclick="sendEmoji('👏')" class="text-2xl p-1 hover:scale-125 transition">👏</button>
+                <button onclick="sendEmoji('😂')" class="text-2xl p-1 hover:scale-125 transition">😂</button>
+                <button onclick="sendEmoji('👑')" class="text-2xl p-1 hover:scale-125 transition">👑</button>
+                <button onclick="sendEmoji('🃏')" class="text-2xl p-1 hover:scale-125 transition">🃏</button>
+                <button onclick="sendEmoji('⚡')" class="text-2xl p-1 hover:scale-125 transition">⚡</button>
+                <button onclick="sendEmoji('💸')" class="text-2xl p-1 hover:scale-125 transition">💸</button>
+                <button onclick="sendEmoji('🤫')" class="text-2xl p-1 hover:scale-125 transition">🤫</button>
+            </div>
+
+            <!-- Center Table Surface matching screenshot -->
+            <div class="flex-1 flex flex-col md:flex-row items-center justify-between gap-4 py-2 px-2 sm:px-6">
+                <!-- Left: Concentric Neon Rings + Ornate Card Back 'C' + Discard A♠ + Arc Fan Tray -->
+                <div class="relative flex items-center">
+                    <!-- Concentric Neon Rings -->
+                    <div class="absolute -left-6 -top-10 w-44 h-44 rounded-full border border-teal-400/25 pointer-events-none"></div>
+                    <div class="absolute -left-2 -top-6 w-36 h-36 rounded-full border border-teal-400/35 pointer-events-none shadow-[0_0_20px_rgba(45,212,191,0.25)]"></div>
+                    <div class="absolute left-2 -top-2 w-28 h-28 rounded-full border border-teal-400/45 pointer-events-none"></div>
+
+                    <!-- 3D Draw Deck with 'C' and diamond lattice -->
+                    <div onclick="drawFromStock()" class="relative w-18 h-26 sm:w-22 sm:h-30 rounded-xl bg-[#0a1835] border-2 border-[#3b5998] shadow-2xl flex items-center justify-center cursor-pointer hover:scale-105 active:scale-95 transition z-20 mr-2" title="ካርታ ይሳቡ">
+                        <div class="absolute inset-1.5 rounded-lg border border-yellow-400/40 pointer-events-none"></div>
+                        <div class="w-9 h-9 sm:w-10 sm:h-10 rounded-full border-2 border-yellow-400 bg-black/60 shadow-[0_0_12px_rgba(250,204,21,0.6)] flex items-center justify-center">
+                            <span class="text-yellow-300 font-serif font-black text-sm">C</span>
+                        </div>
+                    </div>
+
+                    <!-- Discard Pile with open A♠ -->
+                    <div onclick="drawFromDiscard()" id="discard-pile-display" class="relative w-18 h-26 sm:w-22 sm:h-30 rounded-xl bg-white text-slate-950 font-bold border border-slate-300 shadow-[0_12px_24px_rgba(0,0,0,0.6)] flex flex-col justify-between p-1.5 cursor-pointer hover:scale-105 active:scale-95 transition z-20 transform rotate-3" title="የተጣለ ካርድ">
+                        <span class="text-xs font-black text-left" id="discard-card-corner">A♠</span>
+                        <span class="text-3xl text-center leading-none" id="discard-card-center">♠</span>
+                        <span class="text-xs font-black text-right rotate-180" id="discard-card-bottom">A♠</span>
+                    </div>
+
+                    <!-- Semicircular Arc Tray Cards (7♦ 8♦ 9♦ 10♦ J♦ 10♦ 7♣ 9♣) -->
+                    <div class="relative flex items-center -space-x-8 sm:-space-x-9 ml-2 z-10">
+                        <div class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow -rotate-18">
+                            <span class="text-[10px] font-black text-red-600">7</span><span class="text-xs text-center text-red-600">♦</span><span class="text-[10px] text-right font-black text-red-600 rotate-180">7</span>
+                        </div>
+                        <div class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow -rotate-12">
+                            <span class="text-[10px] font-black text-red-600">8</span><span class="text-xs text-center text-red-600">♦</span><span class="text-[10px] text-right font-black text-red-600 rotate-180">8</span>
+                        </div>
+                        <div class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow -rotate-6">
+                            <span class="text-[10px] font-black text-red-600">9</span><span class="text-xs text-center text-red-600">♦</span><span class="text-[10px] text-right font-black text-red-600 rotate-180">9</span>
+                        </div>
+                        <div class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow rotate-0">
+                            <span class="text-[10px] font-black text-red-600">10</span><span class="text-xs text-center text-red-600">♦</span><span class="text-[10px] text-right font-black text-red-600 rotate-180">10</span>
+                        </div>
+                        <div class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow rotate-6">
+                            <span class="text-[10px] font-black text-red-600">J</span><span class="text-xs text-center text-red-600">♦</span><span class="text-[10px] text-right font-black text-red-600 rotate-180">J</span>
+                        </div>
+                        <div class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow rotate-12">
+                            <span class="text-[10px] font-black text-red-600">10</span><span class="text-xs text-center text-red-600">♦</span><span class="text-[10px] text-right font-black text-red-600 rotate-180">10</span>
+                        </div>
+                        <div class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow rotate-18">
+                            <span class="text-[10px] font-black text-slate-900">7</span><span class="text-xs text-center text-slate-900">♣</span><span class="text-[10px] text-right font-black text-slate-900 rotate-180">7</span>
+                        </div>
+                        <div class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow rotate-24">
+                            <span class="text-[10px] font-black text-slate-900">9</span><span class="text-xs text-center text-slate-900">♣</span><span class="text-[10px] text-right font-black text-slate-900 rotate-180">9</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Center Melds: 7♦ 8♦ 9♦ 10♦ J♦ and 7♣ 8♣ 9♣ -->
+                <div class="flex flex-col items-center gap-3 z-20">
+                    <!-- Meld 1 -->
+                    <div class="relative p-1.5 rounded-2xl bg-black/30 border border-teal-500/20 backdrop-blur-sm shadow-xl">
+                        <div class="flex items-center -space-x-3 sm:-space-x-4">
+                            <div class="w-11 h-16 sm:w-13 sm:h-19 rounded-xl bg-white border border-slate-300 p-1 flex flex-col justify-between text-red-600 font-bold text-xs shadow">
+                                <span>7</span><span class="text-sm text-center">♦</span><span class="text-right rotate-180">7</span>
+                            </div>
+                            <div class="w-11 h-16 sm:w-13 sm:h-19 rounded-xl bg-white border border-slate-300 p-1 flex flex-col justify-between text-red-600 font-bold text-xs shadow">
+                                <span>8</span><span class="text-sm text-center">♦</span><span class="text-right rotate-180">8</span>
+                            </div>
+                            <div class="w-11 h-16 sm:w-13 sm:h-19 rounded-xl bg-white border border-slate-300 p-1 flex flex-col justify-between text-red-600 font-bold text-xs shadow">
+                                <span>9</span><span class="text-sm text-center">♦</span><span class="text-right rotate-180">9</span>
+                            </div>
+                            <div class="w-11 h-16 sm:w-13 sm:h-19 rounded-xl bg-white border border-slate-300 p-1 flex flex-col justify-between text-red-600 font-bold text-xs shadow">
+                                <span>10</span><span class="text-sm text-center">♦</span><span class="text-right rotate-180">10</span>
+                            </div>
+                            <div class="w-11 h-16 sm:w-13 sm:h-19 rounded-xl bg-white border border-slate-300 p-1 flex flex-col justify-between text-red-600 font-bold text-xs shadow">
+                                <span>J</span><span class="text-sm text-center">♦</span><span class="text-right rotate-180">J</span>
+                            </div>
+                        </div>
+                        <div class="w-full h-0.5 bg-gradient-to-r from-transparent via-teal-400 to-transparent mt-1 opacity-70"></div>
+                    </div>
+
+                    <!-- Meld 2 -->
+                    <div class="relative p-1.5 rounded-2xl bg-black/30 border border-teal-500/20 backdrop-blur-sm shadow-xl">
+                        <div class="flex items-center -space-x-3 sm:-space-x-4">
+                            <div class="w-11 h-16 sm:w-13 sm:h-19 rounded-xl bg-white border border-slate-300 p-1 flex flex-col justify-between text-slate-900 font-bold text-xs shadow">
+                                <span>7</span><span class="text-sm text-center">♣</span><span class="text-right rotate-180">7</span>
+                            </div>
+                            <div class="w-11 h-16 sm:w-13 sm:h-19 rounded-xl bg-white border border-slate-300 p-1 flex flex-col justify-between text-slate-900 font-bold text-xs shadow">
+                                <span>8</span><span class="text-sm text-center">♣</span><span class="text-right rotate-180">8</span>
+                            </div>
+                            <div class="w-11 h-16 sm:w-13 sm:h-19 rounded-xl bg-white border border-slate-300 p-1 flex flex-col justify-between text-slate-900 font-bold text-xs shadow">
+                                <span>9</span><span class="text-sm text-center">♣</span><span class="text-right rotate-180">9</span>
+                            </div>
+                        </div>
+                        <div class="w-full h-0.5 bg-gradient-to-r from-transparent via-teal-400 to-transparent mt-1 opacity-70"></div>
+                    </div>
+                </div>
+
+                <!-- Right: Full Peacock Fan with Concentric Rings + 'C' Pivot -->
+                <div class="relative flex items-center justify-center">
+                    <div class="absolute right-0 bottom-0 w-36 h-36 rounded-full border border-teal-400/35 pointer-events-none shadow-[0_0_25px_rgba(45,212,191,0.3)]"></div>
+                    <div class="absolute right-4 bottom-4 w-28 h-28 rounded-full border border-teal-400/45 pointer-events-none"></div>
+
+                    <!-- Fan cards -->
+                    <div class="relative flex items-end justify-center w-52 h-40">
+                        <div style="transform: rotate(-36deg); position: absolute; bottom: 8px; right: 28px;" class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow text-red-600 font-bold text-[10px]">
+                            <span>A</span><span class="text-xs text-center">♦</span><span class="text-right rotate-180">A</span>
+                        </div>
+                        <div style="transform: rotate(-28deg); position: absolute; bottom: 8px; right: 28px;" class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow text-slate-900 font-bold text-[10px]">
+                            <span>2</span><span class="text-xs text-center">♣</span><span class="text-right rotate-180">2</span>
+                        </div>
+                        <div style="transform: rotate(-20deg); position: absolute; bottom: 8px; right: 28px;" class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow text-slate-900 font-bold text-[10px]">
+                            <span>2</span><span class="text-xs text-center">♠</span><span class="text-right rotate-180">2</span>
+                        </div>
+                        <div style="transform: rotate(-12deg); position: absolute; bottom: 8px; right: 28px;" class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow text-red-600 font-bold text-[10px]">
+                            <span>2</span><span class="text-xs text-center">♦</span><span class="text-right rotate-180">2</span>
+                        </div>
+                        <div style="transform: rotate(-4deg); position: absolute; bottom: 8px; right: 28px;" class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow text-slate-900 font-bold text-[10px]">
+                            <span>9</span><span class="text-xs text-center">♣</span><span class="text-right rotate-180">9</span>
+                        </div>
+                        <div style="transform: rotate(4deg); position: absolute; bottom: 8px; right: 28px;" class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow text-slate-900 font-bold text-[10px]">
+                            <span>J</span><span class="text-xs text-center">♣</span><span class="text-right rotate-180">J</span>
+                        </div>
+                        <div style="transform: rotate(12deg); position: absolute; bottom: 8px; right: 28px;" class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow text-slate-900 font-bold text-[10px]">
+                            <span>J</span><span class="text-xs text-center">♠</span><span class="text-right rotate-180">J</span>
+                        </div>
+                        <div style="transform: rotate(20deg); position: absolute; bottom: 8px; right: 28px;" class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow text-red-600 font-bold text-[10px]">
+                            <span>10</span><span class="text-xs text-center">♦</span><span class="text-right rotate-180">10</span>
+                        </div>
+                        <div style="transform: rotate(28deg); position: absolute; bottom: 8px; right: 28px;" class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border border-slate-300 p-1 flex flex-col justify-between shadow text-slate-900 font-bold text-[10px]">
+                            <span>K</span><span class="text-xs text-center">♣</span><span class="text-right rotate-180">K</span>
+                        </div>
+                        <!-- Top Joker Card -->
+                        <div style="transform: rotate(36deg); position: absolute; bottom: 8px; right: 28px;" class="w-10 h-16 sm:w-12 sm:h-18 rounded-lg bg-white border-2 border-yellow-400 p-1 flex flex-col justify-between shadow-xl text-rose-600 font-black text-[9px]">
+                            <span>JOKER</span>
+                            <span class="text-base text-center">🃏</span>
+                            <span class="rotate-180 text-right">JOKER</span>
+                        </div>
+
+                        <!-- Central 'C' Pivot Emblem -->
+                        <div class="absolute right-10 bottom-2 w-9 h-9 rounded-full border-2 border-yellow-400 bg-black/85 flex items-center justify-center text-yellow-300 font-serif font-black text-xs shadow-[0_0_12px_rgba(250,204,21,0.8)] z-30 pointer-events-none">
+                            C
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Area: Left HUD (1:49, Prince Jo) + Center Hand Cards + Right '+ ደርድር' Button -->
+            <div class="relative z-30 flex flex-col md:flex-row items-end justify-between gap-3 pt-1">
+                <!-- Left HUD: Timer & Player Info Box matching screenshot -->
+                <div class="relative rounded-2xl bg-black/80 border-2 border-[#f59e0b]/70 p-2.5 min-w-[155px] shadow-[0_10px_25px_rgba(0,0,0,0.8)] backdrop-blur-md">
+                    <!-- Timer Row: 1:49 -->
+                    <div class="flex items-center justify-between">
+                        <span id="turn-timer-val" class="text-2xl font-black font-sans tracking-wide text-white leading-none">
+                            1:49
+                        </span>
+                    </div>
+
+                    <!-- Gold Progress Bar Line -->
+                    <div class="w-full h-1 bg-black/60 rounded-full overflow-hidden my-2 border border-yellow-500/20">
+                        <div id="turn-timer-progress-bar" class="h-full bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-500 rounded-full" style="width: 85%"></div>
+                    </div>
+
+                    <!-- Player Info Row -->
+                    <div class="flex items-center gap-2 pt-0.5">
+                        <div class="w-7 h-7 rounded-full bg-[#f59e0b] text-slate-950 font-black flex items-center justify-center text-xs shadow">
+                            P
+                        </div>
+                        <div class="flex flex-col">
+                            <span class="text-xs font-bold text-gray-200 leading-tight">Prince jo</span>
+                            <span class="text-[10px] text-gray-400 font-semibold"><span id="player-card-count">13</span> ካርታ</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Center: Curved Fan Hand Cards (2♠ 2♣ 2♦ J♠ J♣ K♥ A♣ 3♣ 3♣ 6♣ Q♦ Q♦ JOKER) -->
+                <div class="flex-1 w-full flex items-end justify-center overflow-visible pb-1">
+                    <div id="player-hand-container" class="flex items-end -space-x-3 sm:-space-x-4 px-2 overflow-visible"></div>
+                </div>
+
+                <!-- Right Controls: The Distinctive '+ ደርድር' Button and '> •••' Pill -->
+                <div class="flex flex-col items-center sm:items-end gap-2">
+                    <button onclick="autoSortHand('suit')" class="relative px-6 py-2.5 rounded-2xl bg-black/80 hover:bg-black/90 border-2 border-[#f59e0b] hover:border-yellow-300 text-yellow-300 font-black text-sm tracking-wide shadow-[0_0_20px_rgba(245,158,11,0.4)] flex items-center justify-center gap-2 transition-all active:scale-95">
+                        <span class="text-lg font-light leading-none text-yellow-400">+</span>
+                        <span class="text-base tracking-wider">ደርድር</span>
+                    </button>
+
+                    <div class="flex items-center gap-2">
+                        <button onclick="handleDiscardSelected()" class="px-3 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs border border-rose-400 shadow-lg active:scale-95 transition">
+                            ጣል
+                        </button>
+                        <button onclick="handleMeldAttempt()" class="px-3 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs border border-emerald-400 shadow-lg active:scale-95 transition">
+                            ውረድ
+                        </button>
+                        <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-black/75 border border-teal-500/30 text-gray-300">
+                            <i class="fa-solid fa-chevron-right text-gray-400 text-xs"></i>
+                            <span class="text-gray-600">|</span>
+                            <i class="fa-solid fa-ellipsis text-gray-400 text-xs"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- DEALER CUT CEREMONY MODAL OVERLAY ("ማን ያከፋፍላል? ከፍተኛ ካርድ") -->
+        <div id="ceremony-overlay" class="hidden absolute inset-0 bg-black/85 backdrop-blur-md z-50 flex flex-col items-center justify-center p-4">
+            <div class="bg-[#120822] border-2 border-yellow-500/50 rounded-full px-6 py-2 shadow-2xl flex items-center gap-2 mb-8">
+                <span class="text-xl">🃏</span>
+                <h2 class="text-base sm:text-lg font-black text-yellow-300 tracking-wide">ማን ያከፋፍላል? ከፍተኛ ካርድ</h2>
+            </div>
+            <div class="flex items-center justify-center gap-6 sm:gap-10 mb-8" id="ceremony-cards-row">
+                <!-- Amanuel: 6♦ -->
+                <div class="flex flex-col items-center gap-3">
+                    <div id="ceremony-card-0" class="w-20 h-30 sm:w-26 sm:h-38 rounded-2xl border-2 border-slate-300 bg-white text-rose-600 font-bold p-2 shadow-2xl flex flex-col justify-between">
+                        <div class="text-xs font-black">6♦</div>
+                        <div class="text-3xl text-center">♦</div>
+                        <div class="text-xs font-black text-right rotate-180">6♦</div>
+                    </div>
+                    <div class="flex items-center gap-1.5 bg-black/60 border border-white/20 px-3 py-1 rounded-full text-xs font-bold">
+                        <div class="w-5 h-5 rounded-full bg-rose-400 text-slate-950 font-black flex items-center justify-center text-[10px]">A</div>
+                        <span>Amanuel</span>
+                    </div>
+                </div>
+                <!-- Prince jo: 9♣ -->
+                <div class="flex flex-col items-center gap-3">
+                    <div id="ceremony-card-1" class="w-20 h-30 sm:w-26 sm:h-38 rounded-2xl border-2 border-slate-300 bg-white text-slate-900 font-bold p-2 shadow-2xl flex flex-col justify-between">
+                        <div class="text-xs font-black">9♣</div>
+                        <div class="text-3xl text-center">♣</div>
+                        <div class="text-xs font-black text-right rotate-180">9♣</div>
+                    </div>
+                    <div class="flex items-center gap-1.5 bg-black/60 border border-white/20 px-3 py-1 rounded-full text-xs font-bold">
+                        <div class="w-5 h-5 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center text-[10px]">P</div>
+                        <span>Prince jo</span>
+                    </div>
+                </div>
+                <!-- Kaleb: 10♣ (Winner Aura) -->
+                <div class="flex flex-col items-center gap-3">
+                    <div id="ceremony-card-2" class="w-20 h-30 sm:w-26 sm:h-38 rounded-2xl border-2 border-yellow-400 ring-4 ring-yellow-400/60 bg-white text-slate-900 font-bold p-2 shadow-2xl flex flex-col justify-between scale-105">
+                        <div class="text-xs font-black">10♣</div>
+                        <div class="text-3xl text-center">♣</div>
+                        <div class="text-xs font-black text-right rotate-180">10♣</div>
+                    </div>
+                    <div class="flex items-center gap-1.5 bg-black/60 border border-white/20 px-3 py-1 rounded-full text-xs font-bold">
+                        <div class="w-5 h-5 rounded-full bg-sky-400 text-slate-950 font-black flex items-center justify-center text-[10px]">K</div>
+                        <span>Kaleb</span>
+                    </div>
+                    <div class="bg-black/80 border border-yellow-400 text-yellow-300 text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                        DEALER
+                    </div>
+                </div>
+            </div>
+            <div id="ceremony-banner" class="bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-slate-950 font-black px-6 py-2.5 rounded-full shadow-2xl text-sm mb-4">
+                👑 Kaleb ያከፋፍላሉ • 10♣
+            </div>
+            <button onclick="document.getElementById('ceremony-overlay').classList.add('hidden')" class="text-xs text-gray-400 hover:text-white underline">
+                ቀጥል (Skip to Play)
+            </button>
+        </div>
+    </main>
+
+    <!-- Footer Notice -->
+    <footer class="px-4 py-2 bg-purple-950/70 border-t border-purple-800/50 text-center text-xs text-yellow-300 z-10">
+        <span id="footer-status-msg">🎮 EZI Ramino - ለመጫወት ክፍል ይምረጡ ወይም ይፍጠሩ!</span>
+    </footer>
+
+    <!-- ============================================================ -->
+    <!-- MODAL 1: PRIVATE ROOM (Matches Attached Screenshot)          -->
+    <!-- ============================================================ -->
+    <div id="modal-private-menu" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-[#121626] border border-[#232a48] rounded-[28px] p-6 max-w-sm w-full text-center space-y-4 shadow-2xl">
+            <!-- Modal Title with yellow lock and text -->
+            <div class="flex items-center justify-center gap-2.5 pt-1 pb-2">
+                <i class="fa-solid fa-lock text-yellow-400 text-2xl"></i>
+                <h2 class="text-2xl font-black text-yellow-400 tracking-wide">
+                    Private Room
+                </h2>
+            </div>
+            <!-- Action Buttons -->
+            <div class="space-y-3 pt-1">
+                <!-- Button 1: + Create private room -->
+                <button onclick="createPrivateRoomFlow()" class="w-full bg-[#16a34a] hover:bg-[#15803d] active:scale-98 text-white font-extrabold text-lg py-3.5 px-6 rounded-2xl shadow-lg flex items-center justify-center gap-2 transition">
+                    <span class="text-2xl font-light leading-none">+</span>
+                    <span>Create private room</span>
+                </button>
+                <!-- Button 2: 🔑 Join private room -->
+                <button onclick="closePrivateMenu(); openJoinModal();" class="w-full bg-[#2563eb] hover:bg-[#1d4ed8] active:scale-98 text-white font-extrabold text-lg py-3.5 px-6 rounded-2xl shadow-lg flex items-center justify-center gap-2 transition">
+                    <i class="fa-solid fa-key"></i>
+                    <span>Join private room</span>
+                </button>
+                <!-- Button 3: ✕ ተመለስ -->
+                <button onclick="closePrivateMenu()" class="w-full bg-[#0d1222] hover:bg-[#171f38] active:scale-98 text-slate-300 font-bold text-sm py-3 px-6 rounded-2xl border border-[#232a44] flex items-center justify-center gap-2 transition mt-1">
+                    <span class="text-rose-500 font-bold text-base">✕</span>
+                    <span class="text-slate-300">ተመለስ</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- MODAL 2: CREATED PRIVATE ROOM SHARE / CODE                   -->
+    <!-- ============================================================ -->
+    <div id="modal-created-room" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-[#121626] border border-[#232a48] rounded-[28px] p-6 max-w-sm w-full text-center space-y-4 shadow-2xl">
+            <div class="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 mx-auto flex items-center justify-center text-emerald-400 text-2xl">
+                <i class="fa-solid fa-circle-check"></i>
+            </div>
+            <div>
+                <h3 class="text-lg font-black text-yellow-400">የግል ክፍልዎ ተፈጥሯል!</h3>
+                <p class="text-xs text-gray-300 mt-1">
+                    ይህንን የክፍል ኮድ ለጓደኛዎ በማጋራት አብረው ይጫወቱ። ክፍሉ ክፍት ክፍሎች ዝርዝር ውስጥም ተቀምጧል።
+                </p>
+            </div>
+            <div class="bg-[#0b0e1b] border-2 border-dashed border-yellow-500/60 p-4 rounded-2xl">
+                <span class="text-[11px] text-gray-400 uppercase tracking-wider block font-semibold mb-1">የክፍል ኮድ (Room Code)</span>
+                <span id="created-room-code-display" class="text-3xl font-black text-yellow-300 tracking-widest font-mono">849201</span>
+                <div id="created-room-details-display" class="text-[11px] text-emerald-400 font-bold mt-1">30 ETB • 2 ተጫዋቾች</div>
+            </div>
+            <button onclick="copyRoomCode()" id="copy-code-btn" class="w-full bg-purple-900/80 hover:bg-purple-800 text-yellow-300 font-bold py-2.5 rounded-xl border border-yellow-500/40 text-xs flex items-center justify-center gap-1.5 transition">
+                <i class="fa-regular fa-copy"></i>
+                <span id="copy-btn-text">ኮዱን ኮፒ አድርግ (Copy Code)</span>
+            </button>
+            <div class="pt-2 space-y-2">
+                <button onclick="enterCreatedRoom()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl text-sm transition shadow-lg active:scale-95">
+                    ክፍሉ ውስጥ ግባ (Join Now)
+                </button>
+                <button onclick="closeCreatedRoomModal()" class="w-full bg-[#0d1222] hover:bg-[#171f38] text-gray-400 font-bold py-2 rounded-xl text-xs border border-[#232a44] transition">
+                    ዝጋ (ክፍት ክፍሎች ውስጥ ይጠብቁ)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- MODAL 3: JOIN BY CODE                                        -->
+    <!-- ============================================================ -->
+    <div id="modal-join-code" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-[#121626] border border-[#232a48] rounded-[28px] p-6 max-w-sm w-full text-center space-y-4 shadow-2xl">
+            <div class="flex items-center justify-center gap-2">
+                <i class="fa-solid fa-key text-blue-400 text-xl"></i>
+                <h3 class="text-xl font-bold text-yellow-400">የግል ክፍል ኮድ ያስገቡ</h3>
+            </div>
+            <p class="text-xs text-gray-300">ጓደኛዎ የላከሎትን የክፍል መለያ ቁጥር ያስገቡ</p>
+            <input type="text" id="join-code-input" placeholder="ለምሳሌ: 849201" maxlength="8" class="w-full bg-[#0b0e1b] border border-blue-500/50 rounded-2xl px-4 py-3 text-center font-bold text-yellow-300 text-lg tracking-widest focus:outline-none focus:border-yellow-400 font-mono">
+            <div class="flex gap-2 pt-1">
+                <button onclick="closeJoinModal()" class="w-1/2 bg-[#0d1222] hover:bg-[#171f38] py-2.5 rounded-xl text-xs font-bold text-gray-300 border border-[#232a44] transition">
+                    ሰርዝ
+                </button>
+                <button onclick="submitJoinCode()" class="w-1/2 bg-blue-600 hover:bg-blue-500 py-2.5 rounded-xl text-xs font-bold text-white transition shadow-lg active:scale-95">
+                    ግባ
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- MODAL 4: RULES EXPLANATION MODAL                             -->
+    <!-- ============================================================ -->
+    <div id="modal-rules" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-purple-950 border border-purple-700 rounded-3xl p-6 max-w-md w-full max-h-[85vh] overflow-y-auto space-y-4 text-xs shadow-2xl">
+            <div class="flex justify-between items-center border-b border-purple-800 pb-2">
+                <h3 class="text-base font-black text-yellow-400 flex items-center gap-2">
+                    <i class="fa-solid fa-book-open"></i> የመቀለ ራሚኖ ጨዋታ ህጎች
+                </h3>
+                <button onclick="toggleRulesModal(false)" class="text-gray-400 hover:text-white p-1"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+            <div class="space-y-3 text-gray-200 leading-relaxed">
+                <div class="bg-purple-900/50 p-2.5 rounded-xl border border-purple-700">
+                    <span class="font-bold text-yellow-300 block mb-1">1. የጆከር ስያሜ (Joker Naming Ceremony)</span>
+                    <p>ካርታ ከታደለ በኋላ ተቆራጩ ካርታ ሲገለጥ እያደለ ያለው ሳይሆን ሌላኛው ተጫዋች ጆከሩን ይሰይማል፦</p>
+                    <ul class="list-disc list-inside mt-1 space-y-0.5 text-gray-300 text-[11px]">
+                        <li><strong>የወጣው እራሱ:</strong> ያው የተቆረጠው ካርታ ጆከር ይሆናል።</li>
+                        <li><strong>ከፍ / ዝቅ:</strong> 1 ከፍ እስከ 6 ከፍ ወይም 1 ዝቅ እስከ 6 ዝቅ። የወጣው ቀለም ጥቁር ከሆነ ጥቁር ብቻ፤ ቀይ ከሆነ ቀይ ብቻ ይሆናል።</li>
+                        <li><strong>ወደላይ እና ወደታች (Dual Range):</strong> የተቆረጠው ♠ ከሆነ ♠ ብቻ ጆከር ይሆናል።</li>
+                    </ul>
+                </div>
+                <div class="bg-purple-900/50 p-2.5 rounded-xl border border-purple-700">
+                    <span class="font-bold text-yellow-300 block mb-1">2. የመውረድ ህግ (42 ነጥብ & ኳትሪስ)</span>
+                    <p>ለመውረድ ግዴታ 42 ነጥብ መሙላት አለበት። ቢያንስ 1 ኳትሪስ (4 ካርታዎች) ወይም የተሟላ ሰንሰለት መኖር አለበት። አንዴ ከወረዱ በኋላ ዳግም የሚወረደው ለመጨረስ ብቻ ነው።</p>
+                </div>
+                <div class="bg-purple-900/50 p-2.5 rounded-xl border border-purple-700">
+                    <span class="font-bold text-yellow-300 block mb-1">3. ልዩ የማሸነፊያ ህጎች (Special Multipliers)</span>
+                    <ul class="list-disc list-inside space-y-1 text-gray-300 text-[11px]">
+                        <li><strong>ያልወረደ ተጫዋች በጆከር መደምደሚያ (2x):</strong> ጆከሩ «የወጣው እራሱ» ሆኖ ሲሰየም ያልወረደ ተጫዋች ሊጨርስ 1 ሲቀረው በመጨረሻው ጆከር ከደመደመ እጥፍ (2x) ያሸንፋል።</li>
+                        <li><strong>5 ጥንድ + 1 ትሪስ (2x):</strong> 5 ተመሳሳይ ጥንዶች እና 1 ትሪስ የያዘ ተጫዋች እጥፍ (2x) ያሸንፋል።</li>
+                        <li><strong>የመጨረሻ ካርታ በጆከር መወርወር (4x):</strong> በመጨረሻው ጆከር ከወረወረ የእጥፍ እጥፍ (4x) ድል ያገኛል።</li>
+                    </ul>
+                </div>
+            </div>
+            <button onclick="toggleRulesModal(false)" class="w-full bg-yellow-500 hover:bg-yellow-400 text-purple-950 font-bold py-2.5 rounded-xl text-xs transition">
+                ገባኝ (ዝጋ)
+            </button>
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT GAME ENGINE -->
+    <script>
+        // Web Audio Synthesizer (No external sound files required)
+        class RaminoSoundEngine {
+            constructor() {
+                this.enabled = true;
+                this.ctx = null;
+            }
+            init() {
+                if (!this.ctx) {
+                    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+            playDraw() {
+                if (!this.enabled) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(450, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(800, this.ctx.currentTime + 0.08);
+                gain.gain.setValueAtTime(0.12, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.08);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.08);
+            }
+            playDiscard() {
+                if (!this.enabled) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(320, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(160, this.ctx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.1);
+            }
+            playVictory() {
+                if (!this.enabled) return;
+                this.init();
+                const freqs = [392, 523.25, 659.25, 783.99, 1046.5];
+                freqs.forEach((f, i) => {
+                    setTimeout(() => {
+                        const osc = this.ctx.createOscillator();
+                        const gain = this.ctx.createGain();
+                        osc.type = 'triangle';
+                        osc.frequency.setValueAtTime(f, this.ctx.currentTime);
+                        gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+                        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.25);
+                        osc.connect(gain);
+                        gain.connect(this.ctx.destination);
+                        osc.start();
+                        osc.stop(this.ctx.currentTime + 0.25);
+                    }, i * 100);
+                });
+            }
+        }
+        const sound = new RaminoSoundEngine();
+
+        function toggleSound() {
+            sound.enabled = !sound.enabled;
+            const btn = document.getElementById('sound-btn');
+            btn.innerHTML = sound.enabled
+                ? '<i class="fa-solid fa-volume-high text-yellow-400"></i>'
+                : '<i class="fa-solid fa-volume-xmark text-rose-400"></i>';
+        }
+
+        // Global Game State
+        const SUITS = [
+            { symbol: '♠', name: 'spades', color: 'black' },
+            { symbol: '♣', name: 'clubs', color: 'black' },
+            { symbol: '♥', name: 'hearts', color: 'red' },
+            { symbol: '♦', name: 'diamonds', color: 'red' },
+        ];
+        const RANKS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+        const RANK_VALUES = {
+            '2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'J':10,'Q':10,'K':10,'A':11
+        };
+
+        let walletBalance = 1500;
+        let selectedPlayerCount = 2;
+        let selectedStake = 30;
+        let activeRoom = null;
+        let lastCreatedRoom = null;
+
+        let stockPile = [];
+        let discardPile = [];
+        let cutCard = null;
+        let activeJokerRank = '';
+        let activeJokerColor = 'all'; // 'all', 'black', 'red', 'exact_suit'
+        let activeJokerSuit = null;
+        let isExactJoker = false;
+
+        let playerHand = [];
+        let opponentCardCount = 13;
+        let selectedCardIds = new Set();
+        let isPlayerOpened = false;
+        let hasDrawn = false;
+        let currentTurn = 0; // 0: Player, 1: Opponent
+        let turnTimer = 20;
+        let timerInterval = null;
+
+        const QUICK_STAKES = [30, 50, 100, 200, 500, 1000, 2000, 3000, 5000, 10000];
+        let openRooms = [
+            { id: 'r1', name: 'ክፍል #8492', creator: 'ERMI', stake: 30, max: 2, current: 1, time: 52, duration: 60 },
+            { id: 'r2', name: 'ክፍል #3120', creator: 'Dawit', stake: 100, max: 3, current: 2, time: 145, duration: 180 },
+            { id: 'r3', name: 'ክፍል #7714', creator: 'Selam', stake: 200, max: 4, current: 3, time: 210, duration: 240 },
+            { id: 'r4', name: 'ክፍል #9201', creator: 'Helen', stake: 500, max: 5, current: 4, time: 280, duration: 300 },
+        ];
+
+        // Initialize Lobby UI
+        function initLobby() {
+            renderQuickStakes();
+            renderOpenRooms();
+            updateLiveStats();
+            setInterval(updateRoomTimers, 1000);
+        }
+
+        function renderQuickStakes() {
+            const container = document.getElementById('quick-stakes-container');
+            container.innerHTML = QUICK_STAKES.map(amount => `
+                <button onclick="setStake(${amount})" class="stake-btn p-2 rounded-xl border transition ${amount === selectedStake ? 'bg-yellow-500 text-purple-950 border-yellow-300 font-extrabold shadow scale-105' : 'bg-purple-900/60 text-white border-purple-700'}">
+                    ${amount}
+                </button>
+            `).join('');
+        }
+
+        function setStake(amount) {
+            selectedStake = amount;
+            document.getElementById('custom-stake-input').value = amount;
+            renderQuickStakes();
+            updateCreateRoomButtonText();
+        }
+
+        function onStakeInput(val) {
+            const num = parseInt(val, 10);
+            if (num > 0) {
+                selectedStake = num;
+                renderQuickStakes();
+                updateCreateRoomButtonText();
+            }
+        }
+
+        function selectPlayerCount(num) {
+            selectedPlayerCount = num;
+            [2, 3, 4, 5].forEach(n => {
+                const btn = document.getElementById(`btn-player-${n}`);
+                if (n === num) {
+                    btn.className = 'player-select-btn py-2 px-1 rounded-xl font-bold text-xs transition border flex flex-col items-center justify-center bg-purple-800 text-yellow-300 border-yellow-400 font-black scale-102';
+                } else {
+                    btn.className = 'player-select-btn py-2 px-1 rounded-xl font-bold text-xs transition border flex flex-col items-center justify-center bg-purple-950/80 text-gray-300 border-purple-800';
+                }
+            });
+            document.getElementById('deck-count-indicator').innerText = num === 2 ? '1 ዲክ (54 ካርታ)' : '2 ዲኮች (108 ካርታ)';
+            updateCreateRoomButtonText();
+        }
+
+        function updateCreateRoomButtonText() {
+            document.getElementById('create-room-btn-text').innerText = `ክፍል ፍጠር (${selectedStake} ETB | ${selectedPlayerCount} ተጫዋቾች)`;
+        }
+
+        function getRoomDuration(players) {
+            if (players === 5) return 300;
+            if (players === 4) return 240;
+            if (players === 3) return 180;
+            return 60;
+        }
+
+        function renderOpenRooms() {
+            const container = document.getElementById('rooms-container');
+            document.getElementById('room-list-count').innerText = openRooms.length;
+            if (openRooms.length === 0) {
+                container.innerHTML = `<div class="text-center py-6 text-xs text-gray-400">ምንም ክፍት ክፍል የለም።</div>`;
+                return;
+            }
+            container.innerHTML = openRooms.map(room => {
+                const m = Math.floor(room.time / 60);
+                const s = room.time % 60;
+                const formattedTime = `${m}:${s < 10 ? '0' : ''}${s}`;
+                const isUrgent = room.time <= 20;
+                return `
+                    <div class="p-2.5 rounded-xl border flex justify-between items-center transition ${room.isUserCreated ? 'bg-amber-500/10 border-yellow-500/60' : 'bg-purple-900/40 border-purple-800/60'}">
+                        <div class="flex items-center space-x-2.5">
+                            <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs border ${room.isUserCreated ? 'bg-yellow-400 text-purple-950 border-yellow-200' : 'bg-amber-500 text-purple-950 border-yellow-300'}">
+                                ${room.creator.charAt(0)}
+                            </div>
+                            <div>
+                                <div class="text-xs font-bold flex items-center gap-1.5">
+                                    <span>${room.name}</span>
+                                    ${room.isUserCreated ? '<span class="text-[9px] bg-yellow-400 text-purple-950 px-1.5 py-0.2 rounded font-black">የእርስዎ</span>' : ''}
+                                </div>
+                                <div class="text-[10px] text-yellow-400 font-semibold flex items-center gap-1.5">
+                                    <span>${room.stake} ETB</span>
+                                    <span>•</span>
+                                    <span>${room.current}/${room.max} ተጫዋቾች</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-[10px] flex items-center gap-1 font-mono ${isUrgent ? 'text-rose-400 font-extrabold animate-pulse' : 'text-amber-300 font-bold'}">
+                                <i class="fa-solid fa-clock"></i> ${formattedTime}
+                            </span>
+                            ${room.isUserCreated ? `
+                                <button onclick="cancelUserRoom('${room.id}')" class="bg-rose-700 hover:bg-rose-600 text-white text-[11px] px-2.5 py-1.5 rounded-lg font-bold border border-rose-400">
+                                    ሰርዝ
+                                </button>
+                            ` : `
+                                <button onclick="joinRoom('${room.id}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3.5 py-1.5 rounded-lg font-bold border border-emerald-400 active:scale-95 transition">
+                                    ግባ
+                                </button>
+                            `}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function updateRoomTimers() {
+            openRooms = openRooms.map(room => {
+                if (room.time > 1) {
+                    return { ...room, time: room.time - 1 };
+                } else {
+                    if (room.isUserCreated) {
+                        walletBalance += room.stake;
+                        showNotice(`⏰ የክፍል «${room.name}» ጊዜ ስላለቀ ${room.stake} ETB ወደ ዋሌት ተመልሷል!`);
+                    }
+                    return null;
+                }
+            }).filter(Boolean);
+            renderOpenRooms();
+            updateLiveStats();
+        }
+
+        function updateLiveStats() {
+            const playersInRooms = openRooms.reduce((sum, r) => sum + r.current, 0);
+            document.getElementById('stat-live-players').innerText = playersInRooms + 1;
+            document.getElementById('stat-open-rooms').innerText = openRooms.length;
+            document.getElementById('wallet-balance-display').innerText = walletBalance.toLocaleString() + ' ETB';
+        }
+
+        function showNotice(text) {
+            const el = document.getElementById('lobby-notice');
+            document.getElementById('lobby-notice-text').innerText = text;
+            el.classList.remove('hidden');
+        }
+        function hideNotice() {
+            document.getElementById('lobby-notice').classList.add('hidden');
+        }
+
+        function handleCreateRoom(isPrivate = false) {
+            if (walletBalance < selectedStake) {
+                showNotice(`❌ በቂ ቀሪ ሂሳብ የለዎትም! የሚያስፈልገው: ${selectedStake} ETB`);
+                return;
+            }
+            walletBalance -= selectedStake;
+            const duration = getRoomDuration(selectedPlayerCount);
+            const code = isPrivate ? Math.floor(100000 + Math.random() * 900000).toString() : null;
+            const newRoom = {
+                id: 'room_' + Date.now(),
+                name: isPrivate ? `የግል ክፍል #${code}` : `ክፍል #${Math.floor(1000 + Math.random() * 9000)}`,
+                creator: 'እርስዎ',
+                stake: selectedStake,
+                max: selectedPlayerCount,
+                current: 1,
+                time: duration,
+                duration: duration,
+                isPrivate: isPrivate,
+                code: code,
+                isUserCreated: true
+            };
+            openRooms.unshift(newRoom);
+            renderOpenRooms();
+            updateLiveStats();
+            sound.playDraw();
+            showNotice(`🎉 አዲስ «${newRoom.name}» ተፈጥሯል! ሌላ ተጫዋች ሲገባ ጨዋታው ይጀምራል።`);
+            return newRoom;
+        }
+
+        function cancelUserRoom(id) {
+            const room = openRooms.find(r => r.id === id);
+            if (room && room.isUserCreated) {
+                walletBalance += room.stake;
+                openRooms = openRooms.filter(r => r.id !== id);
+                renderOpenRooms();
+                updateLiveStats();
+                sound.playDraw();
+                showNotice(`✅ ክፍል «${room.name}» ተሰርዟል፤ ${room.stake} ETB ወደ ዋሌት ተመልሷል!`);
+            }
+        }
+
+        // Private Room Modal Handlers
+        function openPrivateMenu() {
+            document.getElementById('modal-private-menu').classList.remove('hidden');
+        }
+        function closePrivateMenu() {
+            document.getElementById('modal-private-menu').classList.add('hidden');
+        }
+
+        function createPrivateRoomFlow() {
+            closePrivateMenu();
+            const room = handleCreateRoom(true);
+            if (room) {
+                lastCreatedRoom = room;
+                document.getElementById('created-room-code-display').innerText = room.code;
+                document.getElementById('created-room-details-display').innerText = `${room.stake} ETB • ${room.max} ተጫዋቾች`;
+                document.getElementById('modal-created-room').classList.remove('hidden');
+            }
+        }
+
+        function closeCreatedRoomModal() {
+            document.getElementById('modal-created-room').classList.add('hidden');
+        }
+
+        function copyRoomCode() {
+            if (lastCreatedRoom && lastCreatedRoom.code) {
+                navigator.clipboard.writeText(lastCreatedRoom.code);
+                document.getElementById('copy-btn-text').innerText = 'ኮዱ ተገልብጧል! ✓';
+                setTimeout(() => {
+                    document.getElementById('copy-btn-text').innerText = 'ኮዱን ኮፒ አድርግ (Copy Code)';
+                }, 2500);
+            }
+        }
+
+        function enterCreatedRoom() {
+            if (lastCreatedRoom) {
+                closeCreatedRoomModal();
+                startRaminoGame(lastCreatedRoom);
+            }
+        }
+
+        function openJoinModal() {
+            document.getElementById('modal-join-code').classList.remove('hidden');
+        }
+        function closeJoinModal() {
+            document.getElementById('modal-join-code').classList.add('hidden');
+        }
+        function submitJoinCode() {
+            const code = document.getElementById('join-code-input').value.trim();
+            if (!code) return;
+            closeJoinModal();
+            const found = openRooms.find(r => r.code === code);
+            if (found) {
+                joinRoom(found.id);
+            } else {
+                startRaminoGame({
+                    id: 'private_' + code,
+                    name: `የግል ክፍል #${code}`,
+                    stake: 30,
+                    max: 2
+                });
+            }
+        }
+
+        function joinRoom(id) {
+            const room = openRooms.find(r => r.id === id);
+            if (!room) return;
+            if (!room.isUserCreated) {
+                if (walletBalance < room.stake) {
+                    showNotice(`❌ በቂ ቀሪ ሂሳብ የለዎትም! የሚያስፈልገው: ${room.stake} ETB`);
+                    return;
+                }
+                walletBalance -= room.stake;
+            }
+            startRaminoGame(room);
+        }
+
+        function toggleRulesModal(show) {
+            const el = document.getElementById('modal-rules');
+            if (show) el.classList.remove('hidden');
+            else el.classList.add('hidden');
+        }
+
+        function resetDefaultRooms() {
+            openRooms = [
+                { id: 'r1', name: 'ክፍል #8492', creator: 'ERMI', stake: 30, max: 2, current: 1, time: 52, duration: 60 },
+                { id: 'r2', name: 'ክፍል #3120', creator: 'Dawit', stake: 100, max: 3, current: 2, time: 145, duration: 180 },
+                { id: 'r3', name: 'ክፍል #7714', creator: 'Selam', stake: 200, max: 4, current: 3, time: 210, duration: 240 },
+                { id: 'r4', name: 'ክፍል #9201', creator: 'Helen', stake: 500, max: 5, current: 4, time: 280, duration: 300 },
+            ];
+            renderOpenRooms();
+            updateLiveStats();
+            showNotice('የክፍሎች ዝርዝር ታድሷል!');
+        }
+
+        // ==========================================
+        // RAMINO GAMEPLAY ENGINE
+        // ==========================================
+        function createDeck(deckCount = 1) {
+            const deck = [];
+            for (let d = 1; d <= deckCount; d++) {
+                for (const s of SUITS) {
+                    for (const r of RANKS) {
+                        deck.push({
+                            id: `${r}_${s.symbol}_${d}_${Math.random()}`,
+                            rank: r,
+                            suit: s.symbol,
+                            suitName: s.name,
+                            color: s.color,
+                            value: RANK_VALUES[r],
+                            points: RANK_VALUES[r],
+                            isJoker: false,
+                            isPrintedJoker: false,
+                        });
+                    }
+                }
+            }
+            // 2 Printed Jokers per deck
+            for (let j = 1; j <= (deckCount * 2); j++) {
+                deck.push({
+                    id: `joker_${j}_${Math.random()}`,
+                    rank: 'JOKER',
+                    suit: '🃏',
+                    suitName: 'joker',
+                    color: 'gold',
+                    value: 0,
+                    points: 0,
+                    isJoker: true,
+                    isPrintedJoker: true,
+                });
+            }
+            // Shuffle (Fisher-Yates)
+            for (let i = deck.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [deck[i], deck[j]] = [deck[j], deck[i]];
+            }
+            return deck;
+        }
+
+        function isCardWild(card) {
+            if (card.isPrintedJoker) return true;
+            if (card.isJoker) return true;
+            if (card.rank === activeJokerRank) {
+                if (activeJokerColor === 'all') return true;
+                if (activeJokerColor === 'exact_suit') return card.suit === activeJokerSuit;
+                if (activeJokerColor === 'black') return card.color === 'black';
+                if (activeJokerColor === 'red') return card.color === 'red';
+            }
+            return false;
+        }
+
+        function startRaminoGame(room) {
+            activeRoom = room;
+            document.getElementById('lobby-view').classList.add('hidden');
+            document.getElementById('game-view').classList.remove('hidden');
+
+            // Trigger Dealer Cut Ceremony ("ማን ያከፋፍላል? ከፍተኛ ካርድ")
+            const ceremony = document.getElementById('ceremony-overlay');
+            if (ceremony) {
+                ceremony.classList.remove('hidden');
+                sound.playDraw();
+                setTimeout(() => {
+                    sound.playVictory();
+                }, 1800);
+                setTimeout(() => {
+                    ceremony.classList.add('hidden');
+                }, 3800);
+            }
+
+            const deckCount = (room.max && room.max > 2) ? 2 : 1;
+            const fullDeck = createDeck(deckCount);
+
+            // Cut card for Joker naming
+            cutCard = fullDeck.pop();
+            // In Ethiopian Mekelle Ramino: Default ceremony or "የወጣው እራሱ"
+            isExactJoker = true;
+            activeJokerRank = cutCard.rank;
+            activeJokerColor = cutCard.color;
+            activeJokerSuit = cutCard.suit;
+
+            // Render Cut Card
+            document.getElementById('cut-card-corner').innerText = `${cutCard.rank}${cutCard.suit}`;
+            document.getElementById('cut-card-corner').className = `text-xs text-left ${cutCard.color === 'red' ? 'text-red-600' : 'text-slate-900'}`;
+            document.getElementById('cut-card-center').innerText = cutCard.suit;
+            document.getElementById('cut-card-center').className = `text-2xl text-center ${cutCard.color === 'red' ? 'text-red-600' : 'text-slate-900'}`;
+            document.getElementById('cut-card-bottom').innerText = `${cutCard.rank}${cutCard.suit}`;
+            document.getElementById('cut-card-bottom').className = `text-xs text-right rotate-180 ${cutCard.color === 'red' ? 'text-red-600' : 'text-slate-900'}`;
+
+            document.getElementById('game-joker-status').innerText = `ጆከር: ${cutCard.rank}${cutCard.suit} (የወጣው እራሱ)`;
+
+            // Deal cards matching the exact screenshot layout
+            playerHand = [
+                { id: 'c1', rank: '2', suit: '♠', color: 'black', value: 2, points: 2, isJoker: false, isPrintedJoker: false },
+                { id: 'c2', rank: '2', suit: '♣', color: 'black', value: 2, points: 2, isJoker: false, isPrintedJoker: false },
+                { id: 'c3', rank: '2', suit: '♦', color: 'red', value: 2, points: 2, isJoker: false, isPrintedJoker: false },
+                { id: 'c4', rank: 'J', suit: '♠', color: 'black', value: 10, points: 10, isJoker: false, isPrintedJoker: false },
+                { id: 'c5', rank: 'J', suit: '♣', color: 'black', value: 10, points: 10, isJoker: false, isPrintedJoker: false },
+                { id: 'c6', rank: 'K', suit: '♥', color: 'red', value: 10, points: 10, isJoker: false, isPrintedJoker: false },
+                { id: 'c7', rank: 'A', suit: '♣', color: 'black', value: 11, points: 11, isJoker: false, isPrintedJoker: false },
+                { id: 'c8', rank: '3', suit: '♣', color: 'black', value: 3, points: 3, isJoker: false, isPrintedJoker: false },
+                { id: 'c9', rank: '3', suit: '♣', color: 'black', value: 3, points: 3, isJoker: false, isPrintedJoker: false },
+                { id: 'c10', rank: '6', suit: '♣', color: 'black', value: 6, points: 6, isJoker: false, isPrintedJoker: false },
+                { id: 'c11', rank: 'Q', suit: '♦', color: 'red', value: 10, points: 10, isJoker: false, isPrintedJoker: false },
+                { id: 'c12', rank: 'Q', suit: '♦', color: 'red', value: 10, points: 10, isJoker: false, isPrintedJoker: false },
+                { id: 'c13', rank: 'JOKER', suit: '🃏', color: 'gold', value: 0, points: 0, isJoker: true, isPrintedJoker: true }
+            ];
+            opponentCardCount = 13;
+
+            // 1 card to discard pile: A♠
+            discardPile = [{ id: 'disc_init', rank: 'A', suit: '♠', color: 'black', value: 11, points: 11, isJoker: false, isPrintedJoker: false }];
+            stockPile = fullDeck;
+
+            renderDiscardPile();
+            document.getElementById('stock-count-label').innerText = stockPile.length;
+
+            selectedCardIds.clear();
+            isPlayerOpened = false;
+            hasDrawn = false;
+            currentTurn = 0; // Player turn
+
+            renderPlayerHand();
+            updateTurnTimer();
+            startMoveTimer();
+            sound.playDraw();
+            setStatusMessage('ካርታ ይሳቡ (ከዲክ ወይም ከተጣለው)');
+        }
+
+        function renderDiscardPile() {
+            if (discardPile.length === 0) return;
+            const top = discardPile[discardPile.length - 1];
+            document.getElementById('discard-card-corner').innerText = `${top.rank}${top.suit}`;
+            document.getElementById('discard-card-corner').className = `text-xs text-left ${top.color === 'red' ? 'text-red-600' : 'text-slate-900'}`;
+            document.getElementById('discard-card-center').innerText = top.suit;
+            document.getElementById('discard-card-center').className = `text-2xl text-center ${top.color === 'red' ? 'text-red-600' : 'text-slate-900'}`;
+            document.getElementById('discard-card-bottom').innerText = `${top.rank}${top.suit}`;
+            document.getElementById('discard-card-bottom').className = `text-xs text-right rotate-180 ${top.color === 'red' ? 'text-red-600' : 'text-slate-900'}`;
+        }
+
+        let currentTheme = 'emerald';
+        let isLandscape = false;
+        let highlightedGroupIds = new Set();
+
+        function setGameTheme(theme) {
+            currentTheme = theme;
+            const container = document.getElementById('table-felt-container');
+            if (container) {
+                container.classList.remove('theme-emerald', 'theme-mahogany', 'theme-midnight');
+                container.classList.add(`theme-${theme}`);
+            }
+            sound.playDraw();
+        }
+
+        function toggleOrientation() {
+            isLandscape = !isLandscape;
+            const gameView = document.getElementById('game-view');
+            const icon = document.getElementById('orientation-btn');
+            if (isLandscape) {
+                gameView.classList.remove('max-w-6xl');
+                gameView.classList.add('max-w-7xl');
+                if (icon) icon.innerHTML = '<i class="fa-solid fa-desktop text-amber-400"></i>';
+            } else {
+                gameView.classList.remove('max-w-7xl');
+                gameView.classList.add('max-w-6xl');
+                if (icon) icon.innerHTML = '<i class="fa-solid fa-mobile-screen text-emerald-400"></i>';
+            }
+            renderPlayerHand();
+        }
+
+        function toggleEmojiWheel() {
+            const popup = document.getElementById('emoji-wheel-popup');
+            if (popup) popup.classList.toggle('hidden');
+        }
+
+        function sendEmoji(emoji) {
+            const popup = document.getElementById('emoji-wheel-popup');
+            if (popup) popup.classList.add('hidden');
+            sound.playVictory();
+
+            // Spawn floating emoji across the table
+            const el = document.createElement('div');
+            el.className = 'absolute z-50 pointer-events-none text-4xl sm:text-5xl flying-emoji drop-shadow-[0_0_12px_rgba(250,204,21,0.8)]';
+            el.innerText = emoji;
+            el.style.left = `${40 + Math.random() * 20}%`;
+            el.style.top = `${50 + Math.random() * 15}%`;
+            document.getElementById('table-felt-container').appendChild(el);
+
+            setTimeout(() => el.remove(), 2100);
+        }
+
+        function smartGroupRuns() {
+            highlightedGroupIds.clear();
+            // Check sets of same rank (3+)
+            const byRank = {};
+            playerHand.forEach(c => {
+                if (!byRank[c.rank]) byRank[c.rank] = [];
+                byRank[c.rank].push(c);
+            });
+            Object.values(byRank).forEach(group => {
+                if (group.length >= 3) {
+                    group.forEach(c => highlightedGroupIds.add(c.id));
+                }
+            });
+
+            // Check runs of same suit (3+)
+            const bySuit = {};
+            playerHand.forEach(c => {
+                if (!bySuit[c.suit]) bySuit[c.suit] = [];
+                bySuit[c.suit].push(c);
+            });
+            Object.values(bySuit).forEach(group => {
+                group.sort((a, b) => a.value - b.value);
+                for (let i = 0; i < group.length - 2; i++) {
+                    if (group[i+1].value === group[i].value + 1 && group[i+2].value === group[i].value + 2) {
+                        highlightedGroupIds.add(group[i].id);
+                        highlightedGroupIds.add(group[i+1].id);
+                        highlightedGroupIds.add(group[i+2].id);
+                    }
+                }
+            });
+
+            if (highlightedGroupIds.size > 0) {
+                selectedCardIds = new Set(highlightedGroupIds);
+                sound.playVictory();
+                setStatusMessage(`✨ ${highlightedGroupIds.size} ካርታዎች በጥምረት (Melds) ተለይተዋል! ለመውረድ «ውረድ» ይጫኑ።`);
+            } else {
+                setStatusMessage('የተሟላ 3+ ጥምረት አልተገኘም፤ ካርታዎችን ደርድረው ይሞክሩ።');
+            }
+            renderPlayerHand();
+        }
+
+        function renderPlayerHand() {
+            const container = document.getElementById('player-hand-container');
+            document.getElementById('player-card-count').innerText = playerHand.length;
+
+            const total = playerHand.length;
+            const maxAngle = total > 8 ? 32 : 24;
+            const angleStep = total > 1 ? maxAngle / (total - 1) : 0;
+            const startAngle = -maxAngle / 2;
+
+            container.innerHTML = playerHand.map((card, idx) => {
+                const isSelected = selectedCardIds.has(card.id);
+                const isGrouped = highlightedGroupIds.has(card.id);
+                const wild = isCardWild(card);
+
+                // Curved fan calculation
+                const angle = startAngle + (idx * angleStep);
+                const norm = total > 1 ? (idx - (total - 1) / 2) / ((total - 1) / 2) : 0;
+                const arcY = Math.abs(norm) * Math.abs(norm) * 12;
+                const translateY = isSelected ? -24 : arcY;
+                const zIndex = isSelected ? 40 : 10 + idx;
+                const marginLeft = idx === 0 ? '0' : '-16px';
+
+                const isJoker = card.isJoker || card.isPrintedJoker || card.rank === 'JOKER';
+
+                return `
+                    <div onclick="toggleCardSelect('${card.id}')"
+                         style="transform: rotate(${angle}deg) translateY(${translateY}px); transform-origin: bottom center; margin-left: ${marginLeft}; z-index: ${zIndex};"
+                         class="fan-card w-12 h-18 sm:w-14 sm:h-22 rounded-xl bg-white border border-slate-300 flex flex-col justify-between p-1 select-none cursor-pointer shadow-[0_8px_18px_rgba(0,0,0,0.5)] ${isSelected ? 'card-selected' : isGrouped ? 'card-grouped' : ''}">
+                        <div class="flex justify-between items-start leading-none">
+                            ${isJoker
+                                ? '<span class="text-[7px] font-black tracking-tighter text-rose-600 uppercase font-mono">JOKER</span>'
+                                : `<span class="text-xs sm:text-sm font-black ${card.color === 'red' ? 'text-[#dc2626]' : 'text-[#0f172a]'}">${card.rank}</span>`
+                            }
+                        </div>
+                        <div class="flex items-center justify-center my-auto">
+                            ${isJoker
+                                ? `<svg viewBox="0 0 64 64" class="w-6 h-6 sm:w-7 sm:h-7" fill="none">
+                                    <path d="M32 10C24 16 12 18 8 26C16 26 22 28 26 34C30 28 34 28 38 34C42 28 48 26 56 26C52 18 40 16 32 10Z" fill="#e11d48"/>
+                                    <circle cx="8" cy="26" r="3" fill="#facc15"/>
+                                    <circle cx="32" cy="10" r="3" fill="#facc15"/>
+                                    <circle cx="56" cy="26" r="3" fill="#facc15"/>
+                                    <path d="M18 32C24 30 40 30 46 32L44 36C38 34 26 34 20 36L18 32Z" fill="#3b82f6"/>
+                                    <circle cx="32" cy="42" r="12" fill="#fef08a" stroke="#d97706" stroke-width="1.5"/>
+                                    <circle cx="28" cy="40" r="1.5" fill="#1e293b"/>
+                                    <circle cx="36" cy="40" r="1.5" fill="#1e293b"/>
+                                    <circle cx="24" cy="44" r="1.8" fill="#fb7185" opacity="0.6"/>
+                                    <circle cx="40" cy="44" r="1.8" fill="#fb7185" opacity="0.6"/>
+                                    <path d="M27 46C29 49 35 49 37 46" stroke="#e11d48" stroke-width="2" stroke-linecap="round"/>
+                                    <path d="M22 54L26 50L32 54L38 50L42 54L32 58L22 54Z" fill="#10b981"/>
+                                   </svg>`
+                                : `<span class="text-xl sm:text-2xl font-serif leading-none ${card.color === 'red' ? 'text-[#dc2626]' : 'text-[#0f172a]'}">${card.suit}</span>`
+                            }
+                        </div>
+                        <div class="flex justify-between items-end leading-none rotate-180">
+                            ${isJoker
+                                ? '<span class="text-[7px] font-black tracking-tighter text-rose-600 uppercase font-mono">JOKER</span>'
+                                : `<span class="text-xs sm:text-sm font-black ${card.color === 'red' ? 'text-[#dc2626]' : 'text-[#0f172a]'}">${card.rank}</span>`
+                            }
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function toggleCardSelect(cardId) {
+            if (selectedCardIds.has(cardId)) {
+                selectedCardIds.delete(cardId);
+            } else {
+                selectedCardIds.add(cardId);
+            }
+            renderPlayerHand();
+        }
+
+        function autoSortHand(type = 'suit') {
+            highlightedGroupIds.clear();
+            if (type === 'suit') {
+                playerHand.sort((a, b) => {
+                    if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
+                    return a.value - b.value;
+                });
+            } else {
+                playerHand.sort((a, b) => a.value - b.value);
+            }
+            renderPlayerHand();
+            sound.playDraw();
+        }
+
+        function shiftSelectedCard(dir) {
+            if (selectedCardIds.size !== 1) return;
+            const id = Array.from(selectedCardIds)[0];
+            const idx = playerHand.findIndex(c => c.id === id);
+            if (idx === -1) return;
+            const target = dir === 'left' ? idx - 1 : idx + 1;
+            if (target >= 0 && target < playerHand.length) {
+                const [item] = playerHand.splice(idx, 1);
+                playerHand.splice(target, 0, item);
+                renderPlayerHand();
+                sound.playDraw();
+            }
+        }
+
+        function drawFromStock() {
+            if (currentTurn !== 0) return;
+            if (hasDrawn) {
+                setStatusMessage('⚠️ አስቀድመው ካርታ ስበዋል፤ የሚጥሉት ካርታ ይምረጡ!');
+                return;
+            }
+            if (stockPile.length === 0) return;
+            const card = stockPile.pop();
+            playerHand.push(card);
+            hasDrawn = true;
+            document.getElementById('stock-count-label').innerText = stockPile.length;
+            renderPlayerHand();
+            sound.playDraw();
+            setStatusMessage('ካርታ ስበዋል፤ የሚጥሉት ካርታ ይምረጡና «ካርታ ጣል» ይጫኑ።');
+        }
+
+        function drawFromDiscard() {
+            if (currentTurn !== 0) return;
+            if (hasDrawn) {
+                setStatusMessage('⚠️ አስቀድመው ካርታ ስበዋል፤ የሚጥሉት ካርታ ይምረጡ!');
+                return;
+            }
+            if (discardPile.length === 0) return;
+            const card = discardPile.pop();
+            playerHand.push(card);
+            hasDrawn = true;
+            renderDiscardPile();
+            renderPlayerHand();
+            sound.playDraw();
+            setStatusMessage('ከተጣለው ካርታ ወስደዋል፤ የሚጥሉት ካርታ ይምረጡና «ካርታ ጣል» ይጫኑ።');
+        }
+
+        function handleDiscardSelected() {
+            if (currentTurn !== 0) return;
+            if (!hasDrawn) {
+                setStatusMessage('⚠️ አስቀድመው ካርታ መሳብ አለብዎት!');
+                return;
+            }
+            if (selectedCardIds.size !== 1) {
+                setStatusMessage('⚠️ ለመጣል በትክክል 1 ካርታ ብቻ ይምረጡ!');
+                return;
+            }
+            const cardId = Array.from(selectedCardIds)[0];
+            const idx = playerHand.findIndex(c => c.id === cardId);
+            if (idx === -1) return;
+
+            const [discarded] = playerHand.splice(idx, 1);
+            discardPile.push(discarded);
+            selectedCardIds.clear();
+            hasDrawn = false;
+
+            renderDiscardPile();
+            renderPlayerHand();
+            sound.playDiscard();
+
+            // Pass turn to Opponent (Bot)
+            currentTurn = 1;
+            resetTurnTimer();
+            setStatusMessage('የተፎካካሪ ተራ...');
+            document.getElementById('opponent-status-msg').innerText = 'ካርታ እያሰበ ነው...';
+
+            setTimeout(playBotTurn, 1500);
+        }
+
+        function playBotTurn() {
+            // Bot draws
+            if (stockPile.length > 0) {
+                stockPile.pop();
+                document.getElementById('stock-count-label').innerText = stockPile.length;
+            }
+            sound.playDraw();
+
+            setTimeout(() => {
+                // Bot discards a dummy card
+                const dummy = {
+                    id: 'bot_card_' + Date.now(),
+                    rank: RANKS[Math.floor(Math.random() * RANKS.length)],
+                    suit: SUITS[Math.floor(Math.random() * SUITS.length)].symbol,
+                    color: Math.random() > 0.5 ? 'red' : 'black',
+                    value: 8,
+                    points: 8
+                };
+                discardPile.push(dummy);
+                renderDiscardPile();
+                sound.playDiscard();
+
+                currentTurn = 0;
+                hasDrawn = false;
+                resetTurnTimer();
+                setStatusMessage('የእርስዎ ተራ ነው! ካርታ ይሳቡ።');
+                document.getElementById('opponent-status-msg').innerText = 'የእርስዎ ተራ እየጠበቀ ነው...';
+            }, 1200);
+        }
+
+        function handleMeldAttempt() {
+            if (selectedCardIds.size < 3) {
+                setStatusMessage('⚠️ ለመውረድ ቢያንስ 3 ካርታዎች መምረጥ አለብዎት!');
+                return;
+            }
+            // Check points sum
+            const selected = playerHand.filter(c => selectedCardIds.has(c.id));
+            const sum = selected.reduce((s, c) => s + c.points, 0);
+            if (sum < 42 && !isPlayerOpened) {
+                setStatusMessage(`⚠️ ለመውረድ ድምሩ ቢያንስ 42 ነጥብ መሆን አለበት (የመረጡት ድምር: ${sum})!`);
+                return;
+            }
+
+            // Remove melded cards from hand and display on table
+            isPlayerOpened = true;
+            playerHand = playerHand.filter(c => !selectedCardIds.has(c.id));
+            selectedCardIds.clear();
+
+            document.getElementById('meld-status-badge').innerText = 'ወርደዋል ✓';
+            document.getElementById('meld-status-badge').className = 'text-[10px] bg-emerald-900 text-emerald-300 px-2 py-0.5 rounded font-bold';
+
+            const container = document.getElementById('table-melds-container');
+            container.innerHTML = `
+                <div class="bg-purple-900/60 p-1.5 rounded-lg border border-purple-700 flex gap-1 items-center">
+                    <span class="text-yellow-400 font-bold">የእርስዎ ወረራ:</span>
+                    ${selected.map(c => `<span>${c.rank}${c.suit}</span>`).join(' ')}
+                    <span class="text-emerald-400 font-bold">(${sum} ነጥብ)</span>
+                </div>
+            `;
+            renderPlayerHand();
+            sound.playVictory();
+            setStatusMessage(`🎉 በተሳካ ሁኔታ በ${sum} ነጥብ ወርደዋል!`);
+        }
+
+        function handleCheckWin() {
+            if (currentTurn !== 0) return;
+            if (!hasDrawn) {
+                setStatusMessage('⚠️ አስቀድመው ካርታ መሳብ አለብዎት!');
+                return;
+            }
+
+            // Authentic Mekelle Rule:
+            // "ጆከሩ «የወጣው እራሱ» ሆኖ ሲሰየም... ያልወረደ ተጫዋች ብቻ ነው ሊጨርስ 1 ካርታ ሲቀረው በዚያው ጆከር ጨርሶ ራሚኖ (እጥፍ ድል) ማሸነፍ የሚችለው ግን የመጨረሻዉ የሚወረዉረዉ ካርታ ጆከር ከሆነ ብቻ ነዉ"
+            if (!isPlayerOpened && playerHand.length === 1) {
+                const lastCard = playerHand[0];
+                if (isCardWild(lastCard)) {
+                    sound.playVictory();
+                    walletBalance += (activeRoom.stake * 2);
+                    alert(`🎉🎉🎉 እንኳን ደስ አለዎት! ጆከር የወጣው እራሱ በመሆኑ ያልወረዱ ስለሆኑ የመጨረሻውን ካርታ በ${lastCard.rank}${lastCard.suit} ጆከር በመጣል ራሚኖ (እጥፍ ድል - ${activeRoom.stake * 2} ETB) አሸንፈዋል!`);
+                    exitToLobby();
+                    return;
+                }
+            }
+
+            if (playerHand.length <= 1) {
+                sound.playVictory();
+                walletBalance += activeRoom.stake;
+                alert(`🎉 እንኳን ደስ አለዎት! ጨዋታውን በድል አጠናቀዋል (${activeRoom.stake} ETB አሸንፈዋል)!`);
+                exitToLobby();
+            } else {
+                setStatusMessage(`⚠️ ጨዋታውን ለመጨረስ 1 ካርታ ብቻ ነው መቅረት ያለበት (አሁን በእጅዎ ${playerHand.length} ካርታ አለ)።`);
+            }
+        }
+
+        // 20-Second Move Timer
+        function startMoveTimer() {
+            if (timerInterval) clearInterval(timerInterval);
+            turnTimer = 20;
+            timerInterval = setInterval(() => {
+                turnTimer--;
+                updateTurnTimer();
+                if (turnTimer <= 0) {
+                    // Auto draw & discard on timeout
+                    if (!hasDrawn) drawFromStock();
+                    setTimeout(() => {
+                        if (playerHand.length > 0) {
+                            selectedCardIds.clear();
+                            selectedCardIds.add(playerHand[playerHand.length - 1].id);
+                            handleDiscardSelected();
+                        }
+                    }, 500);
+                }
+            }, 1000);
+        }
+
+        function resetTurnTimer() {
+            turnTimer = 20;
+            updateTurnTimer();
+        }
+
+        function updateTurnTimer() {
+            const el = document.getElementById('turn-timer-val');
+            if (el) el.innerText = `${turnTimer}s`;
+
+            const playerRing = document.getElementById('player-timer-ring');
+            if (playerRing) {
+                // Circle circumference: 2 * Math.PI * 18 ≈ 113.1
+                const offset = 113 - (113 * turnTimer) / 20;
+                playerRing.style.strokeDashoffset = offset;
+                if (turnTimer <= 5) {
+                    playerRing.setAttribute('stroke', '#f43f5e');
+                    if (el) el.className = 'text-xs font-mono font-black text-rose-400 animate-pulse ml-2';
+                } else {
+                    playerRing.setAttribute('stroke', '#f59e0b');
+                    if (el) el.className = 'text-xs font-mono font-black text-yellow-300 ml-2';
+                }
+            }
+
+            const oppRing = document.getElementById('opponent-timer-ring');
+            if (oppRing) {
+                oppRing.style.strokeDashoffset = currentTurn === 1 ? (113 - (113 * turnTimer) / 20) : 113;
+            }
+        }
+
+        function setStatusMessage(msg) {
+            document.getElementById('footer-status-msg').innerText = msg;
+        }
+
+        function exitToLobby() {
+            if (timerInterval) clearInterval(timerInterval);
+            document.getElementById('game-view').classList.add('hidden');
+            document.getElementById('lobby-view').classList.remove('hidden');
+            updateLiveStats();
+        }
+
+        // On Load
+        window.addEventListener('DOMContentLoaded', () => {
+            initLobby();
+        });
+    </script>
+</body>
+</html>
