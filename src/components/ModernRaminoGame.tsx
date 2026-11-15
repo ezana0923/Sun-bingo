@@ -2768,6 +2768,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const [joinLookupError, setJoinLookupError] = useState<string | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [telegramBotUsername, setTelegramBotUsername] = useState<string>('Kidamegamesbot');
   const [notificationBanner, setNotificationBanner] = useState<string | null>(null);
   const [isBannedModalOpen, setIsBannedModalOpen] = useState<boolean>(false);
 
@@ -3412,6 +3413,15 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         setIsJoinCodeModalOpen(true);
       }
     } catch {}
+    fetch(buildApiUrl('/api/telegram/status'))
+      .then((r) => r.json())
+      .then((data) => {
+        const activeUser = data?.details?.[0]?.botUsername || data?.bots?.[0];
+        if (activeUser && typeof activeUser === 'string') {
+          setTelegramBotUsername(activeUser.replace(/^@/, ''));
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Poll Private Room while host modal is open so joined friends appear live (and syncs dedicated privateStake)
@@ -5700,33 +5710,46 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               </div>
 
               {isPrivateRoomGame && activePrivateRoomCode && (
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(activePrivateRoomCode).catch(() => {});
-                      setCodeCopied(true);
-                      setTimeout(() => setCodeCopied(false), 1800);
-                    }}
-                    className="py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-teal-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(activePrivateRoomCode).catch(() => {});
+                        setCodeCopied(true);
+                        setTimeout(() => setCodeCopied(false), 1800);
+                      }}
+                      className="py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-teal-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      {codeCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{codeCopied ? t.copiedBtn : t.copyCodeBtn}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const tgUrl = `https://t.me/${telegramBotUsername}?start=ramino_${encodeURIComponent(activePrivateRoomCode)}`;
+                        navigator.clipboard?.writeText(tgUrl).catch(() => {});
+                        setLinkCopied(true);
+                        triggerNotification(t.notifyLinkCopied);
+                        setTimeout(() => setLinkCopied(false), 1800);
+                      }}
+                      className="py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-sky-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      {linkCopied ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
+                      <span>{linkCopied ? t.copiedBtn : t.copyLinkBtn}</span>
+                    </button>
+                  </div>
+                  <a
+                    href={`https://t.me/share/url?url=${encodeURIComponent(`https://t.me/${telegramBotUsername}?start=ramino_${encodeURIComponent(activePrivateRoomCode)}`)}&text=${encodeURIComponent(`${t.inviteTextHeader}\n👥 ${t.seatOptionLabel(playerSeatCount)} • 🪙 ${activeTableStake} ${t.currencyUnit}\n🔑 ${activePrivateRoomCode}`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2 px-3 rounded-xl bg-[#229ED9]/25 hover:bg-[#229ED9]/40 border border-[#229ED9]/60 text-sky-100 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer"
                   >
-                    {codeCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{codeCopied ? t.copiedBtn : t.copyCodeBtn}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const url = `${window.location.origin}/?game=ramino&raminoRoom=${encodeURIComponent(activePrivateRoomCode)}`;
-                      navigator.clipboard?.writeText(url).catch(() => {});
-                      setLinkCopied(true);
-                      triggerNotification(t.notifyLinkCopied);
-                      setTimeout(() => setLinkCopied(false), 1800);
-                    }}
-                    className="py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-sky-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    {linkCopied ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
-                    <span>{linkCopied ? t.copiedBtn : t.copyLinkBtn}</span>
-                  </button>
+                    <svg viewBox="0 0 24 24" className="w-4 h-4 fill-[#29B6F6] shrink-0">
+                      <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
+                    </svg>
+                    <span>{t.sendTelegramBtn}</span>
+                  </a>
                 </div>
               )}
 
@@ -6779,10 +6802,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             </div>
 
             {(() => {
-              const privateInviteLink =
-                typeof window !== 'undefined'
-                  ? `${window.location.origin}/?game=ramino&raminoRoom=${encodeURIComponent(privateCode)}`
-                  : '';
+              const privateInviteLink = `https://t.me/${telegramBotUsername}?start=ramino_${encodeURIComponent(privateCode)}`;
               const joinedPlayers = privateRoomState?.players || [
                 { name: playerName, isHost: true, joinedAt: Date.now() },
               ];

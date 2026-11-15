@@ -72,14 +72,23 @@ const lastMenuMessageIdByChat = new Map<number, number>();
 // Track registered phone numbers & welcome bonus per Telegram chatId
 const registeredChatPhones = new Map<number, string>();
 const pendingReferralByChatId = new Map<number, string>();
+const pendingRaminoRoomByChatId = new Map<number, string>();
 const chatWelcomeBonusClaimed = new Set<number>();
 // Track prompt message IDs per chatId so we can delete the "📱 Share Phone Number" prompt bubbles once registered
 const promptMessageIdsByChat = new Map<number, number[]>();
 // Track per-chat interactive Deposit / Withdraw / Transfer flow state so typed amounts or account numbers work seamlessly
 interface ChatFlowState {
-  mode: 'deposit' | 'withdraw_amount' | 'withdraw_account' | 'transfer';
+  mode:
+    | 'deposit'
+    | 'deposit_amount'
+    | 'deposit_method'
+    | 'deposit_sms'
+    | 'withdraw_amount'
+    | 'withdraw_account'
+    | 'transfer';
   method?: 'CBE' | 'Abyssinia' | 'Telebirr' | 'M-Pesa' | 'Cash' | string;
   amount?: number;
+  reference?: string;
 }
 const chatFlowByChatId = new Map<number, ChatFlowState>();
 let globalRegisteredPhone: string | null = null;
@@ -171,6 +180,7 @@ let adminPinConfig = {
   passwordHash: 'admin123',
   pinCode: '1234',
   requireDepositApproval: true,
+  smsWebhookEnabled: true,
   smsWebhookSecret: 'ezi_sms_secret_2026',
   welcomeBonusAmount: 15,
   referralBonusAmount: 10,
@@ -500,6 +510,7 @@ function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
     transactions: serverTransactions,
     players: Array.from(playersByPhone.values()),
     requireDepositApproval: adminPinConfig.requireDepositApproval,
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
     timestamp: now,
   });
 
@@ -1108,7 +1119,14 @@ function loadBotsFromDisk() {
       }
     }
     if (parsed.adminPinConfig) {
-      adminPinConfig = { ...adminPinConfig, ...parsed.adminPinConfig };
+      adminPinConfig = {
+        ...adminPinConfig,
+        ...parsed.adminPinConfig,
+        smsWebhookEnabled:
+          typeof parsed.adminPinConfig.smsWebhookEnabled === 'boolean'
+            ? parsed.adminPinConfig.smsWebhookEnabled
+            : adminPinConfig.smsWebhookEnabled,
+      };
     }
     if (Array.isArray(parsed.verifiedBankSmsReceipts)) {
       verifiedBankSmsReceipts.splice(0, verifiedBankSmsReceipts.length, ...parsed.verifiedBankSmsReceipts);
@@ -1586,10 +1604,14 @@ async function handleTelegramMenuAction(
   const botInfo = activeBots.get(token);
   const appUrl = (botInfo?.appUrl || SHARED_APP_URL).replace(/\/$/, '');
 
-  // Capture referral deep-link (/start ref_XXXXXX) if present
-  const refMatch = clean.match(/^\/start\s+ref_([a-z0-9_-]{3,20})/i);
+  // Capture referral deep-link (/start ref_XXXXXX) or Ramino Private Room invite (/start ramino_CODE) if present
+  const refMatch = rawAction.trim().match(/^\/start\s+ref_([a-z0-9_-]{3,20})/i);
   if (refMatch && !registeredChatPhones.has(chatId)) {
     pendingReferralByChatId.set(chatId, refMatch[1]);
+  }
+  const raminoDeepMatch = rawAction.trim().match(/^\/start\s+ramino_([a-z0-9_-]{3,32})/i);
+  if (raminoDeepMatch) {
+    pendingRaminoRoomByChatId.set(chatId, raminoDeepMatch[1].trim().toUpperCase());
   }
 
   // Guard against accidental double-tap on callback buttons; NEVER drop explicit /start commands
@@ -1691,6 +1713,35 @@ async function handleTelegramMenuAction(
       undefined,
       true
     );
+
+    const pendingRoomAfterReg = pendingRaminoRoomByChatId.get(chatId);
+    if (pendingRoomAfterReg) {
+      pendingRaminoRoomByChatId.delete(chatId);
+      const privRoom = raminoPrivateRooms.get(pendingRoomAfterReg);
+      const baseApp = buildWebAppUrl(appUrl, 'fast').split('/?')[0];
+      const joinWebUrl = `${baseApp}/?game=ramino&raminoRoom=${encodeURIComponent(pendingRoomAfterReg)}&registered=1&phone=${encodeURIComponent(normalizedPhone)}`;
+      const roomInviteMsg =
+        `♠️ *የራሚኖ የግል ክፍል ግብዣ (Ramino Private Room)*\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `🔑 የክፍል ኮድ፦ \`${pendingRoomAfterReg}\`\n` +
+        (privRoom
+          ? `🪙 መደብ፦ *${privRoom.stake} ETB*\n👥 ተጫዋቾች፦ *${privRoom.players.length}/${privRoom.maxPlayers}*\n👑 ጋባዥ፦ *${escapeTelegramMarkdown(privRoom.hostName)}*\n`
+          : '') +
+        `\n👇 ክፍሉን በቀጥታ ለመቀላቀል ከታች ያለውን ቁልፍ ይጫኑ፦`;
+      await sendTelegramMessage(
+        token,
+        chatId,
+        roomInviteMsg,
+        {
+          inline_keyboard: [
+            [{ text: `🎮 ክፍሉን ተቀላቀል (${pendingRoomAfterReg})`, web_app: { url: joinWebUrl } }],
+            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
+          ],
+        },
+        undefined,
+        true
+      );
+    }
     return;
   }
 
@@ -1871,6 +1922,37 @@ async function handleTelegramMenuAction(
   const regPhone = registeredChatPhones.get(chatId) || globalRegisteredPhone || '0942742684';
   const currentPlayer = ensurePlayerRecord(regPhone, firstName, chatId);
 
+  // If registered user opened a Ramino Private Room deep link (/start ramino_CODE), send them straight to the room!
+  if (raminoDeepMatch && pendingRaminoRoomByChatId.has(chatId)) {
+    const targetRoomCode = pendingRaminoRoomByChatId.get(chatId)!;
+    pendingRaminoRoomByChatId.delete(chatId);
+    const privRoom = raminoPrivateRooms.get(targetRoomCode);
+    const baseApp = buildWebAppUrl(appUrl, 'fast').split('/?')[0];
+    const joinWebUrl = `${baseApp}/?game=ramino&raminoRoom=${encodeURIComponent(targetRoomCode)}&registered=1&phone=${encodeURIComponent(regPhone)}`;
+    const roomInviteMsg =
+      `♠️ *የራሚኖ የግል ክፍል ግብዣ (Ramino Private Room)*\n` +
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `🔑 የክፍል ኮድ፦ \`${targetRoomCode}\`\n` +
+      (privRoom
+        ? `🪙 መደብ፦ *${privRoom.stake} ETB*\n👥 ተጫዋቾች፦ *${privRoom.players.length}/${privRoom.maxPlayers}*\n👑 ጋባዥ፦ *${escapeTelegramMarkdown(privRoom.hostName)}*\n`
+        : '') +
+      `\n👇 ክፍሉን በቀጥታ ለመቀላቀል ከታች ያለውን ቁልፍ ይጫኑ፦`;
+    await sendTelegramMessage(
+      token,
+      chatId,
+      roomInviteMsg,
+      {
+        inline_keyboard: [
+          [{ text: `🎮 ክፍሉን ተቀላቀል (${targetRoomCode})`, web_app: { url: joinWebUrl } }],
+          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
+        ],
+      },
+      callbackMessageId,
+      true
+    );
+    return;
+  }
+
   // Clear flow state if user navigates to main menu or another top-level command
   if (clean.startsWith('menu_') || clean.startsWith('/')) {
     chatFlowByChatId.delete(chatId);
@@ -1962,105 +2044,192 @@ async function handleTelegramMenuAction(
     return;
   }
 
-  // 2. Deposit 💵 (Main Deposit Menu & Bank Selection)
-  if (clean.includes('deposit') || clean === '/deposit' || clean === 'menu_deposit') {
-    chatFlowByChatId.set(chatId, { mode: 'deposit', method: 'Telebirr' });
-    const depositText =
-      `Deposit 💵 *(ገንዘብ ማስገቢያ)*\n\n` +
-      `💰 የእርስዎ ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*\n\n` +
-      `👇 *1. ገንዘብ የሚያስገቡበትን ባንክ ይምረጡ ወይም ቁጥሩን ሲነኩት በራሱ Copy ያደርጋል፦*\n\n` +
-      `📱 *Telebirr (ቴሌብር)*\n` +
-      `ቁጥር: \`0942742684\`\n` +
-      `ስም: *Ezana Gebremedhin*\n\n` +
-      `🏦 *CBE (ኢትዮጵያ ንግድ ባንክ)*\n` +
-      `ሂሳብ: \`1000112964936\`\n` +
-      `ስም: *Ezana Gebremedhin*\n\n` +
-      `🏦 *Abyssinia / BOA (አቢሲኒያ ባንክ)*\n` +
-      `ሂሳብ: \`66816532\`\n` +
-      `ስም: *Ezana Gebremedhin*\n\n` +
-      `📱 *M-Pesa (ኤም-ፔሳ)*\n` +
-      `ቁጥር: \`0711742684\`\n` +
-      `ስም: *Ezana Gebremedhin*\n\n` +
-      `📩 *2. ክፍያውን ከፈጸሙ በኋላ የደረሰዎትን የባንክ/ቴሌብር SMS ደረሰኝ ወይም Transaction ID (FT... / TB...) እዚሁ ቻት ላይ Paste አድርገው ይላኩ!*`;
+  const getLiveBankAccount = (method: 'Telebirr' | 'CBE' | 'Abyssinia' | 'M-Pesa') => {
+    const found = persistedBankAccounts.find(
+      (b) =>
+        b.id.toLowerCase() === method.toLowerCase() ||
+        b.shortName.toLowerCase() === method.toLowerCase()
+    );
+    if (found) return found;
+    return {
+      id: method,
+      bankName: method,
+      shortName: method,
+      accountNumber:
+        method === 'CBE'
+          ? '1000112964936'
+          : method === 'Abyssinia'
+          ? '66816532'
+          : method === 'M-Pesa'
+          ? '0711742684'
+          : '0942742684',
+      accountHolder: 'Ezana Gebremedhin',
+      badgeBg: 'bg-sky-500 text-white',
+    };
+  };
+
+  const makeDepositRefCode = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    let out = '';
+    for (let i = 0; i < 10; i++) {
+      out += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return out;
+  };
+
+  const sendDepositStep2PaymentDetails = async (amt: number, existingRef?: string) => {
+    const refCode = existingRef || makeDepositRefCode();
+    chatFlowByChatId.set(chatId, { mode: 'deposit_method', amount: amt, reference: refCode });
+    const primaryAcct = getLiveBankAccount('Telebirr');
+    const cleanPhone = primaryAcct.accountNumber.startsWith('0')
+      ? `251${primaryAcct.accountNumber.slice(1)}`
+      : primaryAcct.accountNumber;
+    const amtFormatted = Number.isInteger(amt) ? String(amt) : amt.toFixed(2);
+    const detailsBox = [
+      `Name:       ${primaryAcct.accountHolder}`,
+      `Phone:      ${cleanPhone}`,
+      `Amount:     ${amtFormatted}ETB`,
+      `reference:  ${refCode}`,
+      `ብር ማስገባት የምትችሉት ከታች ባሉት አማራጮች ብቻ ነው`,
+      `1. ከቴሌብር ወደ ቴሌብር ብቻ`,
+      `2. ከንግድ ባንክ ወደ ንግድ ባንክ ብቻ`,
+      `3. ከአቢሲኒያ ባንክ ወደ አቢሲኒያ ባንክ ብቻ`,
+      `4. ከኤም-ፔሳ ወደ ኤም-ፔሳ ብቻ`,
+    ].join('\n');
 
     await sendTelegramMessage(
       token,
       chatId,
-      depositText,
+      `Payment details\n\`\`\`\n${detailsBox}\n\`\`\``,
       {
         inline_keyboard: [
-          [
-            { text: '📱 Telebirr', callback_data: 'dep_bank_Telebirr' },
-            { text: '🏦 CBE', callback_data: 'dep_bank_CBE' },
-          ],
-          [
-            { text: '🏦 Abyssinia (BOA)', callback_data: 'dep_bank_Abyssinia' },
-            { text: '📱 M-Pesa', callback_data: 'dep_bank_M-Pesa' },
-          ],
-          [
-            { text: '📋 Copy Telebirr (0942742684)', copy_text: { text: '0942742684' } },
-            { text: '📋 Copy CBE (1000112964936)', copy_text: { text: '1000112964936' } },
-          ],
-          [
-            { text: '📋 Copy BOA (66816532)', copy_text: { text: '66816532' } },
-            { text: '📋 Copy M-Pesa (0711742684)', copy_text: { text: '0711742684' } },
-          ],
-          [
-            {
-              text: '💵 Open Deposit in App',
-              web_app: { url: buildWebAppUrl(appUrl, 'fast', regPhone, 'deposit') },
-            },
-          ],
+          [{ text: 'Pay from telebirr to telebirr only', callback_data: `dep_step_Telebirr_${amtFormatted}_${refCode}` }],
+          [{ text: 'Pay from CBEBANK to CBEBANK', callback_data: `dep_step_CBE_${amtFormatted}_${refCode}` }],
+          [{ text: 'Pay from Abyssinia to Abyssinia only', callback_data: `dep_step_Abyssinia_${amtFormatted}_${refCode}` }],
+          [{ text: 'Pay from MPESA to MPESA only', callback_data: `dep_step_M-Pesa_${amtFormatted}_${refCode}` }],
           [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
         ],
       },
-      callbackMessageId
+      callbackMessageId,
+      true
+    );
+  };
+
+  // 2. Deposit 💵 (Step 1: Ask Amount exactly like IMG_3940)
+  if (clean.includes('deposit') || clean === '/deposit' || clean === 'menu_deposit') {
+    chatFlowByChatId.set(chatId, { mode: 'deposit_amount' });
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `እንዲሞላልዎት የሚፈልጉትን የገንዘብ መጠን ያስገቡ:`,
+      {
+        inline_keyboard: [
+          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
+        ],
+      },
+      callbackMessageId,
+      true
     );
     return;
   }
 
-  // 2B. Deposit Bank Specific Selection (dep_bank_*)
-  if (clean.startsWith('dep_bank_')) {
-    const rawBank = rawAction.replace(/^dep_bank_/i, '');
-    const method: 'CBE' | 'Abyssinia' | 'Telebirr' | 'M-Pesa' =
-      /cbe/i.test(rawBank)
+  // 2A. Return to Step 2 with amount (dep_amt_<amt>)
+  if (clean.startsWith('dep_amt_')) {
+    const rawAmt = parseFloat(rawAction.replace(/^dep_amt_/i, ''));
+    const validAmt = Number.isFinite(rawAmt) && rawAmt >= 10 ? rawAmt : 100;
+    await sendDepositStep2PaymentDetails(validAmt);
+    return;
+  }
+
+  // 2B. Deposit Step 3: User chose a payment option (dep_step_<method>_<amount>_<ref> or dep_bank_<method>)
+  if (clean.startsWith('dep_step_') || clean.startsWith('dep_bank_')) {
+    const activeFlowSnapshot = chatFlowByChatId.get(chatId);
+    let method: 'CBE' | 'Abyssinia' | 'Telebirr' | 'M-Pesa' = 'Telebirr';
+    let amt = activeFlowSnapshot?.amount || 100;
+    let refCode = activeFlowSnapshot?.reference || makeDepositRefCode();
+
+    if (clean.startsWith('dep_step_')) {
+      const rest = rawAction.replace(/^dep_step_/i, '');
+      const parts = rest.split('_');
+      const rawBank = parts[0] || 'Telebirr';
+      method = /cbe/i.test(rawBank)
         ? 'CBE'
         : /abyssinia|boa/i.test(rawBank)
         ? 'Abyssinia'
         : /mpesa|m-pesa/i.test(rawBank)
         ? 'M-Pesa'
         : 'Telebirr';
+      const parsedStepAmt = parseFloat(parts[1] || '');
+      if (Number.isFinite(parsedStepAmt) && parsedStepAmt > 0) amt = parsedStepAmt;
+      if (parts[2]) refCode = parts[2];
+    } else {
+      const rawBank = rawAction.replace(/^dep_bank_/i, '');
+      method = /cbe/i.test(rawBank)
+        ? 'CBE'
+        : /abyssinia|boa/i.test(rawBank)
+        ? 'Abyssinia'
+        : /mpesa|m-pesa/i.test(rawBank)
+        ? 'M-Pesa'
+        : 'Telebirr';
+    }
 
-    chatFlowByChatId.set(chatId, { mode: 'deposit', method });
+    chatFlowByChatId.set(chatId, {
+      mode: 'deposit_sms',
+      method,
+      amount: amt,
+      reference: refCode,
+    });
 
-    const acctMap = {
-      Telebirr: { title: '📱 Telebirr (ቴሌብር)', num: '0942742684', holder: 'Ezana Gebremedhin' },
-      CBE: { title: '🏦 Commercial Bank of Ethiopia (CBE)', num: '1000112964936', holder: 'Ezana Gebremedhin' },
-      Abyssinia: { title: '🏦 Bank of Abyssinia (BOA)', num: '66816532', holder: 'Ezana Gebremedhin' },
-      'M-Pesa': { title: '📱 M-Pesa Safaricom', num: '0711742684', holder: 'Ezana Gebremedhin' },
-    }[method];
+    const acct = getLiveBankAccount(method);
+    const labelMap: Record<'Telebirr' | 'CBE' | 'Abyssinia' | 'M-Pesa', { header: string; bankAm: string; smsSender: string }> = {
+      Telebirr: { header: 'የቴሌብር አካውንት', bankAm: 'የቴሌብር', smsSender: 'ከቴሌብር' },
+      CBE: { header: 'የንግድ ባንክ (CBE) አካውንት', bankAm: 'የንግድ ባንክ', smsSender: 'ከንግድ ባንክ' },
+      Abyssinia: { header: 'የአቢሲኒያ ባንክ አካውንት', bankAm: 'የአቢሲኒያ ባንክ', smsSender: 'ከአቢሲኒያ ባንክ' },
+      'M-Pesa': { header: 'የኤም-ፔሳ (M-Pesa) አካውንት', bankAm: 'የኤም-ፔሳ', smsSender: 'ከኤም-ፔሳ' },
+    };
+    const lbl = labelMap[method];
+    const amtStr = Number.isInteger(amt) ? String(amt) : amt.toFixed(2);
 
-    const bankText =
-      `Deposit via *${acctMap.title}* 💵\n\n` +
-      `🔢 ሂሳብ / ቁጥር፦ \`${acctMap.num}\`\n` +
-      `👤 የሂሳብ ባለቤት፦ *${acctMap.holder}*\n\n` +
-      `1️⃣ ከታች ባለው *📋 Copy* ቁልፍ ቁጥሩን ኮፒ ያድርጉ።\n` +
-      `2️⃣ ብሩን ከላኩ በኋላ የደረሰዎትን *ሙሉ የባንክ/ቴሌብር SMS ደረሰኝ* ወይም *Transaction Reference (FT... / TB...)* እዚሁ ቻት ላይ ይላኩ፦`;
+    // First bubble: copyable account number (exact match to IMG_3941 top)
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `${lbl.header}\n\n\`${acct.accountNumber}\`\n👤 ስም፦ *${escapeTelegramMarkdown(acct.accountHolder)}*`,
+      {
+        inline_keyboard: [
+          [{ text: `📋 Copy ${acct.shortName} (${acct.accountNumber})`, copy_text: { text: acct.accountNumber } }],
+        ],
+      },
+      undefined,
+      true
+    );
+
+    // Second bubble: exact step-by-step monospace instructions + prompt (matching IMG_3941)
+    const stepsBox = [
+      `1. ከላይ ባለው ${lbl.bankAm} አካውንት ${amtStr}ብር ያስገቡ`,
+      ``,
+      `2. የምትልኩት የገንዘብ መጠን እና እዚህ ላይ እንዲሞላልዎ የምታስገቡት የብር መጠን ተመሳሳይ መሆኑን እርግጠኛ ይሁኑ`,
+      ``,
+      `3. ብሩን ስትልኩ የከፈላችሁበትን መረጃ የያዘ አጭር የጽሁፍ መልክት(sms) ${lbl.smsSender} ይደርሳችኋል`,
+      ``,
+      `4. የደረሳችሁን አጭር የጽሁፍ መልክት(sms) ሙሉውን ኮፒ(copy) በማድረግ ከታች ባለው የቴሌግራም የጽሁፍ ማስገቢያው ላይ ፔስት(paste) በማድረግ ይላኩት`,
+      `ማሳሰቢያ: ዲፖዚት ባረጋቹ ቁጥር አካውንቶች ሊቀያየሩ ስለሚችሉ ከላይ ወደሚሰጣችሁ አካውንት ብቻ ብር መላካችሁን እርግጠኛ ይሁኑ።`,
+    ].join('\n');
 
     await sendTelegramMessage(
       token,
       chatId,
-      bankText,
+      `\`\`\`\n${stepsBox}\n\`\`\`\nየከፈላችሁበትን አጭር የጽሁፍ መልእክት(sms) እዚህ ላይ ያስገቡት 👇👇👇`,
       {
         inline_keyboard: [
-          [{ text: `📋 Copy ${method} (${acctMap.num})`, copy_text: { text: acctMap.num } }],
           [
-            { text: '🔙 ወደ ሁሉም ባንኮች (All Banks)', callback_data: 'menu_deposit' },
+            { text: '🔙 ባንክ ቀይር', callback_data: `dep_amt_${amtStr}` },
             { text: '🏠 Main Menu', callback_data: 'menu_main' },
           ],
         ],
       },
-      callbackMessageId
+      undefined,
+      true
     );
     return;
   }
@@ -2934,31 +3103,27 @@ async function handleTelegramMenuAction(
     return;
   }
 
-  // If the user is in deposit flow (or typed an amount like "1,500" without a ref code yet), save the amount in their flow state and ask for the Ref / SMS!
+  // Step 2 trigger: User typed a numeric amount inside deposit_amount / deposit flow -> send exact Payment details + 4 bank options!
   if (
     plainAmountValue !== null &&
-    plainAmountValue >= 10 &&
-    plainAmountValue <= 500000 &&
     !parsedSms.referenceNumber &&
-    activeFlow?.mode === 'deposit'
+    (activeFlow?.mode === 'deposit_amount' || activeFlow?.mode === 'deposit_method' || activeFlow?.mode === 'deposit')
   ) {
-    const method = activeFlow.method || 'Telebirr';
-    chatFlowByChatId.set(chatId, {
-      mode: 'deposit',
-      method,
-      amount: plainAmountValue,
-    });
-    await sendTelegramMessage(
-      token,
-      chatId,
-      `✅ የገቢ መጠን፦ *${plainAmountValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB* ተመዝግቧል!\n\n` +
-        `📩 አሁን የከፈሉበትን የ *${method}* የግብይት ቁጥር (*Transaction Ref No* ለምሳሌ \`FT...\` ወይም \`TB...\`) ወይም ሙሉ የባንክ SMS ደረሰኝ እዚሁ ይላኩ፦`,
-      {
-        inline_keyboard: [
-          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
-        ],
-      }
-    );
+    const minDep = Math.max(10, Number(adminPinConfig.minDepositAmount || 10));
+    if (plainAmountValue < minDep || plainAmountValue > 500000) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ እባክዎ ከ *${minDep} ETB* እስከ *500,000 ETB* መካከል ትክክለኛ የብር መጠን ያስገቡ፦`,
+        {
+          inline_keyboard: [[{ text: '🏠 Main Menu', callback_data: 'menu_main' }]],
+        },
+        undefined,
+        true
+      );
+      return;
+    }
+    await sendDepositStep2PaymentDetails(plainAmountValue);
     return;
   }
 
@@ -2968,7 +3133,8 @@ async function handleTelegramMenuAction(
     !clean.startsWith('menu_') &&
     !clean.startsWith('dep_') &&
     !clean.startsWith('with_') &&
-    (activeFlow?.mode === 'deposit' ||
+    (activeFlow?.mode === 'deposit_sms' ||
+      activeFlow?.mode === 'deposit' ||
       parsedSms.amount !== null ||
       parsedSms.referenceNumber !== null ||
       /ft\w+/i.test(rawAction) ||
@@ -3044,14 +3210,15 @@ async function handleTelegramMenuAction(
     // If user ONLY sent a reference number (like "FT26108XYZ") without an amount in the SMS and without a prior amount in activeFlow, ask them how much ETB they sent instead of assuming 200!
     if (!parsedAmount || parsedAmount <= 0) {
       chatFlowByChatId.set(chatId, {
-        mode: 'deposit',
+        mode: 'deposit_sms',
         method,
+        reference: activeFlow?.reference,
       });
       await sendTelegramMessage(
         token,
         chatId,
         `🔖 የግብይት ቁጥር (\`${refNo}\`) ደርሶናል!\n\n` +
-          `💰 እባክዎ የላኩትን *የብር መጠን (ETB)* ወይም *ሙሉ የባንክ SMS ደረሰኙን* ይላኩ (ለምሳሌ፦ \`1,500 ${refNo}\`)፦`,
+          `💰 እባክዎ የላኩትን *የብር መጠን (ETB)* ወይም *ሙሉ የባንክ SMS ደረሰኙን* ይላኩ (ለምሳሌ፦ \`110 ${refNo}\`)፦`,
         {
           inline_keyboard: [
             [{ text: '💵 Open Deposit in App', web_app: { url: buildWebAppUrl(appUrl, 'fast', userPhone, 'deposit') } }],
@@ -3062,6 +3229,7 @@ async function handleTelegramMenuAction(
       return;
     }
 
+    const flowRefCode = activeFlow?.reference || makeDepositRefCode();
     chatFlowByChatId.delete(chatId);
 
     // Detect if a player/sender phone number was mentioned in the SMS (e.g. "ከ 0942742684 ተቀብለዋል", "from 0911...", "payer 0912...")
@@ -3099,8 +3267,13 @@ async function handleTelegramMenuAction(
       return;
     }
 
-    // Strict Webhook Rule: Telegram deposits only auto-approve when a real bank SMS receipt already arrived via /api/webhook/sms
-    const isAutoApproved = Boolean(matchingPreVerified && matchingPreVerified.status === 'ready_for_claim');
+    // Strict Webhook Toggle Rule: Auto-approve ONLY when smsWebhookEnabled is ON AND a real bank SMS receipt already arrived via /api/webhook/sms!
+    // When smsWebhookEnabled is OFF, deposits stay 'pending' so Admin approves them manually!
+    const isAutoApproved = Boolean(
+      adminPinConfig.smsWebhookEnabled !== false &&
+        matchingPreVerified &&
+        matchingPreVerified.status === 'ready_for_claim'
+    );
     const verifiedAmt = matchingPreVerified ? matchingPreVerified.amount : parsedAmount;
     const bonusPct = Number(adminPinConfig.depositBonusPercent || 0);
     const bonusAmt = isAutoApproved && bonusPct > 0 ? Number(((verifiedAmt * bonusPct) / 100).toFixed(2)) : 0;
@@ -3156,31 +3329,40 @@ async function handleTelegramMenuAction(
     saveBotsToDisk();
     broadcastRealtimeSync();
 
-    const replyText = !isAutoApproved
-      ? `⏳ *የገቢ ጥያቄዎ ተመዝግቧል (Webhook Verification በመጠባበቅ ላይ)*\n` +
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `🏷️ አይነት፦ *ገቢ (DEPOSIT)*\n` +
-        `💳 መንገድ፦ *${method}*\n` +
-        `💰 መጠን፦ *${verifiedAmt.toFixed(2)} ETB*\n` +
-        `🔖 Ref No፦ \`${normTelegramRef || refNo}\`\n\n` +
-        `ጥያቄዎ የባንክ SMS በ Webhook ሲረጋገጥ ወዲያውኑ ወደ ዋሌትዎ ይገባል!`
-      : `✅ *የገቢ ክፍያዎ በባንክ SMS Webhook ተረጋግጦ ወዲያውኑ ጸድቋል!*\n` +
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `💳 መንገድ፦ *${newTx.method}*\n` +
-        `💰 *+${verifiedAmt.toFixed(2)} ETB*${bonusAmt > 0 ? ` (+${bonusAmt.toFixed(2)} ETB ቦነስ)` : ''} ወደ ዋሌትዎ ተጨምሯል!\n` +
-        `🔖 Ref No፦ \`${newTx.referenceNumber}\`\n` +
-        `📱 ተጠቃሚ፦ *${targetPhone}*\n` +
-        `💵 አዲስ ቀሪ ሂሳብ፦ *${targetPlayer.balance.toFixed(2)} ETB*`;
+    const acctForReceipt = getLiveBankAccount(
+      (/cbe/i.test(String(newTx.method))
+        ? 'CBE'
+        : /abyssinia|boa/i.test(String(newTx.method))
+        ? 'Abyssinia'
+        : /mpesa|m-pesa/i.test(String(newTx.method))
+        ? 'M-Pesa'
+        : 'Telebirr')
+    );
+
+    const moneyReceivedCard = [
+      `Receiver Name:   ${acctForReceipt.accountHolder}`,
+      `Amount:          ${verifiedAmt.toFixed(2)}ETB`,
+      `Transaction No:  ${normTelegramRef || refNo}`,
+      `Reference:       ${flowRefCode}`,
+    ].join('\n');
+
+    const statusLine = isAutoApproved
+      ? `✅ *ክፍያዎ ተረጋግጦ +${verifiedAmt.toFixed(2)} ETB${bonusAmt > 0 ? ` (+${bonusAmt.toFixed(2)} ETB ቦነስ)` : ''} ወደ ዋሌትዎ ገብቷል!*\n💵 አዲስ ቀሪ ሂሳብ፦ *${targetPlayer.balance.toFixed(2)} ETB*`
+      : adminPinConfig.smsWebhookEnabled === false
+      ? `⏳ *የገቢ ጥያቄዎ ለአድሚን ተልኳል (Manual Approval Pending)*\nአድሚኑ ሲያጸድቀው ወዲያውኑ ወደ ዋሌትዎ ይገባል እና እዚሁ መልእክት ይደርስዎታል!`
+      : `⏳ *የገቢ ጥያቄዎ ተመዝግቧል (በማረጋገጥ ላይ)*\nበባንክ SMS ወይም በአድሚን ሲጸድቅ ወዲያውኑ ወደ ዋሌትዎ ይገባል!`;
+
+    const replyText = `Money Received\n\`\`\`\n${moneyReceivedCard}\n\`\`\`\n${statusLine}`;
 
     await sendTelegramMessage(token, chatId, replyText, buildSubMenuInlineKeyboard(appUrl, userPhone));
 
     // Also notify targetPlayer if different from chatId
     if (targetPlayer.chatId && targetPlayer.chatId !== chatId) {
       const directNotify =
-        `✅ *የገቢ ክፍያዎ በባንክ SMS በራሱ ተረጋግጦ ወዲያውኑ ጸድቋል!*\n` +
+        `✅ *የገቢ ክፍያዎ ተረጋግጦ ወደ ዋሌትዎ ገቢ ሆኗል!*\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
         `💳 መንገድ፦ *${method}*\n` +
-        `💰 *+${parsedAmount.toFixed(2)} ETB* ወደ ዋሌትዎ ተጨምሯል!\n` +
+        `💰 *+${verifiedAmt.toFixed(2)} ETB* ወደ ዋሌትዎ ተጨምሯል!\n` +
         `🔖 Ref No፦ \`${refNo}\`\n` +
         `💵 አዲስ ቀሪ ሂሳብ፦ *${targetPlayer.balance.toFixed(2)} ETB*`;
       sendTelegramMessage(token, targetPlayer.chatId, directNotify, buildSubMenuInlineKeyboard(appUrl, targetPhone)).catch(() => {});
@@ -4566,6 +4748,7 @@ app.get('/api/live-room/stream', (req, res) => {
     transactions: serverTransactions,
     players: Array.from(playersByPhone.values()),
     requireDepositApproval: adminPinConfig.requireDepositApproval,
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
     timestamp: Date.now(),
   });
   res.write(`data: ${initialPayload}\n\n`);
@@ -4688,6 +4871,7 @@ app.get('/api/live-room/state', (req, res) => {
     transactions: serverTransactions,
     pendingCount: serverTransactions.filter((t) => t.status === 'pending').length,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
   });
 });
 
@@ -5623,10 +5807,11 @@ app.post('/api/transactions/submit', (req, res) => {
   }
 
   // Strict Webhook Deposit Policy:
-  // Deposits ONLY auto-approve when verified by an actual incoming Bank SMS Webhook receipt!
-  // Otherwise, deposits remain 'pending' until the matching SMS Webhook arrives (or Admin approves).
+  // Deposits ONLY auto-approve when SMS Webhook is enabled (ON) AND verified by an incoming Bank SMS Webhook receipt!
+  // Otherwise (including when Webhook is turned OFF by admin), deposits remain 'pending' for Manual Admin Approval!
   const isWebhookVerifiedDeposit = Boolean(
-    resolvedType === 'deposit' &&
+    adminPinConfig.smsWebhookEnabled !== false &&
+      resolvedType === 'deposit' &&
       matchingVerifiedReceipt &&
       matchingVerifiedReceipt.status === 'ready_for_claim'
   );
@@ -5899,6 +6084,27 @@ function processIncomingBankSms(
     });
     if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
     saveBotsToDisk();
+    return { success: false, statusText, parsed };
+  }
+
+  // Respect Admin Webhook ON/OFF toggle: when OFF, log incoming SMS but do NOT auto-approve so Admin approves manually!
+  if (adminPinConfig.smsWebhookEnabled === false) {
+    const statusText = `⏸️ Webhook ጠፍቷል (OFF) — በአድሚን እጅ ማጽደቅ ይጠበቃል (Manual Approval Mode)`;
+    receivedWebhookSmsLogs.unshift({
+      id: logId,
+      timestamp: new Date().toLocaleString(),
+      sender,
+      rawText: text,
+      parsedAmount: amt,
+      parsedRef: normRef,
+      detectedBank,
+      detectedType: parsed.detectedType,
+      statusText,
+      matchedPlayerPhone: detectedSenderPhone,
+    });
+    if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+    saveBotsToDisk();
+    broadcastRealtimeSync();
     return { success: false, statusText, parsed };
   }
 
@@ -6298,12 +6504,13 @@ app.get('/api/transactions/sms-webhook', handleIncomingSmsWebhook);
 
 // 2. Query Webhook Status, Secret, and Recent Logs for Admin Panel
 app.get('/api/webhook/sms/logs', (req, res) => {
-  const host = req.get('host') || 'ezi-bingo.onrender.com';
+  const host = req.get('host') || 'sunbingo.onrender.com';
   const proto = req.protocol === 'https' || host.includes('run.app') || host.includes('render.com') ? 'https' : 'http';
   res.json({
     ok: true,
     webhookUrl: `${proto}://${host}/api/webhook/sms`,
     secret: adminPinConfig.smsWebhookSecret || 'ezi_sms_secret_2026',
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
     logs: receivedWebhookSmsLogs,
     verifiedReceipts: verifiedBankSmsReceipts,
@@ -6320,23 +6527,33 @@ app.post('/api/webhook/sms/test', (req, res) => {
   const result = processIncomingBankSms(smsText.trim(), sender || '127');
   res.json({
     ok: true,
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
     result,
     logs: receivedWebhookSmsLogs,
     verifiedReceipts: verifiedBankSmsReceipts,
   });
 });
 
-// 4. Update Webhook Secret
+// 4. Update Webhook Secret and/or ON/OFF Toggle
 app.post('/api/webhook/sms/config', (req, res) => {
-  const { secret } = req.body as { secret?: string };
+  const { secret, enabled } = req.body as { secret?: string; enabled?: boolean };
+  let changed = false;
   if (secret && secret.trim().length >= 4) {
     adminPinConfig.smsWebhookSecret = secret.trim();
+    changed = true;
+  }
+  if (typeof enabled === 'boolean') {
+    adminPinConfig.smsWebhookEnabled = enabled;
+    changed = true;
+  }
+  if (changed) {
     saveBotsToDisk();
     broadcastRealtimeSync();
   }
   res.json({
     ok: true,
     secret: adminPinConfig.smsWebhookSecret,
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
   });
 });
 
@@ -6435,6 +6652,19 @@ app.post('/api/transactions/approve', async (req, res) => {
           : `✅ *የወጪ ጥያቄዎ (${tx.amount.toFixed(2)} ETB) ጸድቆ ወደ ሂሳብዎ ተልኳል!*`;
       sendTelegramMessage(firstToken, Number(targetChatId), msgText).catch(() => {});
     }
+  } else if (previousStatus !== 'rejected' && status === 'rejected') {
+    const targetChatId =
+      tx.chatId ||
+      player.chatId ||
+      Array.from(registeredChatPhones.entries()).find(([, ph]) => ph === tx.userPhone)?.[0];
+    if (targetChatId && activeBots.size > 0) {
+      const firstToken = Array.from(activeBots.keys())[0];
+      const msgText =
+        tx.type === 'deposit'
+          ? `❌ *የገቢ ጥያቄዎ (${tx.amount.toFixed(2)} ETB • Ref: \`${tx.referenceNumber}\`) ውድቅ ተደርጓል (Rejected)!*\nእባክዎ ትክክለኛ የክፍያ ደረሰኝ ያረጋግጡ ወይም Support ያነጋግሩ።`
+          : `❌ *የወጪ ጥያቄዎ (${tx.amount.toFixed(2)} ETB) ውድቅ ተደርጓል (Rejected)!*`;
+      sendTelegramMessage(firstToken, Number(targetChatId), msgText).catch(() => {});
+    }
   }
 
   saveBotsToDisk();
@@ -6489,6 +6719,7 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
     newPassword,
     newPin,
     requireDepositApproval,
+    smsWebhookEnabled,
     welcomeBonusAmount,
     referralBonusAmount,
     depositBonusPercent,
@@ -6498,6 +6729,7 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
     newPassword?: string;
     newPin?: string;
     requireDepositApproval?: boolean;
+    smsWebhookEnabled?: boolean;
     welcomeBonusAmount?: number;
     referralBonusAmount?: number;
     depositBonusPercent?: number;
@@ -6512,6 +6744,9 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
   }
   if (typeof requireDepositApproval === 'boolean') {
     adminPinConfig.requireDepositApproval = requireDepositApproval;
+  }
+  if (typeof smsWebhookEnabled === 'boolean') {
+    adminPinConfig.smsWebhookEnabled = smsWebhookEnabled;
   }
   if (typeof welcomeBonusAmount === 'number' && Number.isFinite(welcomeBonusAmount)) {
     adminPinConfig.welcomeBonusAmount = Math.max(0, welcomeBonusAmount);
@@ -6536,6 +6771,7 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
       username: adminPinConfig.username,
       pinCode: adminPinConfig.pinCode,
       requireDepositApproval: adminPinConfig.requireDepositApproval,
+      smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
       welcomeBonusAmount: adminPinConfig.welcomeBonusAmount,
       referralBonusAmount: adminPinConfig.referralBonusAmount,
       depositBonusPercent: adminPinConfig.depositBonusPercent,
@@ -6555,6 +6791,7 @@ app.get('/api/admin/settings', (req, res) => {
       username: adminPinConfig.username,
       pinCode: adminPinConfig.pinCode,
       requireDepositApproval: adminPinConfig.requireDepositApproval,
+      smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
       welcomeBonusAmount: adminPinConfig.welcomeBonusAmount,
       referralBonusAmount: adminPinConfig.referralBonusAmount,
       depositBonusPercent: adminPinConfig.depositBonusPercent,

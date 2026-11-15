@@ -604,6 +604,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [smsTestSender, setSmsTestSender] = useState<string>('127');
   const [isTestingWebhook, setIsTestingWebhook] = useState<boolean>(false);
   const [isLoadingWebhookLogs, setIsLoadingWebhookLogs] = useState<boolean>(false);
+  const [smsWebhookEnabled, setSmsWebhookEnabled] = useState<boolean>(true);
+  const [isTogglingWebhook, setIsTogglingWebhook] = useState<boolean>(false);
   const [copiedWebhookUrl, setCopiedWebhookUrl] = useState<boolean>(false);
   const [copiedSecret, setCopiedSecret] = useState<boolean>(false);
 
@@ -1220,6 +1222,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       const data = await res.json();
       if (data?.ok) {
         if (data.webhookUrl) setSmsWebhookUrl(data.webhookUrl);
+        if (typeof data.smsWebhookEnabled === 'boolean') {
+          setSmsWebhookEnabled(data.smsWebhookEnabled);
+        }
         if (data.secret) {
           setSmsWebhookSecret(data.secret);
           setSmsWebhookSecretInput(data.secret);
@@ -1245,6 +1250,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       .then((r) => r.json())
       .then((data) => {
         if (data?.config) {
+          if (typeof data.config.smsWebhookEnabled === 'boolean') {
+            setSmsWebhookEnabled(data.config.smsWebhookEnabled);
+          }
           if (data.config.welcomeBonusAmount !== undefined) setWelcomeBonus(String(data.config.welcomeBonusAmount));
           if (data.config.referralBonusAmount !== undefined) setReferralBonus(String(data.config.referralBonusAmount));
           if (data.config.depositBonusPercent !== undefined) setDepositBonusPct(String(data.config.depositBonusPercent));
@@ -1303,6 +1311,36 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       }
     } catch {
       showToast('❌ Secret መቀየር አልተቻለም');
+    }
+  };
+
+  const handleToggleSmsWebhook = async (nextEnabled: boolean) => {
+    setIsTogglingWebhook(true);
+    setSmsWebhookEnabled(nextEnabled);
+    try {
+      const res = await fetch(buildApiUrl('/api/webhook/sms/config'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: nextEnabled }),
+      });
+      const data = await res.json();
+      if (data?.ok) {
+        setSmsWebhookEnabled(Boolean(data.smsWebhookEnabled));
+        showToast(
+          data.smsWebhookEnabled
+            ? '🟢 Webhook በርቷል (ON) — ገቢ በባንክ SMS በራሱ ይጸድቃል!'
+            : '🔴 Webhook ጠፍቷል (OFF) — ገቢዎችን በራስዎ እጅ ያጸድቃሉ (Manual Approval)!'
+        );
+        onRefreshLiveState?.();
+      } else {
+        setSmsWebhookEnabled(!nextEnabled);
+        showToast('❌ የ Webhook ሁኔታ መቀየር አልተቻለም');
+      }
+    } catch {
+      setSmsWebhookEnabled(!nextEnabled);
+      showToast('❌ ከሰርቨር ጋር መገናኘት አልተቻለም');
+    } finally {
+      setIsTogglingWebhook(false);
     }
   };
 
@@ -3893,6 +3931,18 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
+                disabled={isTogglingWebhook}
+                onClick={() => handleToggleSmsWebhook(!smsWebhookEnabled)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-black border flex items-center gap-1.5 transition-all cursor-pointer ${
+                  smsWebhookEnabled
+                    ? 'bg-emerald-500/20 hover:bg-emerald-500/30 border-emerald-500/50 text-emerald-300'
+                    : 'bg-rose-500/20 hover:bg-rose-500/30 border-rose-500/50 text-rose-300'
+                }`}
+              >
+                <span>{smsWebhookEnabled ? '🟢 Webhook: ON (Auto)' : '🔴 Webhook: OFF (እራሴ አጸድቃለሁ)'}</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setActiveSubTab('sms_webhook')}
                 className="px-3 py-1.5 rounded-xl text-xs font-black bg-indigo-600/20 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-300 hover:text-white flex items-center gap-1.5 transition-all cursor-pointer"
               >
@@ -3909,7 +3959,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
                   }`}
                 >
-                  {requireDepositApproval ? '🔒 Manual Approval: ON' : '⚡ Auto-Approve: ON'}
+                  {requireDepositApproval ? '🔒 Manual Withdraw Approval: ON' : '⚡ Auto-Withdraw: ON'}
                 </button>
               )}
             </div>
@@ -4347,30 +4397,52 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   <Smartphone className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base sm:text-lg font-black tracking-tight">
-                      የባንክ SMS Webhook (0% Commission Auto-Verify)
-                    </h3>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                      🟢 LIVE & LISTENING
-                    </span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-base sm:text-lg font-black tracking-tight">
+                        የባንክ SMS Webhook (0% Commission Auto-Verify)
+                      </h3>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                          smsWebhookEnabled
+                            ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                            : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                        }`}
+                      >
+                        {smsWebhookEnabled ? '🟢 WEBHOOK ON (Auto-Verify)' : '⏸️ WEBHOOK OFF (Manual Approval)'}
+                      </span>
+                    </div>
+                    <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                      {smsWebhookEnabled
+                        ? 'የቴሌብር እና የባንክ SMS ወደ ስልክዎ እንደደረሰ በ 1 ሰከንድ ውስጥ በራሱ ወደ ሲስተሙ ገቢ ይሆናል'
+                        : 'Webhook ጠፍቷል — ሁሉም የገቢ ጥያቄዎች በአድሚን እጅ (Approve) ብቻ እንዲጸድቁ ተደርጓል'}
+                    </p>
                   </div>
-                  <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    የቴሌብር እና የባንክ SMS ወደ ስልክዎ እንደደረሰ በ 1 ሰከንድ ውስጥ በራሱ ወደ ሲስተሙ ገቢ ይሆናል
-                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    disabled={isTogglingWebhook}
+                    onClick={() => handleToggleSmsWebhook(!smsWebhookEnabled)}
+                    className={`px-3.5 py-1.5 rounded-xl font-black text-xs flex items-center gap-1.5 cursor-pointer border transition-all ${
+                      smsWebhookEnabled
+                        ? 'bg-rose-600/20 hover:bg-rose-600 text-rose-200 hover:text-white border-rose-500/50'
+                        : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400/60 shadow-lg shadow-emerald-600/25'
+                    }`}
+                  >
+                    <span>{smsWebhookEnabled ? '🔴 Webhook አጥፋ (Turn OFF)' : '🟢 Webhook አብራ (Turn ON)'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={fetchSmsWebhookDetails}
+                    disabled={isLoadingWebhookLogs}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center gap-1.5 cursor-pointer border border-slate-700"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingWebhookLogs ? 'animate-spin' : ''}`} />
+                    <span>Sync Logs</span>
+                  </button>
                 </div>
               </div>
-
-              <button
-                type="button"
-                onClick={fetchSmsWebhookDetails}
-                disabled={isLoadingWebhookLogs}
-                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center gap-1.5 cursor-pointer border border-slate-700"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingWebhookLogs ? 'animate-spin' : ''}`} />
-                <span>Sync Logs</span>
-              </button>
-            </div>
 
             {/* Webhook URL & Secret Display Card */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

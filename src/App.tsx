@@ -803,8 +803,14 @@ export default function App() {
         } catch {}
       }
 
-      // Save pending Ramino private room invite code and switch directly to Ramino
-      const raminoRoom = p.get('raminoRoom');
+      // Save pending Ramino private room invite code (URL or Telegram WebApp start_param) and switch directly to Ramino
+      const tgStartParam =
+        (window as unknown as { Telegram?: { WebApp?: { initDataUnsafe?: { start_param?: string } } } })
+          ?.Telegram?.WebApp?.initDataUnsafe?.start_param || '';
+      const startParamRoom = tgStartParam.toLowerCase().startsWith('ramino_')
+        ? tgStartParam.slice(7)
+        : '';
+      const raminoRoom = p.get('raminoRoom') || startParamRoom;
       if (raminoRoom) {
         try {
           localStorage.setItem('sun_pending_ramino_room', raminoRoom.trim().toUpperCase());
@@ -1561,6 +1567,15 @@ export default function App() {
               users={sharedUsers}
               transactions={sharedTransactions}
               isDark={isDark}
+              requireDepositApproval={requireDepositApproval}
+              onToggleRequireDepositApproval={(nextState) => {
+                setRequireDepositApproval(nextState);
+                fetch(buildApiUrl('/api/admin/update-pin'), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ requireDepositApproval: nextState }),
+                }).catch(() => {});
+              }}
               onAdjustUserBalance={(uid, delta) => {
                 setSharedUsers((prev) =>
                   prev.map((u) =>
@@ -1574,9 +1589,39 @@ export default function App() {
                 );
               }}
               onApproveRejectTransaction={(txId, status) => {
+                const targetTx = sharedTransactions.find((t) => t.id === txId);
                 setSharedTransactions((prev) =>
                   prev.map((tx) => (tx.id === txId ? { ...tx, status } : tx))
                 );
+                if (targetTx && targetTx.status === 'pending' && status === 'approved') {
+                  setSharedUsers((prev) =>
+                    prev.map((u) => {
+                      if (u.id === targetTx.userId || u.phone === targetTx.userPhone) {
+                        const delta =
+                          targetTx.type === 'deposit' ? targetTx.amount : -targetTx.amount;
+                        return { ...u, balance: Math.max(0, u.balance + delta) };
+                      }
+                      return u;
+                    })
+                  );
+                }
+                fetch(buildApiUrl('/api/transactions/approve'), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    txId,
+                    status,
+                    referenceNumber: targetTx?.referenceNumber,
+                    userPhone: targetTx?.userPhone,
+                  }),
+                })
+                  .then((r) => r.json())
+                  .then((data) => {
+                    if (data?.ok && Array.isArray(data.transactions)) {
+                      mergeGlobalTransactions(data.transactions);
+                    }
+                  })
+                  .catch(() => {});
               }}
               onStartRegistrationCountdown={() => {}}
               onBlockCartelaId={() => {}}

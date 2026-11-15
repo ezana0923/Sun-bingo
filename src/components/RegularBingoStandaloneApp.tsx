@@ -2081,7 +2081,14 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
             gameHistory={gameHistory}
             isDark={isDark}
             requireDepositApproval={requireDepositApproval}
-            onToggleRequireDepositApproval={setRequireDepositApproval}
+            onToggleRequireDepositApproval={(nextState) => {
+              setRequireDepositApproval(nextState);
+              fetch(buildApiUrl('/api/admin/update-pin'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ requireDepositApproval: nextState }),
+              }).catch(() => {});
+            }}
             bonusCartelasForOver20={bonusCartelasForOver20}
             onUpdateBonusCartelasForOver20={setBonusCartelasForOver20}
             onRefreshLiveState={refreshRegularRoomState}
@@ -2101,9 +2108,32 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
               );
             }}
             onApproveRejectTransaction={(txId, status) => {
+              const targetTx = transactions.find((t) => t.id === txId);
               setTransactions((prev) =>
                 prev.map((tx) => (tx.id === txId ? { ...tx, status } : tx))
               );
+              if (targetTx && targetTx.status === 'pending' && status === 'approved') {
+                setUsers((prev) =>
+                  prev.map((u) => {
+                    if (u.id === targetTx.userId || u.phone === targetTx.userPhone) {
+                      const delta =
+                        targetTx.type === 'deposit' ? targetTx.amount : -targetTx.amount;
+                      return { ...u, balance: Math.max(0, u.balance + delta) };
+                    }
+                    return u;
+                  })
+                );
+              }
+              fetch(buildApiUrl('/api/transactions/approve'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  txId,
+                  status,
+                  referenceNumber: targetTx?.referenceNumber,
+                  userPhone: targetTx?.userPhone,
+                }),
+              }).catch(() => {});
             }}
           />
           </div>
