@@ -1,5 +1,19 @@
+import { buildApiUrl } from './realtimeRoomClient';
+
 const SHARED_APP_URL =
   'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
+
+function resolveLiveHttpsAppUrl(): string {
+  if (
+    typeof window !== 'undefined' &&
+    window.location.origin &&
+    window.location.origin.startsWith('https://') &&
+    !window.location.origin.includes('localhost')
+  ) {
+    return window.location.origin;
+  }
+  return SHARED_APP_URL;
+}
 
 export async function connectTelegramBotEverywhere(rawToken: string): Promise<{
   ok: boolean;
@@ -15,17 +29,18 @@ export async function connectTelegramBotEverywhere(rawToken: string): Promise<{
 
   // Always use the single backend poller (/api/telegram/connect) so messages are NEVER duplicated!
   try {
-    const serverRes = await fetch('/api/telegram/connect', {
+    const serverRes = await fetch(buildApiUrl('/api/telegram/connect'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, appUrl: SHARED_APP_URL }),
+      body: JSON.stringify({ token, appUrl: resolveLiveHttpsAppUrl() }),
     });
-    if (serverRes.ok) {
-      const serverData = await serverRes.json();
-      if (serverData && serverData.ok) {
-        localStorage.setItem('ezi_telegram_bot_token', token);
-        return { ok: true, message: serverData.message };
-      }
+    const serverData = await serverRes.json().catch(() => null);
+    if (serverRes.ok && serverData?.ok) {
+      localStorage.setItem('ezi_telegram_bot_token', token);
+      return { ok: true, message: serverData.message };
+    }
+    if (serverData?.error) {
+      return { ok: false, message: `❌ ${serverData.error}` };
     }
   } catch {
     // ignore
@@ -43,7 +58,7 @@ export async function disconnectTelegramBotEverywhere(token?: string): Promise<{
 }> {
   try {
     localStorage.removeItem('ezi_telegram_bot_token');
-    const serverRes = await fetch('/api/telegram/disconnect', {
+    const serverRes = await fetch(buildApiUrl('/api/telegram/disconnect'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token }),
@@ -66,7 +81,7 @@ if (typeof window !== 'undefined') {
     const saved = localStorage.getItem('ezi_telegram_bot_token');
     if (!saved || !saved.includes(':')) return;
     try {
-      const statusRes = await fetch('/api/telegram/status');
+      const statusRes = await fetch(buildApiUrl('/api/telegram/status'));
       if (statusRes.ok) {
         const statusData = await statusRes.json();
         if (statusData && statusData.activeCount > 0) {

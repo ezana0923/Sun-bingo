@@ -708,7 +708,7 @@ function canFormFivePairs(rem10: PlayingCard[], allowSameRankPairs = false): boo
   return jokers >= odds && (jokers - odds) % 2 === 0;
 }
 
-// Check exact 13-card Dopey: 5 pairs (10 cards: identical rank+suit or with Joker) + 1 valid Tris (3-card Run OR 3-card Set, with/without Joker)
+// Check exact 13-card Dopey: strictly 5 pairs (10 cards) + 1 valid Tris (3-card Set of same rank, NEVER a Run)
 function isExact13CardDopey(cards13: PlayingCard[], allowSameRankPairs = false): boolean {
   if (cards13.length !== 13) return false;
 
@@ -716,7 +716,7 @@ function isExact13CardDopey(cards13: PlayingCard[], allowSameRankPairs = false):
     for (let j = i + 1; j < 12; j++) {
       for (let k = j + 1; k < 13; k++) {
         const triple = [cards13[i], cards13[j], cards13[k]];
-        if (!isValidSet(triple) && !isValidRun(triple)) continue;
+        if (!isValidSet(triple)) continue;
 
         const rem10: PlayingCard[] = [];
         for (let m = 0; m < 13; m++) {
@@ -1044,9 +1044,11 @@ const RAMINO_T: Record<Language, any> = {
     notifyAdminResetGame: '🔄 አድሚን ጨዋታውን ከአዲስ ጀምሮታል።',
     notifyJoinLookupErr: 'በዚህ ኮድ የተፈጠረ ክፍል አልተገኘም ወይም ሊንኩን በትክክል ያረጋግጡ።',
     notifyRoomExpired: (name: string, refund: number) => `⏰ ${name} ሰዓቱ ስላለቀ ተዘግቷል፤ ${refund} ብር ወደ ዋሌትዎ ተመልሷል!`,
-    notifyDealerStarted: (dealer: string) => `👑 ${dealer} (አሸናፊ) ካርታ አከፋፍሏል! ጨዋታው ተጀምሯል።`,
+    notifyDealerStarted: (dealer: string) => `👑 ${dealer} (አከፋፋይ • 14 ካርታ) ጨዋታውን በመጣል ይጀምራል!`,
+    notifyDealerFirstDiscard: (dealer: string) => `👑 ${dealer} (14 ካርታ ወስደዋል) — 1 ካርታ በመጣል ጨዋታውን ይጀምሩ!`,
+    discardSlotLabel: 'መጣያ',
     notifyDealtSelf: 'ካርታ ተከፋፍሏል! ከመደቡ ወይም ከተጣለው ካርታ ይሳቡ።',
-    notifyDealerOpp: (dealer: string) => `👑 ${dealer} (አሸናፊ) ካርታ አከፋፍሏል!`,
+    notifyDealerOpp: (dealer: string) => `👑 ${dealer} (14 ካርታ) በመጣል ይጀምራል!`,
     notifyYourTurnStart: (dealer: string) => `👑 ${dealer} ካርታ አከፋፍሏል! የእርስዎ ተራ ነው።`,
     notifyWarning30s: '⚠️ 30 ሰከንድ ማስጠንቀቂያ! ካርታ ካልሳቡ ከጨዋታ ይታገዳሉ!',
     notifyBottomNotReady: 'የታችኛው ካርድ ማሸነፊያ ገና አልተሟላም! ተራዎ ሲደርስ ሁሉንም ካርታዎች በቡድን መያዝ አለብዎት።',
@@ -1291,9 +1293,11 @@ const RAMINO_T: Record<Language, any> = {
     notifyAdminResetGame: '🔄 ኣድሚን ጸወታ ካብ ሓድሽ ጀሚሩዎ።',
     notifyJoinLookupErr: 'ብዚ ኮድ ዝተፈጥረ ክፍሊ ኣይተረኽበን።',
     notifyRoomExpired: (name: string, refund: number) => `⏰ ${name} ግዜኡ ስለዝኣኸለ ተዓጽዩ፤ ${refund} ብር ናብ ዋሌትኩም ተመሊሱ!`,
-    notifyDealerStarted: (dealer: string) => `👑 ${dealer} ካርታ ኣከፋፊሉ! ጸወታ ተጀሚሩ።`,
+    notifyDealerStarted: (dealer: string) => `👑 ${dealer} (ኣከፋፋሊ • 14 ካርታ) ብምድርባይ ይጅምር!`,
+    notifyDealerFirstDiscard: (dealer: string) => `👑 ${dealer} (14 ካርታ ወሲድኩም) — 1 ካርታ ብምድርባይ ጸወታ ጀምሩ!`,
+    discardSlotLabel: 'መደርበዪ',
     notifyDealtSelf: 'ካርታ ተኸፋፊሉ! ካብ መደብ ወይ ዝተደርበየ ስሓቡ።',
-    notifyDealerOpp: (dealer: string) => `👑 ${dealer} ካርታ ኣከፋፊሉ!`,
+    notifyDealerOpp: (dealer: string) => `👑 ${dealer} (14 ካርታ) ብምድርባይ ይጅምር!`,
     notifyYourTurnStart: (dealer: string) => `👑 ${dealer} ካርታ ኣከፋፊሉ! ተራኹም እዩ።`,
     notifyWarning30s: '⚠️ 30 ሰከንድ መጠንቀቕታ! ካርታ እንተዘይስሒብኩም ክትእገዱ ኢኹም!',
     notifyBottomNotReady: 'ናይ ታሕቲ ካርታ መሸነፊ ገና ኣይተማልአን።',
@@ -1538,9 +1542,11 @@ const RAMINO_T: Record<Language, any> = {
     notifyAdminResetGame: '🔄 Bulchaan tapha haaraa jalqabeera.',
     notifyJoinLookupErr: 'Kutaan koodii kanaan uumame hin argamne.',
     notifyRoomExpired: (name: string, refund: number) => `⏰ ${name} yeroon isaa waan xumurameef cufameera; ${refund} ETB deebi\'eera!`,
-    notifyDealerStarted: (dealer: string) => `👑 ${dealer} raabseera! Taphni jalqabameera.`,
+    notifyDealerStarted: (dealer: string) => `👑 ${dealer} (Raabsaa • Kaardii 14) gatuudhaan jalqaba!`,
+    notifyDealerFirstDiscard: (dealer: string) => `👑 ${dealer} (Kaardii 14 fudhatteetta) — kaardii 1 gatuun tapha jalqabi!`,
+    discardSlotLabel: 'Gataa',
     notifyDealtSelf: 'Kaardiin raabsameera! Tuutaa ykn gatame irraa harkisi.',
-    notifyDealerOpp: (dealer: string) => `👑 ${dealer} raabseera!`,
+    notifyDealerOpp: (dealer: string) => `👑 ${dealer} (Kaardii 14) gatuun jalqaba!`,
     notifyYourTurnStart: (dealer: string) => `👑 ${dealer} raabseera! Dabaan kan keeti.`,
     notifyWarning30s: '⚠️ Of eeggannoo sekondii 30! Kaardii yoo hin harkisne ni dhorkamta!',
     notifyBottomNotReady: 'Kaardiin jalaa ammallee qophii miti.',
@@ -1785,9 +1791,11 @@ const RAMINO_T: Record<Language, any> = {
     notifyAdminResetGame: '🔄 Admin reset the game.',
     notifyJoinLookupErr: 'No private room found for that code — please check the code or link.',
     notifyRoomExpired: (name: string, refund: number) => `⏰ ${name} expired and closed; ${refund} ETB refunded to your wallet!`,
-    notifyDealerStarted: (dealer: string) => `👑 ${dealer} dealt! Game started.`,
+    notifyDealerStarted: (dealer: string) => `👑 ${dealer} (Dealer • 14 cards) opens by discarding!`,
+    notifyDealerFirstDiscard: (dealer: string) => `👑 ${dealer} (14 cards dealt) — discard 1 card to start play!`,
+    discardSlotLabel: 'Discard',
     notifyDealtSelf: 'Cards dealt! Draw from the deck or discard pile.',
-    notifyDealerOpp: (dealer: string) => `👑 ${dealer} dealt the cards!`,
+    notifyDealerOpp: (dealer: string) => `👑 ${dealer} (14 cards) opens by discarding!`,
     notifyYourTurnStart: (dealer: string) => `👑 ${dealer} dealt! It is your turn.`,
     notifyWarning30s: '⚠️ 30s Warning! Draw a card now or you will be removed!',
     notifyBottomNotReady: 'Bottom card win condition is not complete yet.',
@@ -3062,7 +3070,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       const ev = tbl.lastEvent;
       if (ev.type === 'round_started') {
         raminoAudio.playDraw();
-        if (tbl.currentTurn === 0) {
+        if (tbl.currentTurn === 0 && tbl.hasDrawn) {
+          triggerNotification(t.notifyDealerFirstDiscard(String(tbl.ceremonyDealer || '')));
+        } else if (tbl.currentTurn === 0) {
           triggerNotification(t.notifyYourTurnStart(String(tbl.ceremonyDealer || '')));
         } else {
           triggerNotification(t.notifyDealerStarted(String(tbl.ceremonyDealer || '')));
@@ -3627,41 +3637,46 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     const deckCount: 1 | 2 = playerSeatCount === 2 ? 1 : 2;
     const shuffled = buildShuffledDeck(deckCount);
 
-    let offset = 0;
-    // Deal 13 cards to player (13 cards -> draws 14th on their turn!)
-    const dealtHand = shuffled.slice(offset, offset + 13);
-    offset += 13;
+    const dealerOppIdx = tableSeatOrderRef.current
+      .slice(0, playerSeatCount - 1)
+      .findIndex((b) => b.name === dealerName);
+    const playerIsDealer = dealerName === playerName || dealerOppIdx === -1;
 
-    // Deal 13 real cards from the same shuffled shoe to each opponent (preserving table seat order!)
+    let offset = 0;
+    // Dealer receives 14 cards and opens play by discarding 1 card; everyone else receives 13 cards
+    const selfCount = playerIsDealer ? 14 : 13;
+    const dealtHand = shuffled.slice(offset, offset + selfCount);
+    offset += selfCount;
+
     const activeOpps: RaminoOpponent[] = tableSeatOrderRef.current
       .slice(0, playerSeatCount - 1)
       .map((b) => {
-        const oppHand = shuffled.slice(offset, offset + 13);
-        offset += 13;
+        const oppIsDealer = !playerIsDealer && b.name === dealerName;
+        const oppCount = oppIsDealer ? 14 : 13;
+        const oppHand = shuffled.slice(offset, offset + oppCount);
+        offset += oppCount;
         return {
           ...b,
           hand: oppHand,
           cardCount: oppHand.length,
-          isDealer: b.name === dealerName,
+          isDealer: oppIsDealer,
           hasMelded: false,
         };
       });
 
     const bCard = shuffled[offset];
     offset += 1;
-    const firstDiscard = shuffled[offset];
-    offset += 1;
     const remainingDeck = shuffled.slice(offset);
 
     opponentsRef.current = activeOpps;
     deckCardsRef.current = remainingDeck;
-    discardPileRef.current = [firstDiscard];
+    discardPileRef.current = [];
 
     setCeremonyDealer(dealerName);
     setOpponents(activeOpps);
     setPlayerHand(dealtHand);
     setBottomCard(bCard);
-    setDiscardPile([firstDiscard]);
+    setDiscardPile([]);
     setDeckCards(remainingDeck);
 
     // Clean Board on Start!
@@ -3672,7 +3687,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     meldTurnCounterRef.current = 0;
 
     setSelectedCardIds(new Set());
-    setHasDrawn(false);
+    hasDrawnRef.current = playerIsDealer;
+    setHasDrawn(playerIsDealer);
     setDrawnFromDiscardCard(null);
     setHasMelded(false);
     setHasDiscarded(false);
@@ -3682,26 +3698,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     setView('game');
     raminoAudio.playDraw();
 
-    // Seat right after the dealer starts first
-    const dealerOppIdx = activeOpps.findIndex((o) => o.name === dealerName);
-    if (dealerName === playerName) {
-      // Self dealt -> Opponent 1 starts if bots > 0, else self
-      if (activeOpps.length > 0) {
-        triggerNotification(t.notifyDealerStarted(dealerName));
-        setCurrentTurn(1);
-        runOpponentTurnsFrom(0);
-      } else {
-        setCurrentTurn(0);
-        triggerNotification(t.notifyDealtSelf);
-      }
-    } else if (dealerOppIdx !== -1 && dealerOppIdx < activeOpps.length - 1) {
-      triggerNotification(t.notifyDealerOpp(dealerName));
-      setCurrentTurn(dealerOppIdx + 2);
-      runOpponentTurnsFrom(dealerOppIdx + 1);
-    } else {
-      // Last opponent dealt -> Player ('self') plays first!
+    if (playerIsDealer) {
       setCurrentTurn(0);
-      triggerNotification(t.notifyYourTurnStart(dealerName));
+      triggerNotification(t.notifyDealerFirstDiscard(dealerName));
+    } else {
+      triggerNotification(t.notifyDealerOpp(dealerName));
+      setCurrentTurn(dealerOppIdx + 1);
+      runOpponentTurnsFrom(dealerOppIdx, true);
     }
   };
 
@@ -3756,7 +3759,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     if (turnSeconds === 30) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyWarning30s);
-    } else if (turnSeconds === 0 && !hasDrawnRef.current) {
+    } else if (turnSeconds === 0) {
       raminoAudio.playBuzzer();
       winStreakRef.current = 0;
       setWinStreak(0);
@@ -3822,11 +3825,17 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     const partWithout = partitionValidMelds(playerHand);
     const dopeyWithout = checkDopey(playerHand, undefined, allowSameRankDopey);
 
-    // If hand is already complete without bottomCard, bottomCard is NOT needed
+    // If hand can already finish without bottomCard, bottomCard must NOT light up
     if (dopeyWithout.isDopey) return false;
-    if (partWithout.remaining.length === 0 && partWithout.melds.length > 0) return false;
+    if (
+      partWithout.remaining.length === 0 &&
+      partWithout.melds.length > 0 &&
+      partWithout.totalPoints >= 41
+    ) {
+      return false;
+    }
 
-    // 1. Dopey Finisher where bottomCard is strictly required (not already Dopey)
+    // 1. Dopey Finisher (strictly 5 pairs + 1 Tris): bottomCard is the exact 1 card needed
     const dopeyWithBottom =
       playerHand.length === 12
         ? isExact13CardDopey([...playerHand, bottomCard], allowSameRankDopey)
@@ -3839,15 +3848,19 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           );
     if (dopeyWithBottom) return true;
 
-    // 2. Meld Finisher: ALL cards in hand + bottomCard form valid melds (0 remaining) with >= 41 pts
-    const testHand = [...playerHand, bottomCard];
-    const partWith = partitionValidMelds(testHand);
-    return (
-      partWithout.remaining.length >= 1 &&
-      partWith.remaining.length === 0 &&
-      partWith.melds.length > 0 &&
-      partWith.totalPoints >= 41
-    );
+    // 2. Meld Finisher: bottomCard is the exact 1 card needed to finish (all 14 meld OR 13 meld + 1 discard)
+    const partWith = partitionValidMelds([...playerHand, bottomCard]);
+    if (partWith.remaining.length === 0 && partWith.melds.length > 0 && partWith.totalPoints >= 41) {
+      return true;
+    }
+    if (playerHand.length >= 12) {
+      return playerHand.some((_, dropIdx) => {
+        const sub = [...playerHand.filter((__, idx) => idx !== dropIdx), bottomCard];
+        const p = partitionValidMelds(sub);
+        return p.remaining.length === 0 && p.melds.length > 0 && p.totalPoints >= 41;
+      });
+    }
+    return false;
   }, [playerHand, bottomCard, hasMelded, currentTurn, hasDrawn, allowSameRankDopey]);
 
   // Bottom Card Finisher Detection + Dopey Detection for Action Stack
@@ -4518,8 +4531,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   };
 
   // Sequential Opponent Turns Runner (starts from given opponent index, wraps back to player turn 0)
-  const runOpponentTurnsFrom = (startOppIdx: number) => {
-    const stepTurn = (oppIdx: number) => {
+  const runOpponentTurnsFrom = (startOppIdx: number, firstOpponentAlreadyHas14 = false) => {
+    const stepTurn = (oppIdx: number, skipDrawForOpeningDealer = false) => {
       const activeOpps = opponentsRef.current;
       if (oppIdx >= activeOpps.length) {
         setCurrentTurn(0);
@@ -4536,19 +4549,22 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       setTimeout(() => {
         raminoAudio.playCardSnap();
 
-        // Draw 1 real card from deck (or reshuffle discard pile unlimited times if empty) — zero card duplication!
-        let curDeck = [...deckCardsRef.current];
-        if (curDeck.length === 0 && discardPileRef.current.length > 1) {
-          curDeck = reshuffleDiscardIntoDeck(discardPileRef.current);
-        }
-
         const latestOpp = opponentsRef.current[oppIdx] || opp;
         let oppHand = [...(latestOpp.hand || [])];
-        if (curDeck.length > 0) {
-          oppHand.push(curDeck[0]);
-          const nextDeck = curDeck.slice(1);
-          deckCardsRef.current = nextDeck;
-          setDeckCards(nextDeck);
+
+        if (!skipDrawForOpeningDealer) {
+          // Draw 1 real card from deck (or reshuffle discard pile unlimited times if empty) — zero card duplication!
+          let curDeck = [...deckCardsRef.current];
+          if (curDeck.length === 0 && discardPileRef.current.length > 1) {
+            curDeck = reshuffleDiscardIntoDeck(discardPileRef.current);
+          }
+
+          if (curDeck.length > 0) {
+            oppHand.push(curDeck[0]);
+            const nextDeck = curDeck.slice(1);
+            deckCardsRef.current = nextDeck;
+            setDeckCards(nextDeck);
+          }
         }
 
         // Check if bot holds real valid melds (41+ pts if unmelded, or any valid meld if already melded)
@@ -4614,11 +4630,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           return;
         }
 
-        stepTurn(oppIdx + 1);
+        stepTurn(oppIdx + 1, false);
       }, 1400);
     };
 
-    stepTurn(startOppIdx);
+    stepTurn(startOppIdx, firstOpponentAlreadyHas14);
   };
 
   // Discard Attempt (Strict Single Discard + Discard-Pickup Rule + Illegal Discard Rule + Opponent Turn Simulation)
@@ -6258,8 +6274,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                       </div>
                     </div>
 
-                    {/* Discard Pile — Clearly Visible */}
-                    {discardPile.length > 0 && (
+                    {/* Discard Pile — Clearly Visible (or Empty Slot before Dealer's opening discard) */}
+                    {discardPile.length > 0 ? (
                       <div
                         onClick={handleDrawFromDiscard}
                         className="relative w-11 h-16 sm:w-14 sm:h-20 rounded-xl border-2 border-white bg-[#fcfbf7] shadow-[0_10px_22px_rgba(0,0,0,0.85)] p-1 flex flex-col justify-between cursor-pointer hover:scale-105 active:scale-95 transition z-10"
@@ -6294,6 +6310,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                             </>
                           );
                         })()}
+                      </div>
+                    ) : (
+                      <div
+                        className="relative w-11 h-16 sm:w-14 sm:h-20 rounded-xl border-2 border-dashed border-amber-300/45 bg-black/30 flex flex-col items-center justify-center text-[9px] font-black text-amber-200/75 text-center px-1 z-10"
+                        title={t.discardPileTip}
+                      >
+                        <span>{t.discardSlotLabel}</span>
                       </div>
                     )}
                   </div>
@@ -6682,7 +6705,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   )}
 
                   {/* 4. Discard Button */}
-                  {hasDrawn && !hasDiscarded && selectedCardIds.size === 1 && (() => {
+                  {currentTurn === 0 && hasDrawn && !hasDiscarded && selectedCardIds.size === 1 && (() => {
                     const isLockedByOpeningDiscardPickup = !hasMelded && drawnFromDiscardCard !== null;
                     return (
                       <button

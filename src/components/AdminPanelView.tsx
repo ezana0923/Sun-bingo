@@ -612,6 +612,26 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [tgTokenInput, setTgTokenInput] = useState(() =>
     typeof window !== 'undefined' ? localStorage.getItem('ezi_telegram_bot_token') || '' : ''
   );
+  const [tgBotStatus, setTgBotStatus] = useState<{
+    activeCount: number;
+    bots: string[];
+    details?: { botUsername: string; isRunning: boolean; lastError?: string | null }[];
+  } | null>(null);
+
+  const refreshTelegramBotStatus = () => {
+    fetch(buildApiUrl('/api/telegram/status'))
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.ok) {
+          setTgBotStatus({
+            activeCount: Number(data.activeCount || 0),
+            bots: Array.isArray(data.bots) ? data.bots : [],
+            details: Array.isArray(data.details) ? data.details : [],
+          });
+        }
+      })
+      .catch(() => {});
+  };
 
   // Render.com & GitHub Cron-Job State
   const [renderAppUrl, setRenderAppUrl] = useState(() =>
@@ -640,6 +660,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
   useEffect(() => {
     if (!isAdminAuthenticated) return;
+    refreshTelegramBotStatus();
     fetch(buildApiUrl('/api/admin/render-config'))
       .then((r) => r.json())
       .then((data) => {
@@ -5132,9 +5153,27 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 : 'bg-white border-slate-200 text-slate-900'
             }`}
           >
-            <h3 className="text-sm sm:text-base font-black text-sky-400">
-              🤖 Telegram Bot Connection (@BotFather Token)
-            </h3>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <h3 className="text-sm sm:text-base font-black text-sky-400">
+                🤖 Telegram Bot Connection (@BotFather Token)
+              </h3>
+              <span
+                className={`text-[11px] font-black px-2.5 py-1 rounded-lg border ${
+                  tgBotStatus && tgBotStatus.activeCount > 0
+                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                    : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                }`}
+              >
+                {tgBotStatus && tgBotStatus.activeCount > 0
+                  ? `🟢 Connected: @${tgBotStatus.bots[0]}`
+                  : '🔴 Not Connected (Token ያስገቡ)'}
+              </span>
+            </div>
+            {tgBotStatus?.details?.[0]?.lastError && (
+              <div className="text-[11px] text-rose-400 font-semibold">
+                ⚠️ Telegram Status: {tgBotStatus.details[0].lastError}
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row gap-2">
               <input
                 type="text"
@@ -5155,6 +5194,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   }
                   showToast('⏳ ከቴሌግራም ቦት ጋር በመገናኘት ላይ...');
                   const res = await connectTelegramBotEverywhere(val);
+                  refreshTelegramBotStatus();
                   showToast(res.message);
                 }}
                 className="px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-black text-xs cursor-pointer"
@@ -5167,6 +5207,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   showToast('⏳ የቴሌግራም ቦት በማቋረጥ ላይ...');
                   const res = await disconnectTelegramBotEverywhere();
                   setTgTokenInput('');
+                  refreshTelegramBotStatus();
                   showToast(res.message);
                 }}
                 className="px-4 py-2.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/40 font-black text-xs cursor-pointer"

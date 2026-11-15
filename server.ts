@@ -33,7 +33,8 @@ app.use((req, res, next) => {
   const host = req.get('x-forwarded-host') || req.get('host');
   const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
   if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
-    lastKnownLiveHost = `${proto}://${host}`;
+    const safeProto = proto.toLowerCase() === 'http' ? 'https' : proto;
+    lastKnownLiveHost = `${safeProto}://${host}`;
   }
   next();
 });
@@ -56,6 +57,8 @@ const activeBots = new Map<
     offset: number;
     isRunning: boolean;
     pollingInFlight?: boolean;
+    lastError?: string;
+    lastUpdateAt?: number;
   }
 >();
 
@@ -68,6 +71,7 @@ const lastMenuMessageIdByChat = new Map<number, number>();
 
 // Track registered phone numbers & welcome bonus per Telegram chatId
 const registeredChatPhones = new Map<number, string>();
+const pendingReferralByChatId = new Map<number, string>();
 const chatWelcomeBonusClaimed = new Set<number>();
 // Track prompt message IDs per chatId so we can delete the "📱 Share Phone Number" prompt bubbles once registered
 const promptMessageIdsByChat = new Map<number, number[]>();
@@ -1131,11 +1135,13 @@ function loadBotsFromDisk() {
         if (cleanTok && cleanTok.includes(':') && !seenTokens.has(cleanTok)) {
           seenTokens.add(cleanTok);
           let resolvedAppUrl = process.env.RENDER_EXTERNAL_URL || item.appUrl || lastKnownLiveHost || SHARED_APP_URL;
-          if (resolvedAppUrl.includes('ezi-bingo.onrender.com')) {
-            resolvedAppUrl = lastKnownLiveHost || 'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
+          if (!resolvedAppUrl.startsWith('https://') || resolvedAppUrl.includes('ezi-bingo.onrender.com')) {
+            resolvedAppUrl =
+              (lastKnownLiveHost && lastKnownLiveHost.startsWith('https://') ? lastKnownLiveHost : '') ||
+              'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
           }
           uniqueTokens.push({ ...item, token: cleanTok, appUrl: resolvedAppUrl });
-          // Auto-start background polling on boot; if another server instance is polling, pollBotUpdates gracefully stops on 409 conflict
+          // Auto-start background polling on boot; clear any stale webhook first so getUpdates works immediately
           const shouldAutoPoll = process.env.DISABLE_LOCAL_BOT_POLLING !== 'true';
           activeBots.set(cleanTok, {
             botUsername: item.botUsername || 'EziBingoBot',
@@ -1145,7 +1151,9 @@ function loadBotsFromDisk() {
             isRunning: shouldAutoPoll,
           });
           if (shouldAutoPoll) {
-            pollBotUpdates(cleanTok);
+            fetch(`https://api.telegram.org/bot${cleanTok}/deleteWebhook?drop_pending_updates=false`)
+              .catch(() => {})
+              .finally(() => pollBotUpdates(cleanTok));
           }
         }
       }
@@ -1156,11 +1164,36 @@ function loadBotsFromDisk() {
     if (envBotToken && envBotToken.includes(':') && !activeBots.has(envBotToken)) {
       fetch(`https://api.telegram.org/bot${envBotToken}/getMe`)
         .then((r) => r.json())
-        .then((meData) => {
+        .then(async (meData) => {
           if (meData?.ok && meData?.result?.username) {
             const bUser = meData.result.username;
             const bName = meData.result.first_name || 'Ezi Bingo';
-            const resolvedAppUrl = process.env.RENDER_EXTERNAL_URL || SHARED_APP_URL || lastKnownLiveHost;
+            let resolvedAppUrl = process.env.RENDER_EXTERNAL_URL || SHARED_APP_URL || lastKnownLiveHost;
+            if (!resolvedAppUrl || !resolvedAppUrl.startsWith('https://')) {
+              resolvedAppUrl = 'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
+            }
+            await fetch(`https://api.telegram.org/bot${envBotToken}/deleteWebhook?drop_pending_updates=false`).catch(() => {});
+            await fetch(`https://api.telegram.org/bot${envBotToken}/setMyCommands`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                commands: [
+                  { command: 'start', description: '🚀 Start / ጀምር' },
+                  { command: 'menu', description: '🏠 Main Menu' },
+                  { command: 'play', description: '🎮 Play Live Bingo' },
+                  { command: 'deposit', description: 'Deposit 💵' },
+                  { command: 'withdraw', description: 'Withdraw 💸' },
+                  { command: 'balance', description: 'Check Balance 💰' },
+                  { command: 'jackpot', description: 'Jackpot 🎰' },
+                  { command: 'transfer', description: 'Transfer 🔄' },
+                  { command: 'leaderboard', description: 'Leaderboard 🏆' },
+                  { command: 'token', description: '🔐 Get Login Token / ኮድ' },
+                  { command: 'rules', description: 'Game Rules 📖' },
+                  { command: 'support', description: 'Support 📞' },
+                  { command: 'android', description: '📲 Download Android App' },
+                ],
+              }),
+            }).catch(() => {});
             activeBots.set(envBotToken, {
               botUsername: bUser,
               botFirstName: bName,
@@ -1197,8 +1230,11 @@ function buildWebAppUrl(
   tab?: 'deposit' | 'withdraw' | 'transfer'
 ) {
   let cleanUrl = (appUrl || lastKnownLiveHost || SHARED_APP_URL || '').trim().replace(/\/$/, '');
-  if (!cleanUrl || cleanUrl.includes('ezi-bingo.onrender.com')) {
-    cleanUrl = lastKnownLiveHost || 'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
+  if (!cleanUrl || !cleanUrl.startsWith('https://') || cleanUrl.includes('ezi-bingo.onrender.com')) {
+    cleanUrl =
+      (lastKnownLiveHost && lastKnownLiveHost.startsWith('https://') ? lastKnownLiveHost.replace(/\/$/, '') : '') ||
+      (SHARED_APP_URL && SHARED_APP_URL.startsWith('https://') ? SHARED_APP_URL.replace(/\/$/, '') : '') ||
+      'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
   }
   const phone = registeredPhone || null;
   const tabParam = tab ? `&tab=${tab}` : '';
@@ -1329,18 +1365,24 @@ async function deleteOldPhonePromptMessages(token: string, chatId: number) {
 }
 
 // Send the exact first-page Share Phone Number prompt for new / unregistered Telegram users (matching IMG_3522.jpeg!)
-async function sendUnregisteredPhonePrompt(token: string, chatId: number, isBlockedCommand = false) {
+async function sendUnregisteredPhonePrompt(
+  token: string,
+  chatId: number,
+  isBlockedCommand = false,
+  bypassDedup = false
+) {
   const textToSend = isBlockedCommand
     ? `❌ እባክዎ መጀመሪያ ስልክ ቁጥርዎን በማጋራት ይመዝገቡ።`
     : `እንኳን ደህና መጡ! ለመመዝገብ ከዚህ በታች ያለውን ቁልፍ ይጫኑ ስልክ ቁጥርዎን ያጋሩ።`;
 
-  // Prevent duplicate prompt sending for new users within 10 seconds
+  // Prevent accidental duplicate prompt sending within 10s unless user explicitly tapped /start
   const nowMs = Date.now();
-  const prevOut = lastOutgoingMsgByChatId.get(chatId);
-  if (prevOut && prevOut.hash === textToSend && nowMs - prevOut.timestamp < 10000) {
-    return;
+  if (!bypassDedup) {
+    const prevOut = lastOutgoingMsgByChatId.get(chatId);
+    if (prevOut && prevOut.hash === textToSend && nowMs - prevOut.timestamp < 10000) {
+      return;
+    }
   }
-  lastOutgoingMsgByChatId.set(chatId, { hash: textToSend, timestamp: nowMs });
 
   // Delete any previous unregistered phone prompts in this chat so only ONE prompt is ever visible
   await deleteOldPhonePromptMessages(token, chatId);
@@ -1366,23 +1408,48 @@ async function sendUnregisteredPhonePrompt(token: string, chatId: number, isBloc
         },
       }),
     });
-    const data = await res.json();
-    if (data?.ok && data?.result?.message_id) {
-      const prev = promptMessageIdsByChat.get(chatId) || [];
-      promptMessageIdsByChat.set(chatId, [...prev, data.result.message_id]);
+    const data = await res.json().catch(() => null);
+    if (data?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: textToSend, timestamp: nowMs });
+      if (data?.result?.message_id) {
+        const prev = promptMessageIdsByChat.get(chatId) || [];
+        promptMessageIdsByChat.set(chatId, [...prev, data.result.message_id]);
+      }
+      return;
+    }
+
+    // Fallback (e.g. group chat where request_contact keyboard isn't allowed)
+    console.warn('Telegram sendUnregisteredPhonePrompt fallback:', data?.error_code, data?.description);
+    const fbRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `${textToSend}\n\n📱 ስልክ ቁጥርዎን (09********) በመጻፍ ይላኩ ወይም ቦቱን በግል ቻት (Private Chat) ይክፈቱ።`,
+      }),
+    });
+    const fbData = await fbRes.json().catch(() => null);
+    if (fbData?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: textToSend, timestamp: nowMs });
     }
   } catch (err) {
     console.error('Error sending unregistered phone prompt:', err);
   }
 }
 
+function escapeTelegramMarkdown(val: string): string {
+  return String(val || '').replace(/([_*`\[\]])/g, '\\$1');
+}
+
 function buildWelcomeMessageText(firstName = 'King', registeredPhone?: string, has15Bonus = false) {
   const player = registeredPhone ? playersByPhone.get(registeredPhone) : undefined;
   const cashBal = player ? player.balance : 15.0;
   const bonusBal = player ? player.bonusBalance : 15.0;
+  const safeName = escapeTelegramMarkdown(firstName || 'King');
+  const safePhone = registeredPhone ? escapeTelegramMarkdown(registeredPhone) : '';
 
   const phoneNotice = registeredPhone
-    ? `✅ Registered Phone: *${registeredPhone}*\n`
+    ? `✅ Registered Phone: *${safePhone}*\n`
     : `📱 *ለመመዝገብ ስልክ ቁጥርዎን ያስገቡ (09********)*\n`;
 
   const bonusTotal = has15Bonus
@@ -1392,7 +1459,7 @@ function buildWelcomeMessageText(firstName = 'King', registeredPhone?: string, h
   return (
     `🎉 *Welcome to EziBinGo Live Bingo Ethiopia!*\n` +
     `*(እንኳን ወደ ኢዚቢንጎ በደህና መጡ!)*\n\n` +
-    `👋 Selam, *${firstName}*!\n` +
+    `👋 Selam, *${safeName}*!\n` +
     phoneNotice +
     `\n💰 Cash Balance: *${cashBal.toFixed(2)} ETB*\n` +
     `🎁 Bonus Balance: *${bonusTotal}*\n` +
@@ -1420,54 +1487,85 @@ async function sendTelegramMessage(
   chatId: number,
   text: string,
   replyMarkup?: Record<string, unknown>,
-  _unusedMessageId?: number
+  _unusedMessageId?: number,
+  bypassDedup = false
 ) {
   const botInfo = activeBots.get(token);
   const appUrl = botInfo?.appUrl || SHARED_APP_URL;
   const regPhone = registeredChatPhones.get(chatId);
   const finalMarkup = replyMarkup || buildInlineWelcomeMenuKeyboard(appUrl, regPhone);
 
-  // Outgoing duplicate guard: prevent sending the exact same message twice within 6000ms
+  // Outgoing duplicate guard: prevent sending the exact same message twice within 6000ms (unless explicit /start)
   const nowMs = Date.now();
   const msgHash = `${text.slice(0, 120)}`;
-  const prevOut = lastOutgoingMsgByChatId.get(chatId);
-  if (prevOut && prevOut.hash === msgHash && nowMs - prevOut.timestamp < 6000) {
-    return;
+  if (!bypassDedup) {
+    const prevOut = lastOutgoingMsgByChatId.get(chatId);
+    if (prevOut && prevOut.hash === msgHash && nowMs - prevOut.timestamp < 6000) {
+      return;
+    }
   }
-  lastOutgoingMsgByChatId.set(chatId, { hash: msgHash, timestamp: nowMs });
 
   if (regPhone) {
     await deleteOldPhonePromptMessages(token, chatId);
   }
 
   try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: 'Markdown',
-        reply_markup: finalMarkup,
-      }),
+    const postSend = async (body: Record<string, unknown>) => {
+      const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return r.json().catch(() => null);
+    };
+
+    const data = await postSend({
+      chat_id: chatId,
+      text,
+      parse_mode: 'Markdown',
+      reply_markup: finalMarkup,
     });
-    const data = await res.json();
     if (data?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: msgHash, timestamp: nowMs });
       return;
     }
 
-    // Fallback ONLY if Telegram rejected the message due to unsupported copy_text button on older client/API
-    const fallbackRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: 'Markdown',
-        reply_markup: buildSubMenuInlineKeyboard(appUrl, regPhone),
-      }),
+    console.warn('[Telegram sendMessage retry 1]', data?.error_code, data?.description);
+
+    // Retry 1: Strip Markdown parse_mode in case dynamic text had special characters
+    const plainText = text.replace(/[*_`\[\]]/g, '');
+    const noMdData = await postSend({
+      chat_id: chatId,
+      text: plainText,
+      reply_markup: finalMarkup,
     });
-    await fallbackRes.json().catch(() => {});
+    if (noMdData?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: msgHash, timestamp: nowMs });
+      return;
+    }
+
+    // Retry 2: Sub-menu inline keyboard without copy_text / complex rows
+    const subData = await postSend({
+      chat_id: chatId,
+      text: plainText,
+      reply_markup: buildSubMenuInlineKeyboard(appUrl, regPhone),
+    });
+    if (subData?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: msgHash, timestamp: nowMs });
+      return;
+    }
+
+    // Retry 3: Plain text with URL link fallback (in case web_app button is disallowed e.g. group chat)
+    const bareUrl = buildWebAppUrl(appUrl, 'fast', regPhone);
+    const bareData = await postSend({
+      chat_id: chatId,
+      text: `${plainText}\n\n🎮 Open App: ${bareUrl}`,
+    });
+    if (bareData?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: msgHash, timestamp: nowMs });
+    } else {
+      console.error('[Telegram sendMessage failed all retries]', bareData);
+    }
   } catch (err) {
     console.error('Error sending Telegram message:', err);
   }
@@ -1481,15 +1579,24 @@ async function handleTelegramMenuAction(
   isSharedContact = false,
   callbackMessageId?: number
 ) {
-  const clean = rawAction.trim().toLowerCase();
+  const cleanRaw = rawAction.trim().toLowerCase();
+  const clean = cleanRaw.replace(/^(\/[a-z0-9_]+)@[a-z0-9_]+/i, '$1');
+  const isStartCmd = clean === '/start' || clean.startsWith('/start ');
+  const isExplicitMenuCmd = isStartCmd || clean === '/menu' || clean === 'menu_main';
   const botInfo = activeBots.get(token);
   const appUrl = (botInfo?.appUrl || SHARED_APP_URL).replace(/\/$/, '');
 
-  // Guard against duplicate delivery or rapid double-tap (5000ms window for the exact same action)
-  // so 1 tap ALWAYS produces 1 single message without ever stacking duplicates!
+  // Capture referral deep-link (/start ref_XXXXXX) if present
+  const refMatch = clean.match(/^\/start\s+ref_([a-z0-9_-]{3,20})/i);
+  if (refMatch && !registeredChatPhones.has(chatId)) {
+    pendingReferralByChatId.set(chatId, refMatch[1]);
+  }
+
+  // Guard against accidental double-tap on callback buttons; NEVER drop explicit /start commands
   const nowMs = Date.now();
   const prevAction = lastChatActionByChatId.get(chatId);
-  if (prevAction && prevAction.action === clean && nowMs - prevAction.timestamp < 5000) {
+  const debounceWindow = isStartCmd ? 800 : 2500;
+  if (prevAction && prevAction.action === clean && nowMs - prevAction.timestamp < debounceWindow) {
     return;
   }
   lastChatActionByChatId.set(chatId, { action: clean, timestamp: nowMs });
@@ -1498,7 +1605,7 @@ async function handleTelegramMenuAction(
     registeredChatPhones.delete(chatId);
     keyboardRemovedForChats.delete(chatId);
     saveBotsToDisk();
-    await sendUnregisteredPhonePrompt(token, chatId);
+    await sendUnregisteredPhonePrompt(token, chatId, false, true);
     return;
   }
 
@@ -1531,7 +1638,9 @@ async function handleTelegramMenuAction(
         token,
         chatId,
         welcomeText,
-        buildInlineWelcomeMenuKeyboard(appUrl, existingPhone)
+        buildInlineWelcomeMenuKeyboard(appUrl, existingPhone),
+        undefined,
+        true
       );
       return;
     }
@@ -1545,9 +1654,26 @@ async function handleTelegramMenuAction(
       normalizedPhone = globalRegisteredPhone || '0942742684';
     }
 
+    const isBrandNewPlayer = !playersByPhone.has(normalizedPhone);
     registeredChatPhones.set(chatId, normalizedPhone);
-    ensurePlayerRecord(normalizedPhone, firstName, chatId);
+    const newPlayerRec = ensurePlayerRecord(normalizedPhone, firstName, chatId);
     chatWelcomeBonusClaimed.add(chatId);
+
+    // Apply referral bonus if user arrived via /start ref_XXXXXX
+    const refCode = pendingReferralByChatId.get(chatId);
+    if (refCode && isBrandNewPlayer) {
+      pendingReferralByChatId.delete(chatId);
+      const referrer = Array.from(playersByPhone.values()).find(
+        (p) => p.phone !== normalizedPhone && p.phone.slice(-6).toLowerCase() === refCode.toLowerCase()
+      );
+      if (referrer) {
+        referrer.referredCount = (referrer.referredCount || 0) + 1;
+        referrer.referralEarnings = Number(((referrer.referralEarnings || 0) + 25).toFixed(2));
+        referrer.bonusBalance = Number(((referrer.bonusBalance || 0) + 25).toFixed(2));
+        newPlayerRec.bonusBalance = Number(((newPlayerRec.bonusBalance || 0) + 15).toFixed(2));
+      }
+    }
+
     saveBotsToDisk();
     broadcastRealtimeSync();
 
@@ -1561,7 +1687,9 @@ async function handleTelegramMenuAction(
       token,
       chatId,
       welcomeText,
-      buildInlineWelcomeMenuKeyboard(appUrl, normalizedPhone)
+      buildInlineWelcomeMenuKeyboard(appUrl, normalizedPhone),
+      undefined,
+      true
     );
     return;
   }
@@ -1735,8 +1863,7 @@ async function handleTelegramMenuAction(
       registeredChatPhones.set(chatId, matchedPlayerByChat.phone);
       saveBotsToDisk();
     } else {
-      const isStartCmd = clean === '/start' || clean.startsWith('/start ');
-      await sendUnregisteredPhonePrompt(token, chatId, !isStartCmd);
+      await sendUnregisteredPhonePrompt(token, chatId, !isStartCmd, isStartCmd);
       return;
     }
   }
@@ -1756,7 +1883,7 @@ async function handleTelegramMenuAction(
     clean === 'menu_admin' ||
     clean.startsWith('/admin ')
   ) {
-    const baseApp = (appUrl || 'https://ezi-bingo.onrender.com').replace(/\/$/, '');
+    const baseApp = buildWebAppUrl(appUrl, 'fast').split('/?')[0];
     const adminFastUrl = `${baseApp}/?app=fast&tab=admin&admin=1#admin`;
     const adminRegularUrl = `${baseApp}/?app=regular&tab=admin&admin=1#regular-admin`;
     const adminText =
@@ -1765,7 +1892,7 @@ async function handleTelegramMenuAction(
       `🔐 *Username:* \`ezana\`\n` +
       `🔑 *Password / PIN:* \`1234\`\n\n` +
       `🔗 *Direct Admin URL:*\n` +
-      `https://ezi-bingo.onrender.com/#admin\n\n` +
+      `${baseApp}/#admin\n\n` +
       `👇 ከታች የሚፈልጉትን የቢንጎ ማስተዳደሪያ ፓነል በቀጥታ ይክፈቱ፦`;
 
     await sendTelegramMessage(
@@ -3062,7 +3189,7 @@ async function handleTelegramMenuAction(
     return;
   }
 
-  // Default: /menu or menu_main for registered users ->
+  // Default: /start, /menu or menu_main for registered users ->
   // Sends a fresh Welcome Message + Inline Keyboard Card at the bottom while keeping previous messages intact
   const welcomeText = buildWelcomeMessageText(
     firstName,
@@ -3073,109 +3200,145 @@ async function handleTelegramMenuAction(
     token,
     chatId,
     welcomeText,
-    buildInlineWelcomeMenuKeyboard(appUrl, regPhone)
+    buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+    undefined,
+    isExplicitMenuCmd
   );
+}
+
+async function processTelegramUpdate(token: string, update: any) {
+  if (!update || typeof update !== 'object') return;
+  const botState = activeBots.get(token);
+  if (botState) {
+    botState.lastUpdateAt = Date.now();
+    botState.lastError = undefined;
+  }
+
+  if (typeof update.update_id === 'number') {
+    if (botState && update.update_id + 1 > botState.offset) {
+      botState.offset = update.update_id + 1;
+      saveBotsToDisk();
+    }
+    const uniqueKey = `${token}:${update.update_id}`;
+    if (processedUpdateIds.has(uniqueKey)) {
+      return;
+    }
+    processedUpdateIds.add(uniqueKey);
+    if (processedUpdateIds.size > 2000) {
+      const firstKey = processedUpdateIds.values().next().value;
+      if (firstKey) processedUpdateIds.delete(firstKey);
+    }
+  }
+
+  if (update.callback_query) {
+    const cb = update.callback_query;
+    const cbIdKey = `cb:${cb.id}`;
+    if (processedUpdateIds.has(cbIdKey)) {
+      return;
+    }
+    processedUpdateIds.add(cbIdKey);
+
+    const chatId = cb.message?.chat?.id;
+    const cbMsgId = cb.message?.message_id;
+    const cbData = String(cb.data || '');
+    const firstName = cb.from?.first_name || cb.message?.chat?.first_name || 'King';
+
+    fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callback_query_id: cb.id,
+      }),
+    }).catch(() => {});
+
+    if (chatId && cbData === 'share_phone_prompt') {
+      await sendBottomContactKeyboardPromptOnly(token, chatId);
+    } else if (chatId && cbData) {
+      await handleTelegramMenuAction(token, chatId, cbData, firstName, false, cbMsgId);
+    }
+    return;
+  }
+
+  const msg = update.message || update.channel_post;
+  if (msg && msg.chat && msg.chat.id) {
+    const msgKey = `msg:${msg.chat.id}:${msg.message_id}`;
+    if (processedUpdateIds.has(msgKey)) {
+      return;
+    }
+    processedUpdateIds.add(msgKey);
+    const firstName = msg.from?.first_name || msg.chat?.first_name || 'King';
+
+    // Handle shared phone contact from Telegram's "📱 Share Phone Number" button (accepts ANY phone number format!)
+    if (msg.contact && msg.contact.phone_number) {
+      await handleTelegramMenuAction(
+        token,
+        msg.chat.id,
+        String(msg.contact.phone_number),
+        firstName,
+        true
+      );
+      return;
+    }
+
+    const rawText = msg.text || msg.caption;
+    if (typeof rawText === 'string' && rawText.trim().length > 0) {
+      await handleTelegramMenuAction(token, msg.chat.id, rawText, firstName, false);
+    }
+  }
 }
 
 async function pollBotUpdates(token: string) {
   const botState = activeBots.get(token);
   if (!botState || !botState.isRunning || botState.pollingInFlight) return;
   botState.pollingInFlight = true;
+  let nextDelayMs = 1200;
 
   try {
     const allowed = encodeURIComponent(
       JSON.stringify(['message', 'callback_query', 'channel_post', 'edited_channel_post'])
     );
     const res = await fetch(
-      `https://api.telegram.org/bot${token}/getUpdates?offset=${botState.offset}&timeout=20&allowed_updates=${allowed}`
+      `https://api.telegram.org/bot${token}/getUpdates?offset=${botState.offset}&timeout=20&allowed_updates=${allowed}`,
+      { signal: AbortSignal.timeout(30000) }
     );
-    const data = await res.json();
+    const data = await res.json().catch(() => null);
 
-    // If another instance (e.g. Render production server) is actively polling this bot, stop local polling immediately to prevent duplicate messages!
-    if (data && data.ok === false && data.error_code === 409 && !IS_RENDER_HOST) {
-      botState.isRunning = false;
-      return;
-    }
-
-    if (data && data.ok && Array.isArray(data.result) && data.result.length > 0) {
+    if (data && data.ok === false) {
+      botState.lastError = `${data.error_code || ''} ${data.description || 'Unknown Telegram API error'}`.trim();
+      if (data.error_code === 409) {
+        const desc = String(data.description || '').toLowerCase();
+        if (desc.includes('webhook')) {
+          // A webhook was left active on Telegram — delete it automatically so /start works immediately!
+          await fetch(`https://api.telegram.org/bot${token}/deleteWebhook?drop_pending_updates=false`).catch(() => {});
+          nextDelayMs = 1500;
+        } else {
+          // Another instance temporarily polling (e.g. rolling deploy overlap) — back off instead of permanently dying
+          nextDelayMs = 5000;
+        }
+      } else if (data.error_code === 401 || data.error_code === 404) {
+        // Invalid/revoked bot token
+        botState.isRunning = false;
+        return;
+      } else {
+        nextDelayMs = 3000;
+      }
+    } else if (data && data.ok && Array.isArray(data.result)) {
+      botState.lastError = undefined;
       for (const update of data.result) {
-        botState.offset = update.update_id + 1;
-        saveBotsToDisk();
-
-        const uniqueKey = `${token}:${update.update_id}`;
-        if (processedUpdateIds.has(uniqueKey)) {
-          continue;
-        }
-        processedUpdateIds.add(uniqueKey);
-        if (processedUpdateIds.size > 2000) {
-          const firstKey = processedUpdateIds.values().next().value;
-          if (firstKey) processedUpdateIds.delete(firstKey);
-        }
-
-        if (update.callback_query) {
-          const cb = update.callback_query;
-          const cbIdKey = `cb:${cb.id}`;
-          if (processedUpdateIds.has(cbIdKey)) {
-            continue;
-          }
-          processedUpdateIds.add(cbIdKey);
-
-          const chatId = cb.message?.chat?.id;
-          const cbMsgId = cb.message?.message_id;
-          const cbData = String(cb.data || '');
-          const firstName = cb.from?.first_name || 'King';
-
-          fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              callback_query_id: cb.id,
-            }),
-          }).catch(() => {});
-
-          if (chatId && cbData === 'share_phone_prompt') {
-            await sendBottomContactKeyboardPromptOnly(token, chatId);
-          } else if (
-            chatId &&
-            (cbData.startsWith('menu_') || cbData.startsWith('dep_') || cbData.startsWith('with_'))
-          ) {
-            await handleTelegramMenuAction(token, chatId, cbData, firstName, false, cbMsgId);
-          }
-          continue;
-        }
-
-        const msg = update.message || update.channel_post;
-        if (msg && msg.chat && msg.chat.id) {
-          const msgKey = `msg:${msg.chat.id}:${msg.message_id}`;
-          if (processedUpdateIds.has(msgKey)) {
-            continue;
-          }
-          processedUpdateIds.add(msgKey);
-          const firstName = msg.from?.first_name || 'King';
-          // Handle shared phone contact from Telegram's "📱 Share Phone Number" button (accepts ANY phone number format!)
-          if (msg.contact && msg.contact.phone_number) {
-            await handleTelegramMenuAction(
-              token,
-              msg.chat.id,
-              String(msg.contact.phone_number),
-              firstName,
-              true
-            );
-            continue;
-          }
-          const text = String(msg.text || '/start');
-          await handleTelegramMenuAction(token, msg.chat.id, text, firstName, false);
-        }
+        await processTelegramUpdate(token, update);
       }
     }
-  } catch {
-    // ignore transient network errors
+  } catch (err: any) {
+    if (err?.name !== 'AbortError' && err?.name !== 'TimeoutError') {
+      botState.lastError = String(err?.message || 'Network error');
+    }
+    nextDelayMs = 2500;
   } finally {
     botState.pollingInFlight = false;
   }
 
   if (activeBots.get(token)?.isRunning) {
-    setTimeout(() => pollBotUpdates(token), 1200);
+    setTimeout(() => pollBotUpdates(token), nextDelayMs);
   }
 }
 
@@ -3184,7 +3347,30 @@ app.get('/api/telegram/status', (_req, res) => {
     ok: true,
     activeCount: activeBots.size,
     bots: Array.from(activeBots.values()).map((b) => b.botUsername),
+    details: Array.from(activeBots.values()).map((b) => ({
+      botUsername: b.botUsername,
+      botFirstName: b.botFirstName,
+      isRunning: b.isRunning,
+      appUrl: b.appUrl,
+      lastError: b.lastError || null,
+      lastUpdateAt: b.lastUpdateAt || null,
+    })),
   });
+});
+
+// Optional Telegram Webhook endpoint (handles updates cleanly if webhook mode is ever configured)
+app.post('/api/telegram/webhook/:token?', async (req, res) => {
+  const paramToken = String(req.params?.token || '').trim();
+  const targetToken =
+    (paramToken && activeBots.has(paramToken) ? paramToken : null) ||
+    Array.from(activeBots.keys())[0] ||
+    (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+  if (targetToken && req.body) {
+    processTelegramUpdate(targetToken, req.body).catch((err) =>
+      console.error('Telegram webhook update error:', err)
+    );
+  }
+  res.json({ ok: true });
 });
 
 // Check whether the specific Telegram chatId or phone has registered its phone number (NEVER leak another user's phone to a different device!)
@@ -6467,7 +6653,10 @@ app.post('/api/telegram/connect', async (req, res) => {
       return;
     }
 
-    const targetUrl = (appUrl || SHARED_APP_URL).trim().replace(/\/$/, '');
+    const rawTarget = (appUrl || lastKnownLiveHost || SHARED_APP_URL || '').trim().replace(/\/$/, '');
+    const targetUrl = rawTarget.startsWith('https://')
+      ? rawTarget
+      : (lastKnownLiveHost && lastKnownLiveHost.startsWith('https://') ? lastKnownLiveHost : SHARED_APP_URL).replace(/\/$/, '');
 
     // 1. Verify bot via getMe
     const meRes = await fetch(`https://api.telegram.org/bot${cleanToken}/getMe`);
@@ -6484,7 +6673,7 @@ app.post('/api/telegram/connect', async (req, res) => {
     const botFirstName = meData.result.first_name;
 
     // 2. Delete any old webhook so getUpdates polling works cleanly
-    await fetch(`https://api.telegram.org/bot${cleanToken}/deleteWebhook`);
+    await fetch(`https://api.telegram.org/bot${cleanToken}/deleteWebhook?drop_pending_updates=false`);
 
     // 3. Set the bottom-left blue pill Menu Button to "☰ Menu" (commands) matching IMG_3522.jpeg!
     await fetch(`https://api.telegram.org/bot${cleanToken}/setChatMenuButton`, {
@@ -6497,12 +6686,13 @@ app.post('/api/telegram/connect', async (req, res) => {
       }),
     });
 
-    // 4. Register all 11 Bot Commands in Telegram
+    // 4. Register all Bot Commands in Telegram (including /start)
     await fetch(`https://api.telegram.org/bot${cleanToken}/setMyCommands`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         commands: [
+          { command: 'start', description: '🚀 Start / ጀምር' },
           { command: 'menu', description: '🏠 Main Menu' },
           { command: 'play', description: '🎮 Play Live Bingo' },
           { command: 'deposit', description: 'Deposit 💵' },
@@ -6523,6 +6713,7 @@ app.post('/api/telegram/connect', async (req, res) => {
     const existing = activeBots.get(cleanToken);
     if (existing) {
       existing.appUrl = targetUrl;
+      existing.lastError = undefined;
       if (!existing.isRunning) {
         existing.isRunning = true;
         pollBotUpdates(cleanToken);
@@ -7278,7 +7469,8 @@ function srvIsExact13CardDopey(cards13: RaminoCard[], allowSameRankPairs = false
     for (let j = i + 1; j < 12; j++) {
       for (let k = j + 1; k < 13; k++) {
         const triple = [cards13[i], cards13[j], cards13[k]];
-        if (!srvIsValidSet(triple) && !srvIsValidRun(triple)) continue;
+        // Strictly 5 pairs + 1 Tris (Set only, never a Run)
+        if (!srvIsValidSet(triple)) continue;
         const rem10: RaminoCard[] = [];
         for (let m = 0; m < 13; m++) if (m !== i && m !== j && m !== k) rem10.push(cards13[m]);
         if (srvCanFormFivePairs(rem10, allowSameRankPairs)) return true;
@@ -7641,7 +7833,7 @@ function serializeRaminoTableForPlayer(session: RaminoTableSession, playerId: st
     activePlayerId: session.players[session.currentTurnIdx]?.id || '',
     activePlayerName: session.players[session.currentTurnIdx]?.name || '',
     turnSeconds: session.turnSeconds,
-    hasDrawn: session.hasDrawn,
+    hasDrawn: currentTurnForClient === 0 ? session.hasDrawn : false,
     drawnFromDiscardCard: drawnCard,
     hasDiscarded: session.hasDiscarded,
     winnerCelebration: session.winnerCelebration,
@@ -7688,22 +7880,28 @@ function dealServerRaminoRound(session: RaminoTableSession, dealerId: string) {
   const shuffled = buildServerRaminoDeck(deckCount);
   let offset = 0;
 
-  for (const p of session.players) {
-    p.hand = shuffled.slice(offset, offset + 13);
-    offset += 13;
+  const dealerIdx = session.players.findIndex((p) => p.id === dealerId);
+  const validDealerIdx = dealerIdx !== -1 ? dealerIdx : 0;
+
+  // Dealer receives 14 cards and starts the round by discarding 1 card; all others receive 13 cards
+  for (let idx = 0; idx < session.players.length; idx++) {
+    const p = session.players[idx];
+    const isDealerSeat = idx === validDealerIdx;
+    const dealCount = isDealerSeat ? 14 : 13;
+    p.hand = shuffled.slice(offset, offset + dealCount);
+    offset += dealCount;
     p.hasMelded = false;
-    p.isDealer = p.id === dealerId;
+    p.isDealer = isDealerSeat;
   }
 
   session.bottomCard = shuffled[offset];
   offset += 1;
-  session.discardPile = [shuffled[offset]];
-  offset += 1;
+  session.discardPile = [];
   session.deck = shuffled.slice(offset);
   session.tableMelds = [];
   session.closedSetBadges = [];
   session.meldTurnCounter = 0;
-  session.hasDrawn = false;
+  session.hasDrawn = true;
   session.drawnFromDiscardCardId = null;
   session.hasDiscarded = false;
   session.turnSeconds = 120;
@@ -7711,11 +7909,9 @@ function dealServerRaminoRound(session: RaminoTableSession, dealerId: string) {
   session.postDayRequest = null;
   session.roundIndex += 1;
 
-  const dealerIdx = session.players.findIndex((p) => p.id === dealerId);
-  const validDealerIdx = dealerIdx !== -1 ? dealerIdx : 0;
   session.ceremonyDealerId = session.players[validDealerIdx].id;
   session.ceremonyDealerName = session.players[validDealerIdx].name;
-  session.currentTurnIdx = (validDealerIdx + 1) % session.players.length;
+  session.currentTurnIdx = validDealerIdx;
   session.phase = 'game';
   session.lastEvent = {
     id: ++raminoEventSeq,
@@ -8086,7 +8282,10 @@ function handleServerRaminoAction(
     }
     const partWithout = srvPartitionValidMelds(me.hand);
     const dopeyWithout = srvCheckDopey(me.hand, undefined, allowSameRankDopey);
-    if (dopeyWithout.isDopey || (partWithout.remaining.length === 0 && partWithout.melds.length > 0)) {
+    if (
+      dopeyWithout.isDopey ||
+      (partWithout.remaining.length === 0 && partWithout.melds.length > 0 && partWithout.totalPoints >= 41)
+    ) {
       return { ok: false, error: 'የታችኛው ካርድ ለመጨረስ ብቻ ያስፈልጋል።' };
     }
     const bc = session.bottomCard;
@@ -8097,11 +8296,18 @@ function handleServerRaminoAction(
           srvIsExact13CardDopey([...me.hand.filter((__, i) => i !== dropIdx), bc], allowSameRankDopey)
         ));
     const partWith = srvPartitionValidMelds([...me.hand, bc]);
-    const meldReady =
-      partWithout.remaining.length >= 1 &&
+    const meldAllReady =
       partWith.remaining.length === 0 &&
       partWith.melds.length > 0 &&
       partWith.totalPoints >= 41;
+    const meldDropOneReady =
+      me.hand.length >= 12 &&
+      me.hand.some((_, dropIdx) => {
+        const sub = [...me.hand.filter((__, i) => i !== dropIdx), bc];
+        const p = srvPartitionValidMelds(sub);
+        return p.remaining.length === 0 && p.melds.length > 0 && p.totalPoints >= 41;
+      });
+    const meldReady = meldAllReady || meldDropOneReady;
 
     if (!dopeyViaBottom && !meldReady) {
       return { ok: false, error: 'የታችኛው ካርድ ማሸነፊያ ገና አልተሟላም!' };
@@ -8383,7 +8589,7 @@ function startRaminoServerLoop() {
           broadcastRaminoTableState(session);
         }
       }
-      if (session.turnSeconds === 0 && !session.hasDrawn) {
+      if (session.turnSeconds === 0) {
         const timedOutPlayer = session.players[session.currentTurnIdx];
         if (!timedOutPlayer) continue;
         // Auto-draw & discard 1 non-joker card so multiplayer human games recover cleanly, or notify timeout
