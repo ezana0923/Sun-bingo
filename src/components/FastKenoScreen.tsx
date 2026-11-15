@@ -26,7 +26,6 @@ import {
   Trophy,
   ShieldCheck,
   ChevronUp,
-  Download,
   BarChart2,
 } from 'lucide-react';
 import { buildApiUrl, getDeviceClientId } from '../utils/realtimeRoomClient';
@@ -3639,20 +3638,6 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
                       {soundEnabled ? t.onLabel : t.offLabel}
                     </span>
                   </button>
-
-                  <a
-                    href="/fast_keno_source_code.zip"
-                    download="fast_keno_source_code.zip"
-                    className="w-full p-2.5 rounded-xl bg-gradient-to-r from-emerald-600/30 to-green-600/30 border border-[#4ade80]/60 flex items-center justify-between text-xs font-black text-[#4ade80] hover:brightness-125 cursor-pointer no-underline"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Download className="w-4 h-4 text-[#4ade80]" />
-                      <span>የ Keno ፋይሎች አውርድ (.ZIP)</span>
-                    </div>
-                    <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-[#1b2e25] text-[#4ade80]">
-                      ZIP
-                    </span>
-                  </a>
                 </div>
               </div>
 

@@ -405,14 +405,14 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
       const code = String(data?.otpCode || Math.floor(100000 + Math.random() * 900000));
       setRegDeliveredOtp(code);
       setRegOtpCode(code);
-      setRegTelegramOtpUrl(data?.telegramOtpUrl || `https://t.me/Ezigamsbot?start=otp_${encodeURIComponent(cleanPhone)}`);
+      setRegTelegramOtpUrl(data?.telegramOtpUrl || `https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(cleanPhone)}`);
       setRegStep('verify_otp_and_pass');
       setSuccessMsg(`${i18n.otpSentSuccess} [ ${code} ]`);
     } catch {
       const code = String(Math.floor(100000 + Math.random() * 900000));
       setRegDeliveredOtp(code);
       setRegOtpCode(code);
-      setRegTelegramOtpUrl(`https://t.me/Ezigamsbot?start=otp_${encodeURIComponent(cleanPhone)}`);
+      setRegTelegramOtpUrl(`https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(cleanPhone)}`);
       setRegStep('verify_otp_and_pass');
       setSuccessMsg(`${i18n.otpSentSuccess} [ ${code} ]`);
     } finally {
@@ -518,14 +518,14 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
       const code = String(data?.otpCode || Math.floor(100000 + Math.random() * 900000));
       setForgotDeliveredOtp(code);
       setForgotOtpCode(code);
-      setForgotTelegramOtpUrl(data?.telegramOtpUrl || `https://t.me/Ezigamsbot?start=otp_${encodeURIComponent(cleanPhone)}`);
+      setForgotTelegramOtpUrl(data?.telegramOtpUrl || `https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(cleanPhone)}`);
       setForgotStep('reset_pass');
       setSuccessMsg(`${i18n.otpSentSuccess} [ ${code} ]`);
     } catch {
       const code = String(Math.floor(100000 + Math.random() * 900000));
       setForgotDeliveredOtp(code);
       setForgotOtpCode(code);
-      setForgotTelegramOtpUrl(`https://t.me/Ezigamsbot?start=otp_${encodeURIComponent(cleanPhone)}`);
+      setForgotTelegramOtpUrl(`https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(cleanPhone)}`);
       setForgotStep('reset_pass');
       setSuccessMsg(`${i18n.otpSentSuccess} [ ${code} ]`);
     } finally {
@@ -884,7 +884,7 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
                   <a
                     href={
                       regTelegramOtpUrl ||
-                      `https://t.me/Ezigamsbot?start=otp_${encodeURIComponent(regPhone)}`
+                      `https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(regPhone)}`
                     }
                     target="_blank"
                     rel="noopener noreferrer"
@@ -1020,7 +1020,7 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
                   <a
                     href={
                       forgotTelegramOtpUrl ||
-                      `https://t.me/Ezigamsbot?start=otp_${encodeURIComponent(forgotPhone)}`
+                      `https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(forgotPhone)}`
                     }
                     target="_blank"
                     rel="noopener noreferrer"

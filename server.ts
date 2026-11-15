@@ -2467,7 +2467,7 @@ async function handleTelegramMenuAction(
     clean === '/referral' ||
     clean === 'menu_invite'
   ) {
-    const baseApp = (appUrl || SHARED_APP_URL || 'https://sun-bingo.onrender.com').replace(/\/$/, '');
+    const baseApp = (appUrl || SHARED_APP_URL || 'https://sunbingo.onrender.com').replace(/\/$/, '');
     const myRefCode = currentPlayer.phone?.slice(-6) || 'SUN';
     const webInviteLink = `${baseApp}/?ref=${myRefCode}`;
     const botInfo = activeBots.get(token);
@@ -3623,7 +3623,7 @@ app.post('/api/auth/send-otp', (req, res) => {
   }
 
   const firstBotInfo = Array.from(activeBots.values())[0];
-  const botUsername = firstBotInfo?.botUsername || 'Ezigamsbot';
+  const botUsername = firstBotInfo?.botUsername || 'Kidamegamesbot';
   const telegramOtpUrl = `https://t.me/${botUsername}?start=otp_${normalizedPhone}`;
 
   res.json({
@@ -4294,7 +4294,7 @@ function loadRenderDeployConfig(): RenderDeployConfig {
       const parsed = JSON.parse(fs.readFileSync(RENDER_DEPLOY_CONFIG_PATH, 'utf-8'));
       return {
         deployHookUrl: String(parsed?.deployHookUrl || process.env.RENDER_DEPLOY_HOOK_URL || '').trim(),
-        renderAppUrl: String(parsed?.renderAppUrl || 'https://sun-bingo.onrender.com').trim(),
+        renderAppUrl: String(parsed?.renderAppUrl || 'https://sunbingo.onrender.com').trim(),
         lastDeployAt: typeof parsed?.lastDeployAt === 'number' ? parsed.lastDeployAt : undefined,
         lastDeployStatus: typeof parsed?.lastDeployStatus === 'string' ? parsed.lastDeployStatus : undefined,
       };
@@ -4302,7 +4302,7 @@ function loadRenderDeployConfig(): RenderDeployConfig {
   } catch {}
   return {
     deployHookUrl: String(process.env.RENDER_DEPLOY_HOOK_URL || '').trim(),
-    renderAppUrl: 'https://sun-bingo.onrender.com',
+    renderAppUrl: 'https://sunbingo.onrender.com',
   };
 }
 
@@ -9653,7 +9653,7 @@ async function startServer() {
   setInterval(() => {
     const urls = [
       process.env.RENDER_EXTERNAL_URL,
-      'https://sun-bingo.onrender.com',
+      'https://sunbingo.onrender.com',
       SHARED_APP_URL,
       lastKnownLiveHost,
     ].filter(Boolean) as string[];
@@ -9946,6 +9946,29 @@ async function startServer() {
     process.env.NODE_ENV === 'production' ||
     Boolean(process.env.RENDER) ||
     Boolean(process.env.RENDER_EXTERNAL_URL);
+
+  app.get('/robots.txt', (req, res) => {
+    const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+    const host = req.get('x-forwarded-host') || req.get('host') || 'sunbingo.onrender.com';
+    const base = host.includes('localhost') ? `${proto}://${host}` : `https://${host}`;
+    res.type('text/plain').send(`User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: ${base}/sitemap.xml\n`);
+  });
+
+  app.get('/sitemap.xml', (req, res) => {
+    const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+    const host = req.get('x-forwarded-host') || req.get('host') || 'sunbingo.onrender.com';
+    const base = host.includes('localhost') ? `${proto}://${host}` : `https://${host}`;
+    res.type('application/xml').send(
+      `<?xml version="1.0" encoding="UTF-8"?>\n` +
+      `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+      `  <url>\n` +
+      `    <loc>${base}/</loc>\n` +
+      `    <changefreq>daily</changefreq>\n` +
+      `    <priority>1.0</priority>\n` +
+      `  </url>\n` +
+      `</urlset>\n`
+    );
+  });
 
   if (isProduction && hasBuiltDist) {
     app.use(express.static(distPath));

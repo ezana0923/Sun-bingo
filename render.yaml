@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: sun-bingo
+    name: sunbingo
     runtime: node
     plan: free
     branch: main
@@ -14,7 +14,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: SHARED_APP_URL
-        value: https://sun-bingo.onrender.com
+        value: https://sunbingo.onrender.com
       - key: ADMIN_SECRET_PIN
         value: 7788
       - key: RENDER_DEPLOY_HOOK_URL

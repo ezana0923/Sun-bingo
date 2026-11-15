@@ -268,7 +268,7 @@ export const ProfileAndSettingsView: React.FC<ProfileAndSettingsViewProps> = ({
   };
 
   const getReferralLink = () => {
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://sun-bingo.onrender.com';
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://sunbingo.onrender.com';
     return `${origin}/?ref=${encodeURIComponent(currentUser.referralCode || currentUser.phone || 'SUN')}`;
   };
 

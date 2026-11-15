@@ -592,7 +592,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [smsWebhookUrl, setSmsWebhookUrl] = useState<string>(() =>
     typeof window !== 'undefined'
       ? `${window.location.origin}/api/webhook/sms`
-      : 'https://sun-bingo.onrender.com/api/webhook/sms'
+      : 'https://sunbingo.onrender.com/api/webhook/sms'
   );
   const [smsWebhookSecret, setSmsWebhookSecret] = useState<string>('ezi_sms_secret_2026');
   const [smsWebhookSecretInput, setSmsWebhookSecretInput] = useState<string>('ezi_sms_secret_2026');
@@ -636,8 +636,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   // Render.com & GitHub Cron-Job State
   const [renderAppUrl, setRenderAppUrl] = useState(() =>
     typeof window !== 'undefined'
-      ? localStorage.getItem('ezi_render_app_url') || 'https://sun-bingo.onrender.com'
-      : 'https://sun-bingo.onrender.com'
+      ? localStorage.getItem('ezi_render_app_url') || 'https://sunbingo.onrender.com'
+      : 'https://sunbingo.onrender.com'
   );
   const [pingStatus, setPingStatus] = useState<string | null>(null);
   const [isPinging, setIsPinging] = useState(false);
@@ -683,7 +683,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           deployHookUrl: val,
-          renderAppUrl: renderAppUrl.trim() || 'https://sun-bingo.onrender.com',
+          renderAppUrl: renderAppUrl.trim() || 'https://sunbingo.onrender.com',
         }),
       });
       const data = await res.json();
@@ -4861,7 +4861,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const envText = `NODE_ENV=production\nNODE_VERSION=22.23.4\nPORT=10000\nSHARED_APP_URL=https://sun-bingo.onrender.com\nADMIN_SECRET_PIN=7788`;
+                    const envText = `NODE_ENV=production\nNODE_VERSION=22.23.4\nPORT=10000\nSHARED_APP_URL=https://sunbingo.onrender.com\nADMIN_SECRET_PIN=7788`;
                     navigator.clipboard.writeText(envText);
                     showToast('✓ ሁሉም Environment Variables ተቀድተዋል (Copied)!');
                   }}
@@ -4887,7 +4887,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 </div>
                 <div className="p-2.5 rounded-lg bg-black/30 border border-slate-800 sm:col-span-2">
                   <span className="text-slate-400 text-[10px] block">SHARED_APP_URL</span>
-                  <span className="text-amber-300 font-bold">https://sun-bingo.onrender.com</span>
+                  <span className="text-amber-300 font-bold">https://sunbingo.onrender.com</span>
                 </div>
                 <div className="p-2.5 rounded-lg bg-black/30 border border-slate-800">
                   <span className="text-slate-400 text-[10px] block">ADMIN_SECRET_PIN</span>
@@ -5309,7 +5309,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       localStorage.setItem('ezi_render_app_url', val);
                     }
                   }}
-                  placeholder="https://sun-bingo.onrender.com"
+                  placeholder="https://sunbingo.onrender.com"
                   className={`flex-1 px-3.5 py-2.5 rounded-xl text-xs font-mono-tabular border ${
                     isDark ? 'bg-[#14141d] border-slate-800 text-white' : 'bg-slate-50 border-slate-300'
                   }`}
