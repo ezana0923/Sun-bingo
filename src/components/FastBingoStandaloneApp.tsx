@@ -3474,7 +3474,6 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
             requireAdminApproval={requireDepositApproval}
             bankAccounts={bankAccounts}
             onSubmitDeposit={(method, amount, refNumber, fullSms) => {
-              const txStatus: 'pending' | 'approved' = requireDepositApproval ? 'pending' : 'approved';
               const tempId = `ftx-${Date.now()}`;
               const newTx: TransactionRecord = {
                 id: tempId,
@@ -3486,19 +3485,13 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                 amount,
                 referenceNumber: refNumber,
                 fullSmsText: fullSms,
-                status: txStatus,
+                status: 'pending',
                 timestamp: new Date().toLocaleString(),
               };
               setTransactions((prev) => [newTx, ...prev]);
-              if (txStatus === 'approved') {
-                setUsers((prev) =>
-                  prev.map((u, i) => (i === 0 ? { ...u, balance: u.balance + amount } : u))
-                );
-              } else {
-                setStatusNotice(
-                  `⏳ የ ${amount} ETB Deposit ጥያቄዎ ተልኳል! ከባንክ SMS ጋር ተመሳክሮ ሲጸድቅ ወደ ዋሌትዎ ይገባል።`
-                );
-              }
+              setStatusNotice(
+                `⏳ የ ${amount} ETB Deposit ጥያቄዎ ተልኳል! የባንክ SMS በ Webhook ሲረጋገጥ ወዲያውኑ ወደ ዋሌትዎ ይገባል።`
+              );
               fetch(buildApiUrl('/api/transactions/submit'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -3517,11 +3510,6 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                 .then((data) => {
                   if (!data?.ok) {
                     setTransactions((prev) => prev.filter((t) => t.id !== tempId));
-                    if (txStatus === 'approved') {
-                      setUsers((prev) =>
-                        prev.map((u, i) => (i === 0 ? { ...u, balance: Math.max(0, u.balance - amount) } : u))
-                      );
-                    }
                     setStatusNotice(
                       data?.error || '❌ የተደገመ የክፍያ ደረሰኝ (Duplicate Transaction) ተቀባይነት የለውም!'
                     );
@@ -3529,6 +3517,16 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                   }
                   if (Array.isArray(data.transactions)) {
                     mergeServerTransactions(data.transactions);
+                  }
+                  if (typeof data.balance === 'number' && !data.isPending) {
+                    setUsers((prev) =>
+                      prev.map((u, i) => (i === 0 ? { ...u, balance: data.balance } : u))
+                    );
+                    setStatusNotice(
+                      data.alreadyCredited
+                        ? 'ℹ️ ይህ ክፍያ በባንክ SMS Webhook ቀድሞ ገቢ ተደርጓል!'
+                        : `✅ በባንክ SMS Webhook ተረጋግጦ ${data.transaction?.amount ?? amount} ETB ወደ ዋሌትዎ ገቢ ሆኗል!`
+                    );
                   }
                 })
                 .catch(() => {});

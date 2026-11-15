@@ -6,6 +6,7 @@ import {
   HelpCircle,
   ArrowLeft,
   Lock,
+  ShieldCheck,
   Mic,
   MicOff,
   Headphones,
@@ -39,6 +40,7 @@ interface RaminoPrivateRoomSnapshot {
   stake: number;
   players: { id?: string; name: string; isHost: boolean; joinedAt: number }[];
   status: 'waiting' | 'started';
+  voiceAccessKey?: string;
 }
 
 /* ========================================================
@@ -925,6 +927,20 @@ const RAMINO_T: Record<Language, any> = {
     micOpenBtn: 'ማይክ ክፈት',
     deafenOpenTip: 'ድምፅ ዝግ ነው — ክፈት',
     deafenMuteTip: 'የጓደኞችን ድምፅ ዝጋ',
+    voiceStageBtn: 'የድምፅ መድረክ',
+    voiceStageTitle: 'የግል የድምፅ መድረክ',
+    voiceE2eeBadge: '🔒 E2EE የማይጠለፍ',
+    voiceHdBadge: 'HD 48kHz ጥራት',
+    voiceHoldToTalk: 'ተጭነው ያውሩ',
+    voiceReleaseToMute: 'ለመዝጋት ይልቀቁ',
+    voiceTapToSpeak: 'ማይክ ክፈት',
+    voiceMicLive: 'በቀጥታ እያወሩ',
+    voiceMutePeer: 'ድምፁን ዝጋ',
+    voiceUnmutePeer: 'ድምፁን ክፈት',
+    voiceSpeakingNow: 'በማውራት ላይ',
+    voiceListening: 'በማዳመጥ ላይ',
+    voiceUntappableNote: 'የግል ድምፅ በቀጥታ ከተጫዋቾች መካከል ብቻ በDTLS-SRTP የተመሰጠረ ነው — አድሚንም ሆነ ማንም ሊጠልፈው አይችልም።',
+    voiceParticipantsLabel: 'በመድረኩ ላይ ያሉ ተሳታፊዎች',
     ceremonyTitle: (seats: number) => `ማን ያከፋፍላል? ከፍተኛ ካርድ (${seats} ተጫዋቾች • ${seats} ካርታ)`,
     dealerBadge: 'አከፋፋይ 👑',
     ceremonyWinnerBanner: (dealer: string, cardStr: string) => `👑 ${dealer} ያከፋፍላሉ • ${cardStr} — ወደ ጨዋታ በመግባት ላይ...`,
@@ -1158,6 +1174,20 @@ const RAMINO_T: Record<Language, any> = {
     micOpenBtn: 'ማይክ ክፈት',
     deafenOpenTip: 'ድምጺ ተዓጽዩ — ክፈት',
     deafenMuteTip: 'ድምጺ ኣዕሩኽ ዕጾ',
+    voiceStageBtn: 'መድረኽ ድምጺ',
+    voiceStageTitle: 'ብሕታዊ መድረኽ ድምጺ',
+    voiceE2eeBadge: '🔒 E2EE ዘይጥለፍ',
+    voiceHdBadge: 'HD 48kHz ጽሬት',
+    voiceHoldToTalk: 'ተጸቒጥኩም ተዛረቡ',
+    voiceReleaseToMute: 'ንምዕጻው ልቀቑ',
+    voiceTapToSpeak: 'ማይክ ክፈት',
+    voiceMicLive: 'ብቀጥታ ትዛረቡ',
+    voiceMutePeer: 'ድምጺ ዕጾ',
+    voiceUnmutePeer: 'ድምጺ ክፈት',
+    voiceSpeakingNow: 'ይዛረብ ኣሎ',
+    voiceListening: 'ይሰምዕ ኣሎ',
+    voiceUntappableNote: 'እዚ ብሕታዊ ድምጺ ብDTLS-SRTP ዝተመስጠረ እዩ — ኣድሚን ይኹን ሳልሳይ ኣካል ክሰምዖ ኣይክእልን።',
+    voiceParticipantsLabel: 'ኣብ መድረኽ ዘለዉ ተሳተፍቲ',
     ceremonyTitle: (seats: number) => `መን የከፋፍል? ዝለዓለ ካርታ (${seats} ተጻወትቲ • ${seats} ካርታ)`,
     dealerBadge: 'ኣከፋፋሊ 👑',
     ceremonyWinnerBanner: (dealer: string, cardStr: string) => `👑 ${dealer} የከፋፍሉ • ${cardStr} — ናብ ጸወታ ይኣቱ ኣሎ...`,
@@ -1391,6 +1421,20 @@ const RAMINO_T: Record<Language, any> = {
     micOpenBtn: 'Maayikii Bani',
     deafenOpenTip: 'Sagaleen cufaamaadha — bani',
     deafenMuteTip: 'Sagalee hiriyootaa cufi',
+    voiceStageBtn: 'Waltajjii Sagalee',
+    voiceStageTitle: 'Waltajjii Sagalee Dhuunfaa',
+    voiceE2eeBadge: '🔒 E2EE Kan Hin Dhaga\'amne',
+    voiceHdBadge: 'Qulqullina HD 48kHz',
+    voiceHoldToTalk: 'Qabii Dubbadhu',
+    voiceReleaseToMute: 'Cufuuf Gadhiisi',
+    voiceTapToSpeak: 'Maayikii Bani',
+    voiceMicLive: 'Kallattiin Dubbachaa',
+    voiceMutePeer: 'Sagalee Cufi',
+    voiceUnmutePeer: 'Sagalee Bani',
+    voiceSpeakingNow: 'Dubbachaa Jira',
+    voiceListening: 'Dhaggeeffachaa Jira',
+    voiceUntappableNote: 'Sagaleen dhuunfaa kun DTLS-SRTP dhaan icciitii qaba — bulchaan ykn namni biraa dhaga\'uu hin danda\'u.',
+    voiceParticipantsLabel: 'Hirmaattota Waltajjii Irra Jiran',
     ceremonyTitle: (seats: number) => `Eenyutu Raabsa? Kaardii Ol\'aanaa (Taphattoota ${seats})`,
     dealerBadge: 'Raabsaa 👑',
     ceremonyWinnerBanner: (dealer: string, cardStr: string) => `👑 ${dealer} ni raabsu • ${cardStr} — Gara taphaatti seenaa jira...`,
@@ -1624,6 +1668,20 @@ const RAMINO_T: Record<Language, any> = {
     micOpenBtn: 'Open Mic',
     deafenOpenTip: 'Audio muted — unmute',
     deafenMuteTip: 'Mute friends audio',
+    voiceStageBtn: 'Voice Stage',
+    voiceStageTitle: 'Private Voice Stage',
+    voiceE2eeBadge: '🔒 E2EE Encrypted',
+    voiceHdBadge: 'HD 48kHz Studio',
+    voiceHoldToTalk: 'Hold to Talk',
+    voiceReleaseToMute: 'Release to Mute',
+    voiceTapToSpeak: 'Open Mic',
+    voiceMicLive: 'Speaking Live',
+    voiceMutePeer: 'Mute User',
+    voiceUnmutePeer: 'Unmute User',
+    voiceSpeakingNow: 'Speaking',
+    voiceListening: 'Listening',
+    voiceUntappableNote: 'Peer-to-peer voice encrypted with DTLS-SRTP — neither admins nor outsiders can tap into this room.',
+    voiceParticipantsLabel: 'Participants on Stage',
     ceremonyTitle: (seats: number) => `Who Deals First? High Card (${seats} Players • ${seats} Cards)`,
     dealerBadge: 'DEALER 👑',
     ceremonyWinnerBanner: (dealer: string, cardStr: string) => `👑 ${dealer} Deals First • ${cardStr} — Entering Table...`,
@@ -1943,15 +2001,27 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const myPlayerIdRef = useRef(myPlayerId);
   myPlayerIdRef.current = myPlayerId;
 
-  // Private-Room-Only Live Voice Chat States & WebRTC Signaling
+  // Private-Room-Only Live E2EE HD Voice Chat States & WebRTC Signaling
   const [isPrivateRoomGame, setIsPrivateRoomGame] = useState(false);
   const [activePrivateRoomCode, setActivePrivateRoomCode] = useState<string | null>(null);
+  const [voiceAccessKey, setVoiceAccessKey] = useState<string | null>(null);
+  const voiceAccessKeyRef = useRef<string | null>(null);
+  voiceAccessKeyRef.current = voiceAccessKey;
+
   const [isMicMuted, setIsMicMuted] = useState(true);
   const [isDeafened, setIsDeafened] = useState(false);
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
+  const [isVoiceStageOpen, setIsVoiceStageOpen] = useState(false);
+  const [isPushToTalkActive, setIsPushToTalkActive] = useState(false);
   const [voiceConnectedCount, setVoiceConnectedCount] = useState(1);
   const [activeSpeakerName, setActiveSpeakerName] = useState<string | null>(null);
   const [speakingOpponentId, setSpeakingOpponentId] = useState<string | null>(null);
+  const [voicePeersList, setVoicePeersList] = useState<
+    { peerId: string; playerName: string; isMuted: boolean; isSpeaking: boolean }[]
+  >([]);
+  const [mutedPeerIds, setMutedPeerIds] = useState<Record<string, boolean>>({});
+  const mutedPeerIdsRef = useRef<Record<string, boolean>>({});
+  mutedPeerIdsRef.current = mutedPeerIds;
 
   const myVoicePeerIdRef = useRef<string>(`peer_${Math.random().toString(36).slice(2, 10)}`);
   const voiceWsRef = useRef<WebSocket | null>(null);
@@ -1960,14 +2030,98 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const remoteAudioMapRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const micAnalyserIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const localAudioCtxRef = useRef<AudioContext | null>(null);
+  const pttReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMicMutedRef = useRef(isMicMuted);
   isMicMutedRef.current = isMicMuted;
   const isDeafenedRef = useRef(isDeafened);
   isDeafenedRef.current = isDeafened;
+  const isLocalSpeakingRef = useRef(isLocalSpeaking);
+  isLocalSpeakingRef.current = isLocalSpeaking;
   const playerNameRef = useRef(playerName);
   playerNameRef.current = playerName;
 
+  // Smooth HD 48kHz wideband Opus (usedtx=0 prevents harsh radio/walkie-talkie static bursts; FEC prevents jitter drops)
+  const tuneVoiceOpusSdp = (sdp?: string): string | undefined => {
+    if (!sdp) return sdp;
+    try {
+      const lines = sdp.split(/\r?\n/);
+      let opusPt: string | null = null;
+      for (const line of lines) {
+        const m = line.match(/^a=rtpmap:(\d+)\s+opus\/48000/i);
+        if (m) {
+          opusPt = m[1];
+          break;
+        }
+      }
+      if (!opusPt) return sdp;
+      const fmtpPrefix = `a=fmtp:${opusPt} `;
+      let replaced = false;
+      const out = lines.map((line) => {
+        if (line.startsWith(fmtpPrefix)) {
+          replaced = true;
+          const params = new URLSearchParams(
+            line.slice(fmtpPrefix.length).replace(/;\s*/g, '&')
+          );
+          params.set('useinbandfec', '1');
+          params.set('usedtx', '0');
+          params.set('cbr', '0');
+          params.set('stereo', '0');
+          params.set('sprop-stereo', '0');
+          params.set('maxaveragebitrate', '64000');
+          params.set('maxplaybackrate', '48000');
+          params.set('ptime', '20');
+          params.set('minptime', '10');
+          return `${fmtpPrefix}${Array.from(params.entries())
+            .map(([k, v]) => `${k}=${v}`)
+            .join(';')}`;
+        }
+        return line;
+      });
+      if (!replaced) {
+        const rtpmapIdx = out.findIndex((l) => l.startsWith(`a=rtpmap:${opusPt} `));
+        if (rtpmapIdx >= 0) {
+          out.splice(
+            rtpmapIdx + 1,
+            0,
+            `${fmtpPrefix}minptime=10;ptime=20;useinbandfec=1;usedtx=0;cbr=0;stereo=0;sprop-stereo=0;maxaveragebitrate=64000;maxplaybackrate=48000`
+          );
+        }
+      }
+      return out.join('\r\n');
+    } catch {
+      return sdp;
+    }
+  };
+
+  const applyRemoteAudioVolumes = () => {
+    const shouldDuck = !isMicMutedRef.current && isLocalSpeakingRef.current;
+    const targetVol = shouldDuck ? 0.28 : 0.92;
+    remoteAudioMapRef.current.forEach((audioEl, peerId) => {
+      const peerMuted = Boolean(mutedPeerIdsRef.current[peerId]);
+      audioEl.muted = isDeafenedRef.current || peerMuted;
+      audioEl.volume = targetVol;
+    });
+  };
+
+  const setLocalDescriptionTuned = async (
+    pc: RTCPeerConnection,
+    desc: RTCSessionDescriptionInit
+  ) => {
+    if (desc.sdp) {
+      try {
+        const tunedSdp = tuneVoiceOpusSdp(desc.sdp);
+        await pc.setLocalDescription({ type: desc.type, sdp: tunedSdp });
+        return;
+      } catch {}
+    }
+    await pc.setLocalDescription(desc);
+  };
+
   const stopVoiceChatSession = () => {
+    if (pttReleaseTimerRef.current) {
+      clearTimeout(pttReleaseTimerRef.current);
+      pttReleaseTimerRef.current = null;
+    }
     if (micAnalyserIntervalRef.current) {
       clearInterval(micAnalyserIntervalRef.current);
       micAnalyserIntervalRef.current = null;
@@ -2009,12 +2163,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       voiceWsRef.current = null;
     }
     setIsLocalSpeaking(false);
+    setIsPushToTalkActive(false);
     setSpeakingOpponentId(null);
     setActiveSpeakerName(null);
+    setVoicePeersList([]);
     setVoiceConnectedCount(1);
   };
 
-  // Sync mute state onto local mic tracks
+  // Sync mute state onto local mic tracks & broadcast real-time mic badge to peers
   useEffect(() => {
     if (localMicStreamRef.current) {
       localMicStreamRef.current.getAudioTracks().forEach((t) => {
@@ -2024,18 +2180,26 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     if (isMicMuted) {
       setIsLocalSpeaking(false);
     }
+    if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
+      voiceWsRef.current.send(
+        JSON.stringify({ type: 'ramino:voice:mic-state', isMuted: isMicMuted })
+      );
+      if (isMicMuted) {
+        voiceWsRef.current.send(
+          JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: false })
+        );
+      }
+    }
   }, [isMicMuted]);
 
-  // Sync deafen state onto all remote peer <audio> elements
+  // Sync deafen, per-peer local mute & acoustic echo-suppression ducking onto remote peer <audio> elements
   useEffect(() => {
-    remoteAudioMapRef.current.forEach((audioEl) => {
-      audioEl.muted = isDeafened;
-    });
+    applyRemoteAudioVolumes();
     if (isDeafened) {
       setSpeakingOpponentId(null);
       setActiveSpeakerName(null);
     }
-  }, [isDeafened]);
+  }, [isDeafened, isLocalSpeaking, isMicMuted, mutedPeerIds]);
 
   // Ensure live microphone capture & attach tracks to all active WebRTC peers
   const ensureLocalMicAndAttach = async (): Promise<boolean> => {
@@ -2046,20 +2210,54 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     try {
       let stream = localMicStreamRef.current;
       if (!stream || stream.getAudioTracks().every((t) => t.readyState === 'ended')) {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
-        localMicStreamRef.current = stream;
+        const voiceConstraints = {
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
+          channelCount: { ideal: 1 },
+          sampleRate: { ideal: 48000 },
+          sampleSize: { ideal: 16 },
+          googEchoCancellation: true,
+          googAutoGainControl: true,
+          googNoiseSuppression: true,
+          googHighpassFilter: true,
+          googTypingNoiseDetection: true,
+        } as MediaTrackConstraints;
 
-        // Live microphone speaking level detector
         try {
-          const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+          stream = await navigator.mediaDevices.getUserMedia({ audio: voiceConstraints });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              channelCount: 1,
+            },
+          });
+        }
+        localMicStreamRef.current = stream;
+        stream.getAudioTracks().forEach((track) => {
+          try {
+            if ('contentHint' in track) {
+              (track as MediaStreamTrack & { contentHint: string }).contentHint = 'speech';
+            }
+          } catch {}
+        });
+
+        // Live microphone speaking level detector (strictly read-only analyser; never routed to audio destination)
+        try {
+          if (localAudioCtxRef.current) {
+            try {
+              localAudioCtxRef.current.close();
+            } catch {}
+            localAudioCtxRef.current = null;
+          }
+          const AudioCtx =
+            window.AudioContext ||
+            (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
           if (AudioCtx) {
-            const ctx = new AudioCtx();
+            const ctx = new AudioCtx({ latencyHint: 'interactive' });
             localAudioCtxRef.current = ctx;
             const src = ctx.createMediaStreamSource(stream);
             const analyser = ctx.createAnalyser();
@@ -2067,6 +2265,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             src.connect(analyser);
             const data = new Uint8Array(analyser.frequencyBinCount);
             let prevSpeaking = false;
+            let holdUntil = 0;
             if (micAnalyserIntervalRef.current) clearInterval(micAnalyserIntervalRef.current);
             micAnalyserIntervalRef.current = setInterval(() => {
               if (isMicMutedRef.current) {
@@ -2074,7 +2273,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   prevSpeaking = false;
                   setIsLocalSpeaking(false);
                   if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
-                    voiceWsRef.current.send(JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: false }));
+                    voiceWsRef.current.send(
+                      JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: false })
+                    );
                   }
                 }
                 return;
@@ -2086,15 +2287,21 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 sumSq += v * v;
               }
               const rms = Math.sqrt(sumSq / data.length);
-              const speakingNow = rms > 0.022;
+              const now = Date.now();
+              if (rms > 0.022) {
+                holdUntil = now + 260;
+              }
+              const speakingNow = rms > 0.022 || now < holdUntil;
               if (speakingNow !== prevSpeaking) {
                 prevSpeaking = speakingNow;
                 setIsLocalSpeaking(speakingNow);
                 if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
-                  voiceWsRef.current.send(JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: speakingNow }));
+                  voiceWsRef.current.send(
+                    JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: speakingNow })
+                  );
                 }
               }
-            }, 140);
+            }, 120);
           }
         } catch {}
       }
@@ -2103,7 +2310,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         t.enabled = false; // caller toggles unmute immediately after attaching
       });
 
-      // Attach local audio track to existing WebRTC peer connections & renegotiate cleanly
+      // Attach local audio track cleanly to existing WebRTC peer connections & renegotiate if needed
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack) {
         for (const [peerId, pc] of voicePeerConnsRef.current.entries()) {
@@ -2112,25 +2319,34 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               tr.sender?.track?.kind === 'audio' ||
               tr.receiver?.track?.kind === 'audio'
           );
+          let needsOffer = false;
           if (audioTransceiver) {
-            audioTransceiver.direction = 'sendrecv';
-            await audioTransceiver.sender.replaceTrack(audioTrack);
+            if (audioTransceiver.direction !== 'sendrecv') {
+              audioTransceiver.direction = 'sendrecv';
+              needsOffer = true;
+            }
+            if (audioTransceiver.sender.track !== audioTrack) {
+              await audioTransceiver.sender.replaceTrack(audioTrack);
+            }
           } else {
             pc.addTrack(audioTrack, stream);
+            needsOffer = true;
           }
-          try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
-              voiceWsRef.current.send(
-                JSON.stringify({
-                  type: 'ramino:voice:signal',
-                  toPeerId: peerId,
-                  signal: { sdp: pc.localDescription },
-                })
-              );
-            }
-          } catch {}
+          if (needsOffer && pc.signalingState === 'stable') {
+            try {
+              const offer = await pc.createOffer();
+              await setLocalDescriptionTuned(pc, offer);
+              if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
+                voiceWsRef.current.send(
+                  JSON.stringify({
+                    type: 'ramino:voice:signal',
+                    toPeerId: peerId,
+                    signal: { sdp: pc.localDescription },
+                  })
+                );
+              }
+            } catch {}
+          }
         }
       }
       return true;
@@ -2140,33 +2356,73 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }
   };
 
+  const unlockRemoteAudioElements = () => {
+    remoteAudioMapRef.current.forEach((audioEl, peerId) => {
+      audioEl.muted = isDeafenedRef.current || Boolean(mutedPeerIdsRef.current[peerId]);
+      audioEl.volume = !isMicMutedRef.current && isLocalSpeakingRef.current ? 0.28 : 0.92;
+      audioEl.play().catch(() => {});
+    });
+  };
+
   const handleTogglePrivateMic = async () => {
     raminoAudio.playCardSnap();
     if (!isPrivateRoomGame || !activePrivateRoomCode) return;
-    // Unlock playback on remote audio elements via user interaction
-    remoteAudioMapRef.current.forEach((audioEl) => {
-      audioEl.muted = isDeafenedRef.current;
-      audioEl.play().catch(() => {});
-    });
+    unlockRemoteAudioElements();
     if (isMicMuted) {
       const ok = await ensureLocalMicAndAttach();
       if (!ok) return;
       if (localMicStreamRef.current) {
-        localMicStreamRef.current.getAudioTracks().forEach((t) => {
-          t.enabled = true;
+        localMicStreamRef.current.getAudioTracks().forEach((tr) => {
+          tr.enabled = true;
         });
       }
       setIsMicMuted(false);
+      setIsPushToTalkActive(false);
       triggerNotification(t.notifyMicOpened);
     } else {
       setIsMicMuted(true);
-      if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
-        voiceWsRef.current.send(JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: false }));
-      }
+      setIsPushToTalkActive(false);
     }
   };
 
-  // Connect real-time WebRTC + WebSocket Voice Channel ONLY inside Private Room games
+  const handleStartPushToTalk = async () => {
+    if (!isPrivateRoomGame || !activePrivateRoomCode) return;
+    if (pttReleaseTimerRef.current) {
+      clearTimeout(pttReleaseTimerRef.current);
+      pttReleaseTimerRef.current = null;
+    }
+    unlockRemoteAudioElements();
+    const ok = await ensureLocalMicAndAttach();
+    if (!ok) return;
+    if (localMicStreamRef.current) {
+      localMicStreamRef.current.getAudioTracks().forEach((tr) => {
+        tr.enabled = true;
+      });
+    }
+    setIsPushToTalkActive(true);
+    setIsMicMuted(false);
+  };
+
+  const handleEndPushToTalk = () => {
+    if (!isPushToTalkActive) return;
+    if (pttReleaseTimerRef.current) {
+      clearTimeout(pttReleaseTimerRef.current);
+    }
+    pttReleaseTimerRef.current = setTimeout(() => {
+      setIsPushToTalkActive(false);
+      setIsMicMuted(true);
+    }, 200);
+  };
+
+  const toggleMuteRemotePeer = (peerId: string) => {
+    raminoAudio.playCardSnap();
+    setMutedPeerIds((prev) => ({
+      ...prev,
+      [peerId]: !prev[peerId],
+    }));
+  };
+
+  // Connect real-time WebRTC + WebSocket E2EE Voice Channel ONLY inside Private Room games
   const inPrivateVoiceArena =
     (view === 'waiting' || view === 'ceremony' || view === 'game') &&
     isPrivateRoomGame &&
@@ -2177,6 +2433,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       stopVoiceChatSession();
       return;
     }
+
+    const sessionPeerId = `peer_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+    myVoicePeerIdRef.current = sessionPeerId;
 
     const roomCode = activePrivateRoomCode.trim().toUpperCase();
     const resolved = buildApiUrl('/ws/bingo');
@@ -2192,20 +2451,47 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }
     voiceWsRef.current = ws;
 
-    const getOrCreatePeer = (remotePeerId: string, remoteName: string) => {
+    const cleanupRemotePeer = (remotePeerId: string) => {
+      const oldPc = voicePeerConnsRef.current.get(remotePeerId);
+      if (oldPc) {
+        try {
+          oldPc.close();
+        } catch {}
+        voicePeerConnsRef.current.delete(remotePeerId);
+      }
+      const oldEl = remoteAudioMapRef.current.get(remotePeerId);
+      if (oldEl) {
+        try {
+          oldEl.pause();
+          oldEl.srcObject = null;
+        } catch {}
+        remoteAudioMapRef.current.delete(remotePeerId);
+      }
+      setVoicePeersList((prev) => prev.filter((p) => p.peerId !== remotePeerId));
+    };
+
+    const getOrCreatePeer = (remotePeerId: string, remoteName: string, initialMuted = true) => {
       const existing = voicePeerConnsRef.current.get(remotePeerId);
-      if (existing) return existing;
+      if (existing && existing.connectionState !== 'failed' && existing.connectionState !== 'closed') {
+        return existing;
+      }
+      if (existing) {
+        cleanupRemotePeer(remotePeerId);
+      }
 
       const pc = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
         ],
+        iceCandidatePoolSize: 2,
       });
 
       if (localMicStreamRef.current) {
-        localMicStreamRef.current.getAudioTracks().forEach((t) => {
-          pc.addTrack(t, localMicStreamRef.current!);
+        localMicStreamRef.current.getAudioTracks().forEach((tr) => {
+          pc.addTrack(tr, localMicStreamRef.current!);
         });
       } else {
         try {
@@ -2235,34 +2521,53 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           (audioEl as unknown as { playsInline?: boolean }).playsInline = true;
           remoteAudioMapRef.current.set(remotePeerId, audioEl);
         }
-        audioEl.srcObject = remoteStream;
-        audioEl.muted = isDeafenedRef.current;
-        audioEl.volume = 1.0;
+        if (audioEl.srcObject !== remoteStream) {
+          audioEl.srcObject = remoteStream;
+        }
+        audioEl.muted = isDeafenedRef.current || Boolean(mutedPeerIdsRef.current[remotePeerId]);
+        audioEl.volume = !isMicMutedRef.current && isLocalSpeakingRef.current ? 0.28 : 0.92;
         audioEl.play().catch(() => {});
       };
 
-      const visibleCount = 1 + Array.from(voicePeerConnsRef.current.keys()).filter((id) => !id.startsWith('adm_mon_')).length;
+      pc.oniceconnectionstatechange = async () => {
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+          if (pc.signalingState === 'stable' && ws.readyState === WebSocket.OPEN) {
+            try {
+              const offer = await pc.createOffer({ iceRestart: true });
+              await setLocalDescriptionTuned(pc, offer);
+              ws.send(
+                JSON.stringify({
+                  type: 'ramino:voice:signal',
+                  toPeerId: remotePeerId,
+                  signal: { sdp: pc.localDescription },
+                })
+              );
+            } catch {}
+          }
+        }
+      };
+
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-          voicePeerConnsRef.current.delete(remotePeerId);
-          const nextVis =
-            1 + Array.from(voicePeerConnsRef.current.keys()).filter((id) => !id.startsWith('adm_mon_')).length;
-          setVoiceConnectedCount(nextVis);
+          cleanupRemotePeer(remotePeerId);
+          setVoiceConnectedCount(1 + voicePeerConnsRef.current.size);
         }
       };
 
       voicePeerConnsRef.current.set(remotePeerId, pc);
-      if (!remotePeerId.startsWith('adm_mon_')) {
-        setVoiceConnectedCount(
-          1 + Array.from(voicePeerConnsRef.current.keys()).filter((id) => !id.startsWith('adm_mon_')).length
-        );
-      } else {
-        void visibleCount;
-      }
-      // Keep remoteName referenced cleanly
-      if (remoteName) {
-        // peer registered
-      }
+      setVoiceConnectedCount(1 + voicePeerConnsRef.current.size);
+      setVoicePeersList((prev) => {
+        const idx = prev.findIndex((p) => p.peerId === remotePeerId);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], playerName: remoteName || next[idx].playerName };
+          return next;
+        }
+        return [
+          ...prev,
+          { peerId: remotePeerId, playerName: remoteName || 'Friend', isMuted: initialMuted, isSpeaking: false },
+        ];
+      });
       return pc;
     };
 
@@ -2271,8 +2576,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         JSON.stringify({
           type: 'ramino:voice:join',
           roomCode,
-          peerId: myVoicePeerIdRef.current,
+          peerId: sessionPeerId,
+          playerId: myPlayerIdRef.current,
           playerName: playerNameRef.current,
+          voiceAccessKey: voiceAccessKeyRef.current || '',
+          isMuted: isMicMutedRef.current,
         })
       );
     };
@@ -2282,13 +2590,16 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         const msg = JSON.parse(String(event.data));
         if (!msg || msg.roomCode !== roomCode) return;
 
-        if (msg.type === 'ramino:voice:peers' && Array.isArray(msg.peers)) {
-          for (const peer of msg.peers as { peerId: string; playerName: string }[]) {
-            if (!peer?.peerId || peer.peerId === myVoicePeerIdRef.current) continue;
-            const pc = getOrCreatePeer(peer.peerId, peer.playerName);
+        if (msg.type === 'ramino:voice:error') {
+          return;
+        } else if (msg.type === 'ramino:voice:peers' && Array.isArray(msg.peers)) {
+          for (const peer of msg.peers as { peerId: string; playerName: string; isMuted?: boolean }[]) {
+            if (!peer?.peerId || peer.peerId === sessionPeerId) continue;
+            const pc = getOrCreatePeer(peer.peerId, peer.playerName, peer.isMuted !== false);
+            if (pc.signalingState !== 'stable') continue;
             try {
               const offer = await pc.createOffer();
-              await pc.setLocalDescription(offer);
+              await setLocalDescriptionTuned(pc, offer);
               if (ws.readyState === WebSocket.OPEN) {
                 ws.send(
                   JSON.stringify({
@@ -2300,21 +2611,23 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               }
             } catch {}
           }
-          setVoiceConnectedCount(
-            1 + Array.from(voicePeerConnsRef.current.keys()).filter((id) => !id.startsWith('adm_mon_')).length
-          );
+          setVoiceConnectedCount(1 + voicePeerConnsRef.current.size);
         } else if (msg.type === 'ramino:voice:peer-joined') {
-          if (msg.peerId && msg.peerId !== myVoicePeerIdRef.current) {
-            getOrCreatePeer(msg.peerId, msg.playerName || 'Friend');
+          if (msg.peerId && msg.peerId !== sessionPeerId) {
+            getOrCreatePeer(msg.peerId, msg.playerName || 'Friend', msg.isMuted !== false);
           }
         } else if (msg.type === 'ramino:voice:signal') {
           const fromPeerId = String(msg.fromPeerId || '');
-          if (!fromPeerId || fromPeerId === myVoicePeerIdRef.current) return;
-          const pc = getOrCreatePeer(fromPeerId, msg.playerName || 'Friend');
+          if (!fromPeerId || fromPeerId === sessionPeerId) return;
           const sig = msg.signal;
           if (sig?.sdp) {
+            // Mandatory DTLS-SRTP media encryption fingerprint check
+            if (!String(sig.sdp.sdp || '').includes('a=fingerprint:')) {
+              return;
+            }
+            const pc = getOrCreatePeer(fromPeerId, msg.playerName || 'Friend');
             if (sig.sdp.type === 'offer' && pc.signalingState !== 'stable') {
-              if (myVoicePeerIdRef.current < fromPeerId) {
+              if (sessionPeerId < fromPeerId) {
                 try {
                   await pc.setLocalDescription({ type: 'rollback' });
                 } catch {}
@@ -2325,7 +2638,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp));
             if (sig.sdp.type === 'offer') {
               const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
+              await setLocalDescriptionTuned(pc, answer);
               if (ws.readyState === WebSocket.OPEN) {
                 ws.send(
                   JSON.stringify({
@@ -2337,14 +2650,30 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               }
             }
           } else if (sig?.candidate) {
+            const pc = getOrCreatePeer(fromPeerId, msg.playerName || 'Friend');
             try {
               await pc.addIceCandidate(new RTCIceCandidate(sig.candidate));
             } catch {}
           }
+        } else if (msg.type === 'ramino:voice:mic-state') {
+          const pid = String(msg.peerId || '');
+          const peerMuted = Boolean(msg.isMuted);
+          setVoicePeersList((prev) =>
+            prev.map((p) =>
+              p.peerId === pid
+                ? { ...p, isMuted: peerMuted, isSpeaking: peerMuted ? false : p.isSpeaking }
+                : p
+            )
+          );
         } else if (msg.type === 'ramino:voice:speaking') {
-          if (isDeafenedRef.current) return;
+          const pid = String(msg.peerId || '');
           const speaker = String(msg.playerName || '');
-          if (msg.isSpeaking) {
+          const speakingNow = Boolean(msg.isSpeaking);
+          setVoicePeersList((prev) =>
+            prev.map((p) => (p.peerId === pid ? { ...p, isSpeaking: speakingNow } : p))
+          );
+          if (isDeafenedRef.current || (pid && mutedPeerIdsRef.current[pid])) return;
+          if (speakingNow) {
             setActiveSpeakerName(speaker);
             const matchedOpp = opponentsRef.current.find(
               (o) => o.name.toLowerCase() === speaker.toLowerCase()
@@ -2356,25 +2685,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           }
         } else if (msg.type === 'ramino:voice:peer-left') {
           const leftId = String(msg.peerId || '');
-          const pc = voicePeerConnsRef.current.get(leftId);
-          if (pc) {
-            try {
-              pc.close();
-            } catch {}
-            voicePeerConnsRef.current.delete(leftId);
-          }
-          const audioEl = remoteAudioMapRef.current.get(leftId);
-          if (audioEl) {
-            try {
-              audioEl.pause();
-              audioEl.srcObject = null;
-            } catch {}
-            remoteAudioMapRef.current.delete(leftId);
-          }
-          setVoiceConnectedCount(
-            1 + Array.from(voicePeerConnsRef.current.keys()).filter((id) => !id.startsWith('adm_mon_')).length
-          );
-          // Any player leaving the table resets consecutive win streak back to 0
+          cleanupRemotePeer(leftId);
+          setVoiceConnectedCount(1 + voicePeerConnsRef.current.size);
           if (winStreakRef.current > 0) {
             winStreakRef.current = 0;
             setWinStreak(0);
@@ -2406,6 +2718,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             setView('lobby');
             setIsPrivateRoomGame(false);
             setActivePrivateRoomCode(null);
+            setVoiceAccessKey(null);
             triggerNotification(t.notifyAdminClosedRoom);
           } else if (msg.action === 'reset') {
             setView('lobby');
@@ -2593,6 +2906,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       : 3) as 2 | 3 | 4 | 5;
     setPlayerSeatCount(seats);
     setIsPrivateRoomGame(Boolean(tbl.isPrivate));
+    if (tbl.voiceAccessKey) {
+      const k = String(tbl.voiceAccessKey);
+      voiceAccessKeyRef.current = k;
+      setVoiceAccessKey(k);
+    }
     if (tbl.isPrivate && tbl.roomCode) {
       setActivePrivateRoomCode(String(tbl.roomCode));
     }
@@ -3041,6 +3359,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       });
       const data = await res.json();
       if (data?.ok && data.room) {
+        if (data.room.voiceAccessKey) {
+          const k = String(data.room.voiceAccessKey);
+          voiceAccessKeyRef.current = k;
+          setVoiceAccessKey(k);
+        }
         saveLocalPrivateRoom(data.room);
         setPrivateRoomState(data.room);
       }
@@ -5265,7 +5588,20 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
             <div className="flex items-center gap-1.5">
               {isPrivateRoomGame && activePrivateRoomCode && (
-                <div className="flex items-center gap-1.5 px-2 py-1 rounded-2xl bg-black/60 border border-emerald-500/30">
+                <div className="flex items-center gap-1.5 px-2 py-1 rounded-2xl bg-[#101829]/90 border border-emerald-400/35 shadow-lg">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      raminoAudio.playCardSnap();
+                      setIsVoiceStageOpen(true);
+                    }}
+                    className="px-2 py-0.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/35 text-emerald-300 text-[10px] font-black flex items-center gap-1 cursor-pointer transition"
+                    title={t.voiceStageTitle}
+                  >
+                    <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                    <span className="hidden sm:inline">{t.voiceStageBtn}</span>
+                    <span>• {voiceConnectedCount}</span>
+                  </button>
                   <button
                     type="button"
                     onClick={handleTogglePrivateMic}
@@ -5275,6 +5611,24 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   >
                     {!isMicMuted ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
                     <span>{!isMicMuted ? t.micOpen : t.micOpenBtn}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      void handleStartPushToTalk();
+                    }}
+                    onPointerUp={handleEndPushToTalk}
+                    onPointerLeave={handleEndPushToTalk}
+                    onPointerCancel={handleEndPushToTalk}
+                    className={`px-2 py-0.5 rounded-xl text-[10px] font-black flex items-center gap-1 select-none touch-none transition cursor-pointer ${
+                      isPushToTalkActive
+                        ? 'bg-sky-400 text-slate-950 ring-2 ring-sky-300'
+                        : 'bg-sky-500/20 text-sky-200 border border-sky-400/35 hover:bg-sky-500/30'
+                    }`}
+                  >
+                    <Mic className="w-3 h-3" />
+                    <span className="hidden md:inline">{t.voiceHoldToTalk}</span>
                   </button>
                   <button
                     type="button"
@@ -5449,10 +5803,20 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
             <div className="flex items-center gap-1.5">
               {isPrivateRoomGame && activePrivateRoomCode && (
-                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-2xl bg-black/60 border border-emerald-500/30">
-                  <span className="text-[9px] font-mono font-bold text-teal-300 hidden sm:inline">
-                    🔒 {activePrivateRoomCode} ({voiceConnectedCount})
-                  </span>
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-2xl bg-[#101829]/90 border border-emerald-400/35">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      raminoAudio.playCardSnap();
+                      setIsVoiceStageOpen(true);
+                    }}
+                    className="px-2 py-0.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/35 text-emerald-300 text-[10px] font-black flex items-center gap-1 cursor-pointer transition"
+                    title={t.voiceStageTitle}
+                  >
+                    <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                    <span className="hidden sm:inline">{activePrivateRoomCode}</span>
+                    <span>• {voiceConnectedCount}</span>
+                  </button>
                   <button
                     onClick={handleTogglePrivateMic}
                     className={`px-2 py-0.5 rounded-xl text-[10px] font-black flex items-center gap-1 transition cursor-pointer ${
@@ -5626,10 +5990,21 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
             <div className="flex items-center gap-1.5">
               {isPrivateRoomGame && activePrivateRoomCode && (
-                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-2xl bg-black/60 border border-emerald-500/30">
-                  <span className="text-[9px] font-mono font-bold text-teal-300">
-                    🔒 {activePrivateRoomCode} • 👥 {voiceConnectedCount} • {t.roundWord} {privateRoundCount}
-                  </span>
+                <div className="flex items-center gap-1 px-2 py-0.5 rounded-2xl bg-[#101829]/95 border border-emerald-400/40 shadow-lg">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      raminoAudio.playCardSnap();
+                      setIsVoiceStageOpen(true);
+                    }}
+                    className="px-1.5 py-0.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/35 text-emerald-300 text-[10px] font-black flex items-center gap-1 transition cursor-pointer"
+                    title={t.voiceStageTitle}
+                  >
+                    <ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" />
+                    <span className="font-mono text-teal-200 hidden md:inline">{activePrivateRoomCode}</span>
+                    <span>• 👥 {voiceConnectedCount}</span>
+                    <span className="hidden lg:inline text-slate-300">• {t.roundWord} {privateRoundCount}</span>
+                  </button>
 
                   {privateRoundCount >= 5 && (
                     <button
@@ -5642,12 +6017,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   )}
 
                   {activeSpeakerName && !isDeafened && (
-                    <span className="text-[9px] font-black text-emerald-300 animate-pulse px-1">
+                    <span className="text-[9px] font-black text-emerald-300 animate-pulse px-1 hidden sm:inline">
                       🔊 {activeSpeakerName}
                     </span>
                   )}
 
                   <button
+                    type="button"
                     onClick={handleTogglePrivateMic}
                     className={`px-2 py-0.5 rounded-xl text-[10px] font-black flex items-center gap-1 transition cursor-pointer ${
                       !isMicMuted
@@ -5660,10 +6036,31 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                     ) : (
                       <MicOff className="w-3 h-3" />
                     )}
-                    <span className="font-bold">{!isMicMuted ? t.micOpen : t.micOpenBtn}</span>
+                    <span className="font-bold hidden sm:inline">{!isMicMuted ? t.micOpen : t.micOpenBtn}</span>
                   </button>
 
                   <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      void handleStartPushToTalk();
+                    }}
+                    onPointerUp={handleEndPushToTalk}
+                    onPointerLeave={handleEndPushToTalk}
+                    onPointerCancel={handleEndPushToTalk}
+                    className={`px-1.5 py-0.5 rounded-xl text-[10px] font-black flex items-center gap-1 select-none touch-none transition cursor-pointer ${
+                      isPushToTalkActive
+                        ? 'bg-sky-400 text-slate-950 ring-2 ring-sky-300'
+                        : 'bg-sky-500/20 text-sky-200 border border-sky-400/35 hover:bg-sky-500/30'
+                    }`}
+                    title={t.voiceHoldToTalk}
+                  >
+                    <Mic className="w-3 h-3" />
+                    <span className="hidden lg:inline">{t.voiceHoldToTalk}</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => {
                       setIsDeafened(!isDeafened);
                       raminoAudio.playCardSnap();
@@ -7350,6 +7747,229 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             >
               {t.understoodCloseBtn}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          TIKTOK / TELEGRAM-STYLE PRIVATE E2EE VOICE STAGE SHEET
+         ======================================================== */}
+      {isVoiceStageOpen && isPrivateRoomGame && activePrivateRoomCode && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 z-[100004] overflow-hidden">
+          <div
+            style={{ maxHeight: modalMaxHeightPx ? `${modalMaxHeightPx}px` : '88dvh' }}
+            className="w-full sm:max-w-md rounded-t-[28px] sm:rounded-[28px] bg-gradient-to-b from-[#0d172a] via-[#0b1222] to-[#060912] border-t-2 sm:border-2 border-emerald-400/45 shadow-2xl flex flex-col overflow-hidden text-slate-50"
+          >
+            {/* Stage Header */}
+            <div className="shrink-0 px-4 pt-3.5 pb-3 border-b border-white/10 flex items-center justify-between gap-2 bg-black/35">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <h3 className="text-sm font-black text-white truncate">{t.voiceStageTitle}</h3>
+                  <span className="px-2 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-400/40 text-emerald-300 text-[10px] font-black">
+                    {t.voiceE2eeBadge}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 mt-1 text-[10px] font-bold text-slate-400">
+                  <span className="font-mono text-teal-300">#{activePrivateRoomCode}</span>
+                  <span>•</span>
+                  <span className="text-sky-300">{t.voiceHdBadge}</span>
+                  <span>•</span>
+                  <span>👥 {voiceConnectedCount}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsVoiceStageOpen(false)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-gray-200 flex items-center justify-center font-black text-sm cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Untappable E2EE Guarantee Banner */}
+            <div className="px-4 pt-2.5 shrink-0">
+              <div className="px-3 py-2 rounded-2xl bg-emerald-500/10 border border-emerald-400/25 text-[10px] text-emerald-200/95 font-semibold leading-snug flex items-start gap-2">
+                <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                <span>{t.voiceUntappableNote}</span>
+              </div>
+            </div>
+
+            {/* Stage Participant Grid (TikTok Live / Telegram Avatar Rings) */}
+            <div
+              style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-3"
+            >
+              <div className="text-[11px] font-black text-slate-300">
+                {t.voiceParticipantsLabel} ({1 + voicePeersList.length})
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                {/* Local Player Tile */}
+                <div
+                  className={`relative p-3 rounded-2xl border flex flex-col items-center text-center gap-2 transition-all ${
+                    !isMicMuted && isLocalSpeaking
+                      ? 'bg-emerald-500/15 border-emerald-400 ring-2 ring-emerald-400/40 shadow-lg shadow-emerald-500/15'
+                      : 'bg-white/5 border-white/10'
+                  }`}
+                >
+                  <div className="relative">
+                    {!isMicMuted && isLocalSpeaking && (
+                      <span className="absolute -inset-1.5 rounded-full border-2 border-emerald-400/75 animate-ping" />
+                    )}
+                    <div
+                      className={`w-12 h-12 rounded-full flex items-center justify-center text-lg font-black text-slate-950 shadow-lg ${
+                        !isMicMuted ? 'bg-gradient-to-br from-emerald-300 to-teal-400' : 'bg-amber-400'
+                      }`}
+                    >
+                      {playerName[0]?.toUpperCase() || 'Y'}
+                    </div>
+                    <span
+                      className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center border border-slate-950 ${
+                        !isMicMuted ? 'bg-emerald-400 text-slate-950' : 'bg-rose-500 text-white'
+                      }`}
+                    >
+                      {!isMicMuted ? <Mic className="w-2.5 h-2.5" /> : <MicOff className="w-2.5 h-2.5" />}
+                    </span>
+                  </div>
+                  <div className="min-w-0 w-full">
+                    <div className="text-xs font-black text-white truncate">
+                      {playerName} ({t.yoursTag})
+                    </div>
+                    <div
+                      className={`text-[10px] font-bold mt-0.5 ${
+                        !isMicMuted && isLocalSpeaking
+                          ? 'text-emerald-300'
+                          : !isMicMuted
+                          ? 'text-teal-300'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {!isMicMuted && isLocalSpeaking
+                        ? t.voiceSpeakingNow
+                        : !isMicMuted
+                        ? t.voiceMicLive
+                        : t.voiceListening}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Connected Remote Peers */}
+                {voicePeersList.map((peer) => {
+                  const isLocallyMuted = Boolean(mutedPeerIds[peer.peerId]);
+                  const activeVoice = !peer.isMuted && peer.isSpeaking && !isLocallyMuted && !isDeafened;
+                  return (
+                    <div
+                      key={peer.peerId}
+                      className={`relative p-3 rounded-2xl border flex flex-col items-center text-center gap-2 transition-all ${
+                        activeVoice
+                          ? 'bg-sky-500/15 border-sky-400 ring-2 ring-sky-400/40 shadow-lg shadow-sky-500/15'
+                          : 'bg-white/5 border-white/10'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleMuteRemotePeer(peer.peerId)}
+                        className={`absolute top-2 right-2 p-1 rounded-lg text-[10px] transition cursor-pointer ${
+                          isLocallyMuted
+                            ? 'bg-rose-500/25 text-rose-300 border border-rose-400/40'
+                            : 'bg-white/10 text-slate-300 hover:bg-white/20'
+                        }`}
+                        title={isLocallyMuted ? t.voiceUnmutePeer : t.voiceMutePeer}
+                      >
+                        {isLocallyMuted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+                      </button>
+
+                      <div className="relative">
+                        {activeVoice && (
+                          <span className="absolute -inset-1.5 rounded-full border-2 border-sky-400/75 animate-ping" />
+                        )}
+                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-sky-300 to-indigo-400 flex items-center justify-center text-lg font-black text-slate-950 shadow-lg">
+                          {peer.playerName[0]?.toUpperCase() || 'F'}
+                        </div>
+                        <span
+                          className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center border border-slate-950 ${
+                            !peer.isMuted ? 'bg-emerald-400 text-slate-950' : 'bg-slate-700 text-rose-300'
+                          }`}
+                        >
+                          {!peer.isMuted ? <Mic className="w-2.5 h-2.5" /> : <MicOff className="w-2.5 h-2.5" />}
+                        </span>
+                      </div>
+
+                      <div className="min-w-0 w-full">
+                        <div className="text-xs font-black text-white truncate">{peer.playerName}</div>
+                        <div
+                          className={`text-[10px] font-bold mt-0.5 ${
+                            isLocallyMuted
+                              ? 'text-rose-300'
+                              : activeVoice
+                              ? 'text-sky-300'
+                              : 'text-slate-400'
+                          }`}
+                        >
+                          {isLocallyMuted
+                            ? t.voiceMutePeer
+                            : activeVoice
+                            ? t.voiceSpeakingNow
+                            : t.voiceListening}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Bottom Telegram / TikTok Dock Controls */}
+            <div className="shrink-0 px-4 py-3.5 bg-black/55 border-t border-white/10 flex items-center justify-between gap-2.5">
+              <button
+                type="button"
+                onClick={handleTogglePrivateMic}
+                className={`px-3.5 py-2.5 rounded-2xl font-black text-xs flex items-center gap-1.5 transition cursor-pointer ${
+                  !isMicMuted && !isPushToTalkActive
+                    ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/25'
+                    : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/15'
+                }`}
+              >
+                {!isMicMuted ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4 text-rose-400" />}
+                <span>{!isMicMuted ? t.micOpen : t.voiceTapToSpeak}</span>
+              </button>
+
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  void handleStartPushToTalk();
+                }}
+                onPointerUp={handleEndPushToTalk}
+                onPointerLeave={handleEndPushToTalk}
+                onPointerCancel={handleEndPushToTalk}
+                className={`flex-1 py-3 px-4 rounded-2xl font-black text-xs flex items-center justify-center gap-2 select-none touch-none transition cursor-pointer shadow-xl ${
+                  isPushToTalkActive
+                    ? 'bg-gradient-to-r from-sky-400 via-cyan-300 to-emerald-400 text-slate-950 scale-[0.98] ring-4 ring-sky-400/40'
+                    : 'bg-gradient-to-r from-sky-500 to-indigo-500 hover:brightness-110 text-white'
+                }`}
+              >
+                <Mic className={`w-4 h-4 ${isPushToTalkActive ? 'animate-pulse' : ''}`} />
+                <span>{isPushToTalkActive ? t.voiceReleaseToMute : t.voiceHoldToTalk}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  raminoAudio.playCardSnap();
+                  setIsDeafened((prev) => !prev);
+                }}
+                className={`p-2.5 rounded-2xl border transition cursor-pointer ${
+                  isDeafened
+                    ? 'bg-rose-500/25 border-rose-400/50 text-rose-300'
+                    : 'bg-white/10 hover:bg-white/15 border-white/15 text-slate-200'
+                }`}
+                title={isDeafened ? t.deafenOpenTip : t.deafenMuteTip}
+              >
+                <Headphones className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       )}

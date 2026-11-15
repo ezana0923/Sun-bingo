@@ -96,41 +96,6 @@ export const WalletView: React.FC<WalletViewProps> = ({
     return cleaned ? parseFloat(cleaned) : NaN;
   };
 
-  const handlePasteSampleSms = () => {
-    const existingClean = parseCleanAmount(depAmount);
-    const parsedExistingSms = parseEthiopianPaymentSms(depFullSms);
-    const numAmt =
-      (Number.isFinite(existingClean) && existingClean > 0 ? existingClean : null) ||
-      parsedExistingSms.amount ||
-      500;
-    const amt = String(numAmt);
-    const formattedAmt = numAmt.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-    const uniqueSuffix = Math.floor(100000 + Math.random() * 900000);
-    const sample =
-      selectedBank === 'Telebirr'
-        ? `Dear Ezana, You have received ETB ${formattedAmt} from ${currentUser.phone} on 08/10/2026. Your transaction number is TB${uniqueSuffix}.`
-        : selectedBank === 'CBE'
-        ? `Dear Customer, your account 1000112964936 has been credited with ETB ${formattedAmt}. Ref No FT${uniqueSuffix}AB.`
-        : selectedBank === 'Abyssinia'
-        ? `Bank of Abyssinia: Acct 66816532 credited with ETB ${formattedAmt}. Txn ID BOA${uniqueSuffix}.`
-        : `M-PESA Confirmed. You have received ETB ${formattedAmt}. Transaction ID MP${uniqueSuffix}CD.`;
-    setDepFullSms(sample);
-    setDepAmount(amt);
-    setDetectedTxType('deposit');
-    setDepRefNumber(
-      selectedBank === 'Telebirr'
-        ? `TB${uniqueSuffix}`
-        : selectedBank === 'CBE'
-        ? `FT${uniqueSuffix}AB`
-        : selectedBank === 'Abyssinia'
-        ? `BOA${uniqueSuffix}`
-        : `MP${uniqueSuffix}CD`
-    );
-  };
-
   const handleSmsInputChange = (val: string) => {
     setDepFullSms(val);
     const parsed = parseEthiopianPaymentSms(val);
@@ -254,12 +219,8 @@ export const WalletView: React.FC<WalletViewProps> = ({
     setFeedbackMsg({
       type: 'ok',
       text: isCash
-        ? (requireAdminApproval
-            ? `⏳ የ ${amt} ETB በካሽ (Cash) የተከፈለ ገቢ ጥያቄዎ ተልኳል! አድሚኑ/ወኪሉ ጥሬ ገንዘቡን ሲቀበል ወዲያውኑ ወደ ዋሌትዎ ይጨመራል!`
-            : `✅ የ ${amt} ETB በካሽ ገቢ ተረጋግጦ ወደ ዋሌትዎ ተጨምሯል!`)
-        : (requireAdminApproval
-            ? `⏳ የ ${amt} ETB ገቢ (Deposit) ጥያቄዎ በ ${bankToUse} (Ref: ${cleanRef || 'SMS'}) በራሱ ተለይቶ ተልኳል! ከባንክ ደረሰኝ ጋር ተመሳክሮ ሲጸድቅ ወዲያውኑ ወደ ዋሌትዎ ይገባል!`
-            : `✅ የ ${amt} ETB ገቢ በ ${bankToUse} ተረጋግጦ ወደ ዋሌትዎ ተጨምሯል!`),
+        ? `⏳ የ ${amt} ETB በካሽ (Cash) የተከፈለ ገቢ ጥያቄዎ ተልኳል! አድሚኑ/ወኪሉ ሲያረጋግጥ ወዲያውኑ ወደ ዋሌትዎ ይጨመራል።`
+        : `⏳ የ ${amt} ETB ገቢ (Deposit) ጥያቄዎ በ ${bankToUse} (Ref: ${cleanRef || 'SMS'}) ተልኳል! የባንክ SMS በ Webhook ሲረጋገጥ ወዲያውኑ ወደ ዋሌትዎ ይገባል።`,
     });
   };
 
@@ -501,7 +462,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
                 </p>
               </div>
               <span className="px-3 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-extrabold">
-                ⚡ Instant Telebirr & Bank Deposit
+                🔒 Verified by Bank SMS Webhook
               </span>
             </div>
 
@@ -678,15 +639,9 @@ export const WalletView: React.FC<WalletViewProps> = ({
                     : `የከፈሉበትን መረጃ / SMS ደረሰኝ ማረጋገጫ (${selectedAccountObj.shortName})`}
                 </span>
               </h4>
-              {selectedAccountObj.id !== 'Cash' && (
-                <button
-                  type="button"
-                  onClick={handlePasteSampleSms}
-                  className="px-3 py-1 rounded-lg bg-blue-500/15 border border-blue-500/30 text-xs font-extrabold text-blue-400 hover:bg-blue-500/25 cursor-pointer"
-                >
-                  ናሙና SMS ሙላ (Auto-fill Sample SMS)
-                </button>
-              )}
+              <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-[11px] font-bold text-emerald-400">
+                🔒 በ Webhook የሚረጋገጥ
+              </span>
             </div>
 
             {/* Quick Deposit Amount Pills */}

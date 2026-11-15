@@ -1761,8 +1761,9 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
             requireAdminApproval={requireDepositApproval}
             bankAccounts={bankAccounts}
             onSubmitDeposit={(method, amount, refNumber, fullSms) => {
+              const tempId = `tx-${Date.now()}`;
               const newTx: TransactionRecord = {
-                id: `tx-${Date.now()}`,
+                id: tempId,
                 userId: currentUser.id,
                 userName: currentUser.name,
                 userPhone: currentUser.phone,
@@ -1771,17 +1772,45 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
                 amount,
                 referenceNumber: refNumber,
                 fullSmsText: fullSms,
-                status: 'approved',
+                status: 'pending',
                 timestamp: new Date().toLocaleString(),
               };
               setTransactions((prev) => [newTx, ...prev]);
-              setUsers((prev) =>
-                prev.map((u, idx) => (idx === 0 ? { ...u, balance: u.balance + amount } : u))
-              );
+              fetch(buildApiUrl('/api/transactions/submit'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  userId: currentUser.id,
+                  userName: currentUser.name,
+                  userPhone: currentUser.phone,
+                  type: 'deposit',
+                  method,
+                  amount,
+                  referenceNumber: refNumber,
+                  fullSmsText: fullSms,
+                }),
+              })
+                .then((r) => r.json())
+                .then((data) => {
+                  if (!data?.ok) {
+                    setTransactions((prev) => prev.filter((t) => t.id !== tempId));
+                    return;
+                  }
+                  if (typeof data.balance === 'number' && !data.isPending) {
+                    setUsers((prev) =>
+                      prev.map((u, idx) => (idx === 0 ? { ...u, balance: data.balance } : u))
+                    );
+                    setTransactions((prev) =>
+                      prev.map((t) => (t.id === tempId ? { ...t, status: 'approved' } : t))
+                    );
+                  }
+                })
+                .catch(() => {});
             }}
             onSubmitWithdraw={(method, amount, accountNumber) => {
+              const tempId = `tx-${Date.now()}`;
               const newTx: TransactionRecord = {
-                id: `tx-${Date.now()}`,
+                id: tempId,
                 userId: currentUser.id,
                 userName: currentUser.name,
                 userPhone: currentUser.phone,
@@ -1789,22 +1818,60 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
                 method,
                 amount,
                 referenceNumber: accountNumber,
-                status: 'approved',
+                status: requireDepositApproval ? 'pending' : 'approved',
                 timestamp: new Date().toLocaleString(),
               };
               setTransactions((prev) => [newTx, ...prev]);
-              setUsers((prev) =>
-                prev.map((u, idx) =>
-                  idx === 0 ? { ...u, balance: Math.max(0, u.balance - amount) } : u
-                )
-              );
+              fetch(buildApiUrl('/api/transactions/submit'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  userId: currentUser.id,
+                  userName: currentUser.name,
+                  userPhone: currentUser.phone,
+                  type: 'withdraw',
+                  method,
+                  amount,
+                  referenceNumber: accountNumber,
+                }),
+              })
+                .then((r) => r.json())
+                .then((data) => {
+                  if (!data?.ok) {
+                    setTransactions((prev) => prev.filter((t) => t.id !== tempId));
+                    return;
+                  }
+                  if (typeof data.balance === 'number') {
+                    setUsers((prev) =>
+                      prev.map((u, idx) => (idx === 0 ? { ...u, balance: data.balance } : u))
+                    );
+                  }
+                })
+                .catch(() => {});
             }}
             onSubmitTransfer={(recipientPhone, amount) => {
-              setUsers((prev) =>
-                prev.map((u, idx) =>
-                  idx === 0 ? { ...u, balance: Math.max(0, u.balance - amount) } : u
-                )
-              );
+              fetch(buildApiUrl('/api/transactions/submit'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  userId: currentUser.id,
+                  userName: currentUser.name,
+                  userPhone: currentUser.phone,
+                  type: 'transfer',
+                  method: 'Wallet',
+                  amount,
+                  recipientPhone,
+                }),
+              })
+                .then((r) => r.json())
+                .then((data) => {
+                  if (data?.ok && typeof data.balance === 'number') {
+                    setUsers((prev) =>
+                      prev.map((u, idx) => (idx === 0 ? { ...u, balance: data.balance } : u))
+                    );
+                  }
+                })
+                .catch(() => {});
             }}
           />
         )}

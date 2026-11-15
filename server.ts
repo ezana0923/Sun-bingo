@@ -7,7 +7,6 @@ import zlib from 'zlib';
 import crypto from 'crypto';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 import { generateProvablyFairRound } from './src/utils/provablyFair';
 import { parseEthiopianPaymentSms, normalizeTransactionReference } from './src/utils/smsParser';
 import { generateCartelaById } from './src/utils/bingoEngine';
@@ -17,6 +16,8 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.text({ type: 'text/plain' }));
 let lastKnownLiveHost =
   process.env.SHARED_APP_URL ||
   'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
@@ -24,7 +25,7 @@ let lastKnownLiveHost =
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-webhook-secret, x-api-key');
   if (req.method === 'OPTIONS') {
     res.sendStatus(200);
     return;
@@ -165,7 +166,7 @@ let adminPinConfig = {
   username: 'admin',
   passwordHash: 'admin123',
   pinCode: '1234',
-  requireDepositApproval: false,
+  requireDepositApproval: true,
   smsWebhookSecret: 'ezi_sms_secret_2026',
   welcomeBonusAmount: 15,
   referralBonusAmount: 10,
@@ -2948,29 +2949,34 @@ async function handleTelegramMenuAction(
 
     const targetPhone = targetPlayer.phone;
 
+    const normTelegramRef = normalizeTransactionReference(refNo);
     const matchingPreVerified =
-      refNo && refNo.length >= 5
+      normTelegramRef && normTelegramRef.length >= 5
         ? verifiedBankSmsReceipts.find(
             (r) =>
-              normalizeTransactionReference(r.referenceNumber) ===
-                normalizeTransactionReference(refNo) && r.status !== 'duplicate'
+              normalizeTransactionReference(r.referenceNumber) === normTelegramRef &&
+              r.status !== 'duplicate'
           )
         : null;
 
-    // If the incoming text contains authentic bank transfer confirmation keywords or comes from bank
-    const isAuthenticBankReceipt = Boolean(
-      parsedSms.detectedBank ||
-      /ተቀብለዋል|credited|received|transferred|የግብይት\s*ቁጥር|receipt|ደረሰኝ/i.test(rawAction) ||
-      (refNo && refNo.length >= 6 && parsedAmount && parsedAmount > 0)
-    );
-
-    const isAutoApproved =
-      !adminPinConfig.requireDepositApproval || isAuthenticBankReceipt || Boolean(matchingPreVerified);
-
-    if (matchingPreVerified) {
-      matchingPreVerified.status = 'auto_approved';
-      matchingPreVerified.matchedUserPhone = targetPhone;
+    if (
+      matchingPreVerified &&
+      (matchingPreVerified.status === 'auto_approved' || Boolean(matchingPreVerified.matchedTxId))
+    ) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `ℹ️ *ይህ ደረሰኝ (\`${refNo}\`) በባንክ SMS Webhook ቀድሞ ተረጋግጦ ገቢ ሆኗል!*\n💵 ቀሪ ሂሳብ፦ *${targetPlayer.balance.toFixed(2)} ETB*`,
+        buildSubMenuInlineKeyboard(appUrl, targetPhone)
+      );
+      return;
     }
+
+    // Strict Webhook Rule: Telegram deposits only auto-approve when a real bank SMS receipt already arrived via /api/webhook/sms
+    const isAutoApproved = Boolean(matchingPreVerified && matchingPreVerified.status === 'ready_for_claim');
+    const verifiedAmt = matchingPreVerified ? matchingPreVerified.amount : parsedAmount;
+    const bonusPct = Number(adminPinConfig.depositBonusPercent || 0);
+    const bonusAmt = isAutoApproved && bonusPct > 0 ? Number(((verifiedAmt * bonusPct) / 100).toFixed(2)) : 0;
 
     const newTx: ServerTransactionRecord = {
       id: `srv-tx-${Date.now()}`,
@@ -2979,19 +2985,21 @@ async function handleTelegramMenuAction(
       userPhone: targetPhone,
       chatId: targetPlayer.chatId || chatId,
       type: 'deposit',
-      method,
-      amount: parsedAmount,
-      referenceNumber: refNo,
-      fullSmsText: rawAction.trim(),
+      method: matchingPreVerified?.bank || method,
+      amount: verifiedAmt,
+      referenceNumber: normTelegramRef || refNo,
+      fullSmsText: matchingPreVerified?.rawSms || rawAction.trim(),
       status: isAutoApproved ? 'approved' : 'pending',
       timestamp: new Date().toLocaleString(),
     };
     serverTransactions.unshift(newTx);
 
-    if (isAutoApproved) {
-      const bonusPct = Number(adminPinConfig.depositBonusPercent || 0);
-      const bonusAmt = bonusPct > 0 ? Number(((parsedAmount * bonusPct) / 100).toFixed(2)) : 0;
-      targetPlayer.balance = Number((targetPlayer.balance + parsedAmount + bonusAmt).toFixed(2));
+    if (isAutoApproved && matchingPreVerified) {
+      matchingPreVerified.status = 'auto_approved';
+      matchingPreVerified.matchedUserPhone = targetPhone;
+      matchingPreVerified.matchedTxId = newTx.id;
+
+      targetPlayer.balance = Number((targetPlayer.balance + verifiedAmt + bonusAmt).toFixed(2));
       if (bonusAmt > 0) {
         targetPlayer.bonusBalance = Number(((targetPlayer.bonusBalance || 0) + bonusAmt).toFixed(2));
       }
@@ -3003,32 +3011,16 @@ async function handleTelegramMenuAction(
         globalWalletBalance = targetPlayer.balance;
       }
 
-      // Add to verified receipts pool and webhook logs for full audit & real-time visibility
-      const logId = `sms-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      verifiedBankSmsReceipts.unshift({
-        id: logId,
-        bank: method,
-        amount: parsedAmount,
-        referenceNumber: refNo,
-        senderPhone: targetPhone,
-        rawSms: rawAction.trim(),
-        receivedAt: Date.now(),
-        matchedTxId: newTx.id,
-        matchedUserPhone: targetPhone,
-        status: 'auto_approved',
-      });
-      if (verifiedBankSmsReceipts.length > 100) verifiedBankSmsReceipts.pop();
-
       receivedWebhookSmsLogs.unshift({
-        id: logId,
+        id: `sms-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         timestamp: new Date().toLocaleString(),
-        sender: method,
-        rawText: rawAction.trim(),
-        parsedAmount,
-        parsedRef: refNo,
-        detectedBank: method,
+        sender: matchingPreVerified.bank,
+        rawText: matchingPreVerified.rawSms,
+        parsedAmount: verifiedAmt,
+        parsedRef: normTelegramRef || refNo,
+        detectedBank: matchingPreVerified.bank,
         detectedType: 'deposit',
-        statusText: `✅ በቴሌግራም ተረጋግጦ ወዲያውኑ ገቢ ሆኗል (Auto-Credited to ${targetPhone})`,
+        statusText: `✅ በባንክ SMS Webhook + ቴሌግራም ተረጋግጦ ገቢ ሆኗል (Auto-Credited to ${targetPhone})`,
         matchedPlayerPhone: targetPhone,
       });
       if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
@@ -3038,18 +3030,18 @@ async function handleTelegramMenuAction(
     broadcastRealtimeSync();
 
     const replyText = !isAutoApproved
-      ? `⏳ *የገቢ ጥያቄዎ በራሱ ተለይቶ ደርሷል (በመጠባበቅ ላይ)*\n` +
+      ? `⏳ *የገቢ ጥያቄዎ ተመዝግቧል (Webhook Verification በመጠባበቅ ላይ)*\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
         `🏷️ አይነት፦ *ገቢ (DEPOSIT)*\n` +
         `💳 መንገድ፦ *${method}*\n` +
-        `💰 መጠን፦ *${parsedAmount.toFixed(2)} ETB*\n` +
-        `🔖 Ref No፦ \`${refNo}\`\n\n` +
-        `ጥያቄዎ ለማረጋገጫ ተልኳል! ከባንክ ደረሰኝ ጋር ተመሳክሮ ሲጸድቅ ወዲያውኑ ወደ ዋሌትዎ ይገባል!`
-      : `✅ *የገቢ ክፍያዎ በባንክ SMS በራሱ ተረጋግጦ ወዲያውኑ ጸድቋል!*\n` +
+        `💰 መጠን፦ *${verifiedAmt.toFixed(2)} ETB*\n` +
+        `🔖 Ref No፦ \`${normTelegramRef || refNo}\`\n\n` +
+        `ጥያቄዎ የባንክ SMS በ Webhook ሲረጋገጥ ወዲያውኑ ወደ ዋሌትዎ ይገባል!`
+      : `✅ *የገቢ ክፍያዎ በባንክ SMS Webhook ተረጋግጦ ወዲያውኑ ጸድቋል!*\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
-        `💳 መንገድ፦ *${method}*\n` +
-        `💰 *+${parsedAmount.toFixed(2)} ETB* ወደ ዋሌትዎ ተጨምሯል!\n` +
-        `🔖 Ref No፦ \`${refNo}\`\n` +
+        `💳 መንገድ፦ *${newTx.method}*\n` +
+        `💰 *+${verifiedAmt.toFixed(2)} ETB*${bonusAmt > 0 ? ` (+${bonusAmt.toFixed(2)} ETB ቦነስ)` : ''} ወደ ዋሌትዎ ተጨምሯል!\n` +
+        `🔖 Ref No፦ \`${newTx.referenceNumber}\`\n` +
         `📱 ተጠቃሚ፦ *${targetPhone}*\n` +
         `💵 አዲስ ቀሪ ሂሳብ፦ *${targetPlayer.balance.toFixed(2)} ETB*`;
 
@@ -5391,12 +5383,23 @@ app.post('/api/transactions/submit', (req, res) => {
 
   const normRefForVerify = effectiveRef || normRef;
   const matchingVerifiedReceipt =
-    resolvedType === 'deposit' && normRefForVerify && normRefForVerify.length >= 5
-      ? verifiedBankSmsReceipts.find(
-          (r) =>
-            normalizeTransactionReference(r.referenceNumber) === normRefForVerify &&
-            r.status !== 'duplicate'
-        )
+    resolvedType === 'deposit' && !isCashDeposit
+      ? verifiedBankSmsReceipts.find((r) => {
+          if (r.status === 'duplicate') return false;
+          const rRef = normalizeTransactionReference(r.referenceNumber);
+          if (normRefForVerify && normRefForVerify.length >= 5 && !normRefForVerify.startsWith('REF') && rRef === normRefForVerify) {
+            return true;
+          }
+          if (
+            r.status === 'ready_for_claim' &&
+            r.senderPhone &&
+            normalizeEthiopianPhone(r.senderPhone) === cleanPhone &&
+            Math.abs(r.amount - amt) < 0.01
+          ) {
+            return true;
+          }
+          return false;
+        })
       : null;
 
   // CRITICAL FIX: If matchingVerifiedReceipt was ALREADY auto-approved (credited by Webhook!):
@@ -5425,22 +5428,32 @@ app.post('/api/transactions/submit', (req, res) => {
           timestamp: new Date().toLocaleString(),
         },
       alreadyCredited: true,
-      message: 'ይህ ክፍያ በባንክ SMS በራሱ ቀድሞ ገቢ ተደርጓል!',
+      webhookVerified: true,
+      message: 'ይህ ክፍያ በባንክ SMS Webhook በራሱ ቀድሞ ገቢ ተደርጓል!',
       balance: player.balance,
       transactions: serverTransactions,
     });
     return;
   }
 
-  if (matchingVerifiedReceipt) {
-    matchingVerifiedReceipt.status = 'auto_approved';
-    matchingVerifiedReceipt.matchedUserPhone = cleanPhone;
-  }
+  // Strict Webhook Deposit Policy:
+  // Deposits ONLY auto-approve when verified by an actual incoming Bank SMS Webhook receipt!
+  // Otherwise, deposits remain 'pending' until the matching SMS Webhook arrives (or Admin approves).
+  const isWebhookVerifiedDeposit = Boolean(
+    resolvedType === 'deposit' &&
+      matchingVerifiedReceipt &&
+      matchingVerifiedReceipt.status === 'ready_for_claim'
+  );
+  const effectiveDepositAmount = isWebhookVerifiedDeposit && matchingVerifiedReceipt
+    ? matchingVerifiedReceipt.amount
+    : amt;
 
   const isPending =
-    !matchingVerifiedReceipt &&
-    adminPinConfig.requireDepositApproval &&
-    (resolvedType === 'deposit' || resolvedType === 'withdraw');
+    resolvedType === 'deposit'
+      ? !isWebhookVerifiedDeposit
+      : resolvedType === 'withdraw'
+      ? adminPinConfig.requireDepositApproval
+      : false;
 
   let recipientRecord: ServerPlayerRecord | null = null;
   if (resolvedType === 'transfer' && cleanRecipientPhone) {
@@ -5454,26 +5467,75 @@ app.post('/api/transactions/submit', (req, res) => {
     userPhone: cleanPhone,
     chatId: player.chatId,
     type: resolvedType,
-    method: resolvedType === 'transfer' ? 'Wallet' : method || parsedFromSms?.detectedBank || 'CBE',
-    amount: amt,
-    referenceNumber: resolvedRef,
+    method:
+      resolvedType === 'transfer'
+        ? 'Wallet'
+        : isWebhookVerifiedDeposit && matchingVerifiedReceipt
+        ? matchingVerifiedReceipt.bank
+        : method || parsedFromSms?.detectedBank || 'CBE',
+    amount: resolvedType === 'deposit' ? effectiveDepositAmount : amt,
+    referenceNumber:
+      isWebhookVerifiedDeposit && matchingVerifiedReceipt
+        ? matchingVerifiedReceipt.referenceNumber
+        : resolvedRef,
     fullSmsText:
-      fullSmsText ||
-      (resolvedType === 'transfer' && cleanRecipientPhone
-        ? `Transfer ${amt.toFixed(2)} ETB from ${cleanPhone} (${player.name}) to ${cleanRecipientPhone} (${recipientRecord?.name || cleanRecipientPhone})`
-        : undefined),
+      isWebhookVerifiedDeposit && matchingVerifiedReceipt
+        ? matchingVerifiedReceipt.rawSms
+        : fullSmsText ||
+          (resolvedType === 'transfer' && cleanRecipientPhone
+            ? `Transfer ${amt.toFixed(2)} ETB from ${cleanPhone} (${player.name}) to ${cleanRecipientPhone} (${recipientRecord?.name || cleanRecipientPhone})`
+            : undefined),
     recipientPhone: cleanRecipientPhone,
     status: isPending ? 'pending' : 'approved',
     timestamp: new Date().toLocaleString(),
   };
 
+  if (isWebhookVerifiedDeposit && matchingVerifiedReceipt) {
+    matchingVerifiedReceipt.status = 'auto_approved';
+    matchingVerifiedReceipt.matchedUserPhone = cleanPhone;
+    matchingVerifiedReceipt.matchedTxId = newTx.id;
+  }
+
   serverTransactions.unshift(newTx);
 
-  // If instant mode OR transfer, update wallet immediately; if withdraw and pending, hold funds on approval
+  // If webhook-verified deposit, instant-mode withdraw, or transfer -> update wallet immediately
   if (!isPending) {
     if (resolvedType === 'deposit') {
-      player.balance = Number((player.balance + amt).toFixed(2));
+      const bonusPct = Number(adminPinConfig.depositBonusPercent || 0);
+      const bonusAmt = bonusPct > 0 ? Number(((effectiveDepositAmount * bonusPct) / 100).toFixed(2)) : 0;
+      player.balance = Number((player.balance + effectiveDepositAmount + bonusAmt).toFixed(2));
+      if (bonusAmt > 0) {
+        player.bonusBalance = Number(((player.bonusBalance || 0) + bonusAmt).toFixed(2));
+      }
       player.updatedAt = new Date().toLocaleString();
+
+      receivedWebhookSmsLogs.unshift({
+        id: `sms-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        timestamp: new Date().toLocaleString(),
+        sender: newTx.method,
+        rawText: newTx.fullSmsText || newTx.referenceNumber || '',
+        parsedAmount: effectiveDepositAmount,
+        parsedRef: newTx.referenceNumber || null,
+        detectedBank: newTx.method,
+        detectedType: 'deposit',
+        statusText: `✅ በ Webhook ደረሰኝ ተረጋግጦ ገቢ ሆኗል (Claimed & Verified for ${cleanPhone})`,
+        matchedPlayerPhone: cleanPhone,
+      });
+      if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+
+      const targetChatId =
+        player.chatId ||
+        Array.from(registeredChatPhones.entries()).find(([, ph]) => normalizeEthiopianPhone(ph) === cleanPhone)?.[0];
+      if (targetChatId && activeBots.size > 0) {
+        const firstToken = Array.from(activeBots.keys())[0];
+        const botInfo = Array.from(activeBots.values())[0];
+        sendTelegramMessage(
+          firstToken,
+          Number(targetChatId),
+          `✅ *የገቢ ክፍያዎ በባንክ SMS Webhook ተረጋግጦ ጸድቋል!*\n━━━━━━━━━━━━━━━━━━\n💳 ባንክ፦ *${newTx.method}*\n💰 የተጨመረ ብር፦ *+${effectiveDepositAmount.toFixed(2)} ETB*${bonusAmt > 0 ? ` (+${bonusAmt.toFixed(2)} ETB ቦነስ)` : ''}\n🔖 Ref No፦ \`${newTx.referenceNumber}\`\n💵 አዲስ ቀሪ ሂሳብ፦ *${player.balance.toFixed(2)} ETB*`,
+          buildSubMenuInlineKeyboard(botInfo?.appUrl || SHARED_APP_URL, cleanPhone)
+        ).catch(() => {});
+      }
     } else if (resolvedType === 'withdraw' || resolvedType === 'transfer') {
       player.balance = Math.max(0, Number((player.balance - amt).toFixed(2)));
       player.updatedAt = new Date().toLocaleString();
@@ -5506,7 +5568,13 @@ app.post('/api/transactions/submit', (req, res) => {
         }
       }
     }
-    globalWalletBalance = player.balance;
+    if (
+      cleanPhone === globalRegisteredPhone ||
+      cleanPhone === '0942742684' ||
+      playersByPhone.size === 1
+    ) {
+      globalWalletBalance = player.balance;
+    }
   }
 
   saveBotsToDisk();
@@ -5516,6 +5584,7 @@ app.post('/api/transactions/submit', (req, res) => {
     ok: true,
     transaction: newTx,
     isPending,
+    webhookVerified: isWebhookVerifiedDeposit,
     balance: player.balance,
     recipientBalance: recipientRecord?.balance,
     recipientName: recipientRecord?.name,
@@ -5825,25 +5894,26 @@ function processIncomingBankSms(
     text.match(/(?:from|payer)\s+([a-zA-Z\s]{3,30})/i);
   const detectedPayerName = payerNameMatch ? payerNameMatch[1].trim() : undefined;
 
+  // Only match directly by player if the bank SMS explicitly names/contains a non-merchant registered player phone, masked suffix, or unique player name.
+  // Never fall back to crediting an unrelated default phone; instead store as 'ready_for_claim' for the real player who submits the Ref No!
   let matchedPlayer: ServerPlayerRecord | undefined;
-  if (detectedSenderPhone && playersByPhone.has(detectedSenderPhone)) {
+  if (detectedSenderPhone && detectedSenderPhone !== '0942742684' && playersByPhone.has(detectedSenderPhone)) {
     matchedPlayer = playersByPhone.get(detectedSenderPhone);
   }
-  if (!matchedPlayer && maskedSuffix) {
-    matchedPlayer = Array.from(playersByPhone.values()).find((p) => p.phone.endsWith(maskedSuffix));
+  if (!matchedPlayer && maskedSuffix && !'0942742684'.endsWith(maskedSuffix)) {
+    const suffixMatches = Array.from(playersByPhone.values()).filter((p) => p.phone.endsWith(maskedSuffix));
+    if (suffixMatches.length === 1) {
+      matchedPlayer = suffixMatches[0];
+    }
   }
-  if (!matchedPlayer && detectedPayerName && detectedPayerName.length >= 3) {
+  if (!matchedPlayer && detectedPayerName && detectedPayerName.length >= 4) {
     const normTarget = detectedPayerName.toLowerCase();
-    matchedPlayer = Array.from(playersByPhone.values()).find((p) => {
-      const pn = (p.name || '').toLowerCase();
-      return pn.length >= 3 && (normTarget.includes(pn) || pn.includes(normTarget));
+    const nameMatches = Array.from(playersByPhone.values()).filter((p) => {
+      const pn = (p.name || '').trim().toLowerCase();
+      return pn.length >= 4 && !pn.startsWith('player_') && (normTarget.includes(pn) || pn.includes(normTarget));
     });
-  }
-  if (!matchedPlayer) {
-    if (playersByPhone.has('0942742684')) {
-      matchedPlayer = playersByPhone.get('0942742684');
-    } else if (playersByPhone.size === 1) {
-      matchedPlayer = Array.from(playersByPhone.values())[0];
+    if (nameMatches.length === 1) {
+      matchedPlayer = nameMatches[0];
     }
   }
 
@@ -5964,14 +6034,22 @@ function processIncomingBankSms(
   return { success: true, statusText, parsed };
 }
 
-// 1. Webhook Receiver for Android SMS Forwarder Apps & Gateways
+// 1. Webhook Receiver for Android SMS Forwarder Apps & Gateways (JSON, Form-Urlencoded, Plain Text, or Query Params)
 const handleIncomingSmsWebhook = (req: express.Request, res: express.Response) => {
   const querySecret = typeof req.query.secret === 'string' ? req.query.secret : '';
   const headerSecret =
     req.headers['x-webhook-secret'] ||
     req.headers['x-api-key'] ||
     (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '');
-  const bodySecret = typeof req.body?.secret === 'string' ? req.body.secret : '';
+  const rawBodyObj =
+    req.body && typeof req.body === 'object' ? (req.body as Record<string, unknown>) : {};
+  const nestedData =
+    (rawBodyObj.payload && typeof rawBodyObj.payload === 'object'
+      ? (rawBodyObj.payload as Record<string, unknown>)
+      : rawBodyObj.data && typeof rawBodyObj.data === 'object'
+      ? (rawBodyObj.data as Record<string, unknown>)
+      : {}) as Record<string, unknown>;
+  const bodySecret = typeof rawBodyObj.secret === 'string' ? rawBodyObj.secret : '';
   const providedSecret = String(headerSecret || querySecret || bodySecret || '').trim();
 
   const configuredSecret = adminPinConfig.smsWebhookSecret?.trim();
@@ -5980,11 +6058,39 @@ const handleIncomingSmsWebhook = (req: express.Request, res: express.Response) =
     return;
   }
 
-  const b = req.body || {};
   const smsText = String(
-    b.message || b.text || b.body || b.sms || b.content || b.msg || (typeof b === 'string' ? b : '')
+    rawBodyObj.message ||
+      rawBodyObj.text ||
+      rawBodyObj.body ||
+      rawBodyObj.sms ||
+      rawBodyObj.content ||
+      rawBodyObj.msg ||
+      rawBodyObj.sms_body ||
+      rawBodyObj.Message ||
+      rawBodyObj.Text ||
+      nestedData.message ||
+      nestedData.text ||
+      nestedData.body ||
+      nestedData.sms ||
+      (typeof req.body === 'string' ? req.body : '') ||
+      req.query.message ||
+      req.query.text ||
+      req.query.sms ||
+      req.query.body ||
+      ''
   ).trim();
-  const sender = String(b.sender || b.from || b.phone || b.address || req.query.from || '127').trim();
+  const sender = String(
+    rawBodyObj.sender ||
+      rawBodyObj.from ||
+      rawBodyObj.phone ||
+      rawBodyObj.address ||
+      rawBodyObj.Sender ||
+      nestedData.sender ||
+      nestedData.from ||
+      req.query.from ||
+      req.query.sender ||
+      '127'
+  ).trim();
 
   if (!smsText) {
     res.status(400).json({ ok: false, error: 'Missing SMS text in payload' });
@@ -6000,7 +6106,9 @@ const handleIncomingSmsWebhook = (req: express.Request, res: express.Response) =
 };
 
 app.post('/api/webhook/sms', handleIncomingSmsWebhook);
+app.get('/api/webhook/sms', handleIncomingSmsWebhook);
 app.post('/api/transactions/sms-webhook', handleIncomingSmsWebhook);
+app.get('/api/transactions/sms-webhook', handleIncomingSmsWebhook);
 
 // 2. Query Webhook Status, Secret, and Recent Logs for Admin Panel
 app.get('/api/webhook/sms/logs', (req, res) => {
@@ -6769,6 +6877,7 @@ interface RaminoPrivateRoomRecord {
   stake: number;
   players: RaminoPrivatePlayerInfo[];
   status: 'waiting' | 'started';
+  voiceAccessKey?: string;
   createdAt: number;
 }
 interface RaminoPublicRoomRecord {
@@ -6805,6 +6914,7 @@ interface RaminoTablePlayer {
 interface RaminoTableSession {
   roomCode: string;
   isPrivate: boolean;
+  voiceAccessKey?: string;
   hostId: string;
   hostName: string;
   maxPlayers: 2 | 3 | 4 | 5;
@@ -7373,6 +7483,7 @@ function createOrSyncRaminoTableFromPrivateRoom(room: RaminoPrivateRoomRecord): 
     session = {
       roomCode: room.code,
       isPrivate: true,
+      voiceAccessKey: room.voiceAccessKey || crypto.randomBytes(24).toString('hex'),
       hostId: room.hostId,
       hostName: room.hostName,
       maxPlayers: room.maxPlayers,
@@ -7489,6 +7600,7 @@ function serializeRaminoTableForPlayer(session: RaminoTableSession, playerId: st
   return {
     roomCode: session.roomCode,
     isPrivate: session.isPrivate,
+    voiceAccessKey: session.isPrivate && me ? session.voiceAccessKey : undefined,
     hostId: session.hostId,
     hostName: session.hostName,
     maxPlayers: session.maxPlayers,
@@ -8307,10 +8419,10 @@ const pruneStaleGamePresence = () => {
   }
 };
 
-// Track ramino voice peers in module scope so HTTP admin inspection can also read live voice peer counts
+// Track ramino voice peers in module scope (strictly untappable: E2EE participants only)
 const raminoVoicePeers = new Map<
   WebSocket,
-  { roomCode: string; peerId: string; playerName: string; isAdminMonitor?: boolean }
+  { roomCode: string; peerId: string; playerId?: string; playerName: string; isMuted?: boolean }
 >();
 
 function computeLiveGameCounts() {
@@ -8345,9 +8457,7 @@ function computeLiveGameCounts() {
 
   const raminoPlayers = new Set<string>(presenceByGame.ramino);
   for (const meta of raminoVoicePeers.values()) {
-    if (!meta.isAdminMonitor) {
-      raminoPlayers.add(`voice:${meta.roomCode}:${meta.playerName}`);
-    }
+    raminoPlayers.add(`voice:${meta.roomCode}:${meta.playerName}`);
   }
   for (const room of raminoPrivateRooms.values()) {
     for (const p of room.players) {
@@ -8532,24 +8642,26 @@ app.post('/api/keno/admin/control', (req, res) => {
   res.json({ ok: true, ...kenoAdminConfig });
 });
 
-// Ramino Admin Rooms Inspection & Control API
+// Ramino Admin Rooms Inspection & Control API (voice audio & access keys NEVER exposed — untappable E2EE)
 app.get('/api/ramino/admin/rooms', (_req, res) => {
   const rooms = Array.from(raminoPrivateRooms.values()).map((r) => {
     const voicePeers: { peerId: string; playerName: string }[] = [];
     for (const meta of raminoVoicePeers.values()) {
-      if (meta.roomCode === r.code && !meta.isAdminMonitor) {
+      if (meta.roomCode === r.code) {
         voicePeers.push({ peerId: meta.peerId, playerName: meta.playerName });
       }
     }
+    const { voiceAccessKey: _hiddenVoiceKey, ...safeRoom } = r;
+    void _hiddenVoiceKey;
     return {
-      ...r,
+      ...safeRoom,
+      voiceEncrypted: true,
       voiceCount: voicePeers.length,
       voicePeers,
     };
   });
 
   for (const meta of raminoVoicePeers.values()) {
-    if (meta.isAdminMonitor) continue;
     if (!rooms.some((r) => r.code === meta.roomCode)) {
       rooms.push({
         code: meta.roomCode,
@@ -8569,6 +8681,7 @@ app.get('/api/ramino/admin/rooms', (_req, res) => {
         ],
         status: 'started',
         createdAt: Date.now(),
+        voiceEncrypted: true,
         voiceCount: 1,
         voicePeers: [{ peerId: meta.peerId, playerName: meta.playerName }],
       });
@@ -8902,6 +9015,7 @@ app.post('/api/ramino/private-rooms', (req, res) => {
         },
       ],
       status: 'waiting',
+      voiceAccessKey: crypto.randomBytes(24).toString('hex'),
       createdAt: Date.now(),
     };
     raminoPrivateRooms.set(rawCode, room);
@@ -8921,7 +9035,9 @@ app.get('/api/ramino/private-rooms/:code', (req, res) => {
   if (!room) {
     return res.status(404).json({ ok: false, error: 'ክፍሉ አልተገኘም' });
   }
-  res.json({ ok: true, room });
+  const { voiceAccessKey: _hiddenVoiceKey, ...publicPreview } = room;
+  void _hiddenVoiceKey;
+  res.json({ ok: true, room: publicPreview });
 });
 
 app.post('/api/ramino/private-rooms/:code/join', (req, res) => {
@@ -9352,7 +9468,6 @@ async function startServer() {
     const info = raminoVoicePeers.get(socket);
     if (!info) return;
     raminoVoicePeers.delete(socket);
-    if (info.isAdminMonitor) return;
     const payload = JSON.stringify({
       type: 'ramino:voice:peer-left',
       roomCode: info.roomCode,
@@ -9451,31 +9566,53 @@ async function startServer() {
           leaveRaminoVoiceRoom(ws);
           const roomCode = String(msg.roomCode || '').trim().toUpperCase();
           const peerId = String(msg.peerId || '').trim();
+          const playerId = String(msg.playerId || '').trim();
           const playerName = String(msg.playerName || 'Player').trim() || 'Player';
-          const isAdminMonitor = Boolean(msg.isAdminMonitor);
+          const isMuted = msg.isMuted !== false;
+          const providedVoiceKey = String(msg.voiceAccessKey || '').trim();
+
+          // Block ALL external/admin eavesdropping to keep Private Room voice untappable
+          if (msg.isAdminMonitor) {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'ramino:voice:error', roomCode, error: 'Private voice is E2E encrypted' }));
+            }
+            return;
+          }
           if (!roomCode || !peerId) return;
 
-          const existingPeers: { peerId: string; playerName: string }[] = [];
+          const activeRoom = raminoPrivateRooms.get(roomCode);
+          const activeTable = raminoTables.get(roomCode);
+          const expectedKey = activeTable?.voiceAccessKey || activeRoom?.voiceAccessKey;
+          if (expectedKey && providedVoiceKey !== expectedKey) {
+            // Also verify active player membership if key is checked
+            const isMember =
+              Boolean(playerId && activeRoom?.players.some((p) => p.id === playerId)) ||
+              Boolean(playerId && activeTable?.players.some((p) => p.id === playerId));
+            if (!isMember) {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'ramino:voice:error', roomCode, error: 'Unauthorized voice room access' }));
+              }
+              return;
+            }
+          }
+
+          const existingPeers: { peerId: string; playerName: string; isMuted: boolean }[] = [];
           const joinedNotify = JSON.stringify({
             type: 'ramino:voice:peer-joined',
             roomCode,
             peerId,
             playerName,
-            isAdminMonitor,
+            isMuted,
           });
           for (const [peerWs, meta] of raminoVoicePeers.entries()) {
             if (meta.roomCode === roomCode && peerWs.readyState === WebSocket.OPEN) {
-              if (!meta.isAdminMonitor) {
-                existingPeers.push({ peerId: meta.peerId, playerName: meta.playerName });
-              }
-              if (!isAdminMonitor) {
-                try {
-                  peerWs.send(joinedNotify);
-                } catch {}
-              }
+              existingPeers.push({ peerId: meta.peerId, playerName: meta.playerName, isMuted: meta.isMuted !== false });
+              try {
+                peerWs.send(joinedNotify);
+              } catch {}
             }
           }
-          raminoVoicePeers.set(ws, { roomCode, peerId, playerName, isAdminMonitor });
+          raminoVoicePeers.set(ws, { roomCode, peerId, playerId, playerName, isMuted });
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(
               JSON.stringify({
@@ -9505,6 +9642,28 @@ async function startServer() {
             ) {
               try {
                 peerWs.send(fwd);
+              } catch {}
+            }
+          }
+        } else if (msg.type === 'ramino:voice:mic-state') {
+          const sender = raminoVoicePeers.get(ws);
+          if (!sender) return;
+          sender.isMuted = Boolean(msg.isMuted);
+          const statePayload = JSON.stringify({
+            type: 'ramino:voice:mic-state',
+            roomCode: sender.roomCode,
+            peerId: sender.peerId,
+            playerName: sender.playerName,
+            isMuted: sender.isMuted,
+          });
+          for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+            if (
+              peerWs !== ws &&
+              meta.roomCode === sender.roomCode &&
+              peerWs.readyState === WebSocket.OPEN
+            ) {
+              try {
+                peerWs.send(statePayload);
               } catch {}
             }
           }
@@ -9573,7 +9732,9 @@ async function startServer() {
     });
   });
 
-  const distPath = path.join(__dirname, 'dist');
+  const distPath = fs.existsSync(path.join(__dirname, 'dist', 'index.html'))
+    ? path.join(__dirname, 'dist')
+    : path.join(process.cwd(), 'dist');
   const hasBuiltDist = fs.existsSync(path.join(distPath, 'index.html'));
   const isProduction =
     process.env.NODE_ENV === 'production' ||
@@ -9587,7 +9748,8 @@ async function startServer() {
       res.sendFile(indexPath);
     });
   } else if (!isProduction) {
-    // In dev mode (AI Studio preview), ALWAYS mount Vite middlewares for live SPA execution
+    // In dev mode (AI Studio preview), lazily import Vite so production bundle never depends on Vite dev server
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false },
       appType: 'spa',

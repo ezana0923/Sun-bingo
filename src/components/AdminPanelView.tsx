@@ -377,215 +377,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     }[]
   >([]);
   const [raminoOnlineCount, setRaminoOnlineCount] = useState(0);
-  const [listeningRoomCode, setListeningRoomCode] = useState<string | null>(null);
-  const [listeningVoicePeersCount, setListeningVoicePeersCount] = useState(0);
-  const [listeningSpeakerName, setListeningSpeakerName] = useState<string | null>(null);
-  const adminVoiceWsRef = React.useRef<WebSocket | null>(null);
-  const adminPeerConnsRef = React.useRef<Map<string, RTCPeerConnection>>(new Map());
-  const adminAudioElsRef = React.useRef<Map<string, HTMLAudioElement>>(new Map());
-  const adminMonitorPeerIdRef = React.useRef<string>(`adm_mon_${Math.random().toString(36).slice(2, 9)}`);
-
-  const stopListeningRaminoVoice = () => {
-    try {
-      if (adminVoiceWsRef.current && adminVoiceWsRef.current.readyState === WebSocket.OPEN) {
-        adminVoiceWsRef.current.send(JSON.stringify({ type: 'ramino:voice:leave' }));
-      }
-      adminVoiceWsRef.current?.close();
-    } catch {}
-    adminVoiceWsRef.current = null;
-    for (const pc of adminPeerConnsRef.current.values()) {
-      try {
-        pc.close();
-      } catch {}
-    }
-    adminPeerConnsRef.current.clear();
-    for (const el of adminAudioElsRef.current.values()) {
-      try {
-        el.pause();
-        el.srcObject = null;
-      } catch {}
-    }
-    adminAudioElsRef.current.clear();
-    setListeningRoomCode(null);
-    setListeningVoicePeersCount(0);
-    setListeningSpeakerName(null);
-  };
-
-  useEffect(() => {
-    return () => {
-      stopListeningRaminoVoice();
-    };
-  }, []);
-
-  const startListeningRaminoVoice = (roomCode: string) => {
-    const cleanCode = roomCode.trim().toUpperCase();
-    if (!cleanCode) return;
-    if (listeningRoomCode === cleanCode) {
-      stopListeningRaminoVoice();
-      return;
-    }
-    stopListeningRaminoVoice();
-    setListeningRoomCode(cleanCode);
-
-    const resolved = buildApiUrl('/ws/bingo');
-    const wsUrl = resolved.startsWith('http')
-      ? resolved.replace(/^http/, 'ws')
-      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/bingo`;
-
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(wsUrl);
-    } catch {
-      showToast('❌ የድምፅ መስመር መክፈት አልተቻለም');
-      setListeningRoomCode(null);
-      return;
-    }
-    adminVoiceWsRef.current = ws;
-
-    const getOrCreateRecvPeer = (remotePeerId: string) => {
-      const existing = adminPeerConnsRef.current.get(remotePeerId);
-      if (existing) return existing;
-      const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-        ],
-      });
-      try {
-        pc.addTransceiver('audio', { direction: 'recvonly' });
-      } catch {}
-
-      pc.onicecandidate = (ev) => {
-        if (ev.candidate && ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: 'ramino:voice:signal',
-              toPeerId: remotePeerId,
-              signal: { candidate: ev.candidate },
-            })
-          );
-        }
-      };
-
-      pc.ontrack = (ev) => {
-        const stream = ev.streams?.[0];
-        if (!stream) return;
-        let audioEl = adminAudioElsRef.current.get(remotePeerId);
-        if (!audioEl) {
-          audioEl = new Audio();
-          audioEl.autoplay = true;
-          (audioEl as unknown as { playsInline?: boolean }).playsInline = true;
-          adminAudioElsRef.current.set(remotePeerId, audioEl);
-        }
-        audioEl.srcObject = stream;
-        audioEl.volume = 1.0;
-        audioEl.play().catch(() => {});
-      };
-
-      adminPeerConnsRef.current.set(remotePeerId, pc);
-      setListeningVoicePeersCount(adminPeerConnsRef.current.size);
-      return pc;
-    };
-
-    ws.onopen = () => {
-      ws.send(
-        JSON.stringify({
-          type: 'ramino:voice:join',
-          roomCode: cleanCode,
-          peerId: adminMonitorPeerIdRef.current,
-          playerName: 'Admin Monitor',
-          isAdminMonitor: true,
-        })
-      );
-      showToast(`🎧 የክፍል ${cleanCode} የድምፅ መስመር ተከፍቷል — በቀጥታ እያዳመጡ ነው!`);
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const msg = JSON.parse(String(event.data));
-        if (!msg || msg.roomCode !== cleanCode) return;
-
-        if (msg.type === 'ramino:voice:peers' && Array.isArray(msg.peers)) {
-          for (const p of msg.peers as { peerId: string; playerName: string }[]) {
-            if (!p?.peerId || p.peerId === adminMonitorPeerIdRef.current) continue;
-            const pc = getOrCreateRecvPeer(p.peerId);
-            try {
-              const offer = await pc.createOffer();
-              await pc.setLocalDescription(offer);
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(
-                  JSON.stringify({
-                    type: 'ramino:voice:signal',
-                    toPeerId: p.peerId,
-                    signal: { sdp: pc.localDescription },
-                  })
-                );
-              }
-            } catch {}
-          }
-          setListeningVoicePeersCount(adminPeerConnsRef.current.size);
-        } else if (msg.type === 'ramino:voice:peer-joined') {
-          if (msg.peerId && !msg.isAdminMonitor && msg.peerId !== adminMonitorPeerIdRef.current) {
-            const pc = getOrCreateRecvPeer(msg.peerId);
-            try {
-              const offer = await pc.createOffer();
-              await pc.setLocalDescription(offer);
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(
-                  JSON.stringify({
-                    type: 'ramino:voice:signal',
-                    toPeerId: msg.peerId,
-                    signal: { sdp: pc.localDescription },
-                  })
-                );
-              }
-            } catch {}
-          }
-        } else if (msg.type === 'ramino:voice:signal') {
-          const fromPeerId = String(msg.fromPeerId || '');
-          if (!fromPeerId || fromPeerId === adminMonitorPeerIdRef.current) return;
-          const pc = getOrCreateRecvPeer(fromPeerId);
-          const sig = msg.signal;
-          if (sig?.sdp) {
-            await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp));
-            if (sig.sdp.type === 'offer') {
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(
-                  JSON.stringify({
-                    type: 'ramino:voice:signal',
-                    toPeerId: fromPeerId,
-                    signal: { sdp: pc.localDescription },
-                  })
-                );
-              }
-            }
-          } else if (sig?.candidate) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(sig.candidate));
-            } catch {}
-          }
-        } else if (msg.type === 'ramino:voice:speaking') {
-          if (msg.isSpeaking) {
-            setListeningSpeakerName(String(msg.playerName || 'Player'));
-          } else {
-            setListeningSpeakerName((cur) => (cur === msg.playerName ? null : cur));
-          }
-        } else if (msg.type === 'ramino:voice:peer-left') {
-          const leftId = String(msg.peerId || '');
-          const pc = adminPeerConnsRef.current.get(leftId);
-          if (pc) {
-            try {
-              pc.close();
-            } catch {}
-            adminPeerConnsRef.current.delete(leftId);
-            setListeningVoicePeersCount(adminPeerConnsRef.current.size);
-          }
-        }
-      } catch {}
-    };
-  };
+  const stopListeningRaminoVoice = () => {};
 
   // Game Visibility & Maintenance State (Hide/Show Games on Home Hub)
   type AdminGameVisKey = 'ludo' | 'fast' | 'regular' | 'keno' | 'ramino' | 'dama';
@@ -2103,42 +1895,17 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 </div>
               </div>
 
-              {listeningRoomCode && (
-                <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/50 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5 text-xs sm:text-sm font-black text-emerald-300">
-                    <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
-                    <span>
-                      🎧 ክፍል <span className="font-mono text-white">{listeningRoomCode}</span> በቀጥታ እያዳመጡ ነው ({listeningVoicePeersCount} የድምፅ መስመሮች)
-                      {listeningSpeakerName ? ` — 🎙️ ${listeningSpeakerName} እየተናገረ ነው...` : ''}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={stopListeningRaminoVoice}
-                    className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black cursor-pointer flex items-center gap-1"
-                  >
-                    <VolumeX className="w-3.5 h-3.5" />
-                    <span>ማዳመጥ አቁም</span>
-                  </button>
-                </div>
-              )}
-
               {raminoRoomsList.length === 0 ? (
                 <div className="p-6 rounded-xl border border-slate-800 bg-slate-950/50 text-center text-xs text-slate-400">
-                  በአሁኑ ጊዜ የተከፈተ Private Room የለም — ተጫዋቾች ሲከፍቱ እዚህ ከነድምፅ ማዳመጫው ይታያሉ።
+                  በአሁኑ ጊዜ የተከፈተ Private Room የለም — ተጫዋቾች ሲከፍቱ እዚህ ይታያሉ።
                 </div>
               ) : (
                 <div className="space-y-3">
                   {raminoRoomsList.map((room) => {
-                    const isListeningThis = listeningRoomCode === room.code;
                     return (
                       <div
                         key={room.code}
-                        className={`p-4 rounded-xl border space-y-3 ${
-                          isListeningThis
-                            ? 'bg-emerald-950/25 border-emerald-500'
-                            : 'bg-slate-950/60 border-slate-800'
-                        }`}
+                        className="p-4 rounded-xl border space-y-3 bg-slate-950/60 border-slate-800"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div>
@@ -2153,7 +1920,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                             </div>
                             <div className="text-xs text-slate-400 mt-1">
                               ተጫዋቾች ({room.players.length}/{room.maxPlayers}):{' '}
-                              {room.players.map((p) => p.name).join(', ')} • 🎙️ {room.voiceCount} Voice Connected
+                              {room.players.map((p) => p.name).join(', ')} • 🔒 {room.voiceCount} E2EE Voice Active
                             </div>
                           </div>
 
@@ -2169,27 +1936,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => startListeningRaminoVoice(room.code)}
-                            className={`px-3.5 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer ${
-                              isListeningThis
-                                ? 'bg-rose-600 hover:bg-rose-500 text-white'
-                                : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                            }`}
-                          >
-                            {isListeningThis ? (
-                              <>
-                                <VolumeX className="w-3.5 h-3.5" />
-                                <span>ድምፅ አቁም</span>
-                              </>
-                            ) : (
-                              <>
-                                <Headphones className="w-3.5 h-3.5" />
-                                <span>🎧 ድምፅ ስማ (Listen Live)</span>
-                              </>
-                            )}
-                          </button>
+                          <span className="px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-black flex items-center gap-1.5">
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>🔒 E2EE Private Voice (የማይጠለፍ)</span>
+                          </span>
 
                           <button
                             type="button"
@@ -2231,7 +1981,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ action: 'close' }),
                               });
-                              if (isListeningThis) stopListeningRaminoVoice();
+                              stopListeningRaminoVoice();
                               await fetchKenoAndRaminoAdminData();
                               showToast(`🚫 ክፍል ${room.code} ተዘግቷል!`);
                             }}

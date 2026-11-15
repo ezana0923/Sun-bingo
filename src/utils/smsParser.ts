@@ -77,8 +77,8 @@ export function parseEthiopianPaymentSms(rawText: string): ParsedEthiopianSmsRes
   const refPatterns: RegExp[] = [
     // Explicit labels: "የሂሳብ እንቅስቃሴ ቁጥርዎ DK...", "የግብይት ቁጥር DCO...", "Transaction ID: TB...", "Ref No: FT...", "Receipt No. ..."
     /(?:የሂሳብ\s*እንቅስቃሴ\s*ቁጥር(?:ዎ)?|የግብይት\s*ቁጥር|ደረሰኝ\s*ቁጥር|transaction\s*(?:number|no|id)|trans\.?\s*(?:id|no)|trx\s*(?:id|no)|ref(?:erence)?\s*(?:no|number|id)?|receipt\s*(?:no|number|id)?)\s*(?:is|:|=|-|\.|\s)?\s*([A-Z0-9]{6,24})/i,
-    // URL query param in CBE / BOA / Telebirr links: ?id=FT24... or /receipt/DCO...
-    /[?&/](?:id|ref|trx|tx)=([A-Z0-9]{5,24})/i,
+    // URL query param or path in CBE / BOA / Telebirr links: ?id=FT24... or /receipt/DCO...
+    /(?:[?&/](?:id|ref|trx|tx)=|\/receipt\/)([A-Z0-9]{5,24})/i,
     // Standard CBE FT code (e.g., FT26108XYZ89)
     /\b(FT[A-Z0-9]{6,18})\b/i,
     // Standard Telebirr codes (10 chars starting with D or C or TB, e.g. DK16K60I2K, DCO412389A, TB9845123, etc.)

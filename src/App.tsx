@@ -2131,7 +2131,6 @@ export default function App() {
                 onSubmitDeposit={(method, amount, refNumber, fullSms) => {
                   const me = sharedUsersRef.current[0];
                   if (!me) return;
-                  const txStatus: 'pending' | 'approved' = requireDepositApproval ? 'pending' : 'approved';
                   const tempId = `ftx-${Date.now()}`;
                   const newTx: TransactionRecord = {
                     id: tempId,
@@ -2143,20 +2142,13 @@ export default function App() {
                     amount,
                     referenceNumber: refNumber,
                     fullSmsText: fullSms,
-                    status: txStatus,
+                    status: 'pending',
                     timestamp: new Date().toLocaleString(),
                   };
                   setSharedTransactions((prev) => [newTx, ...prev]);
-                  if (txStatus === 'approved') {
-                    setSharedUsers((prev) =>
-                      prev.map((u, i) => (i === 0 ? { ...u, balance: u.balance + amount } : u))
-                    );
-                    setGlobalWalletNotice(`✅ ${amount} ETB ወደ ዋሌትዎ ገቢ ሆኗል!`);
-                  } else {
-                    setGlobalWalletNotice(
-                      `⏳ የ ${amount} ETB ገቢ ጥያቄዎ ተልኳል! ሲጸድቅ ወዲያውኑ ወደ ዋሌትዎ ይገባል።`
-                    );
-                  }
+                  setGlobalWalletNotice(
+                    `⏳ የ ${amount} ETB ገቢ ጥያቄዎ ተልኳል! የባንክ SMS በ Webhook ሲረጋገጥ ወዲያውኑ ወደ ዋሌትዎ ይገባል።`
+                  );
                   fetch(buildApiUrl('/api/transactions/submit'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -2175,13 +2167,6 @@ export default function App() {
                     .then((data) => {
                       if (!data?.ok) {
                         setSharedTransactions((prev) => prev.filter((t) => t.id !== tempId));
-                        if (txStatus === 'approved') {
-                          setSharedUsers((prev) =>
-                            prev.map((u, i) =>
-                              i === 0 ? { ...u, balance: Math.max(0, u.balance - amount) } : u
-                            )
-                          );
-                        }
                         setGlobalWalletNotice(
                           data?.error || '❌ የተደገመ የክፍያ ደረሰኝ (Duplicate Transaction) ተቀባይነት የለውም!'
                         );
@@ -2189,6 +2174,16 @@ export default function App() {
                       }
                       if (Array.isArray(data.transactions)) {
                         mergeGlobalTransactions(data.transactions);
+                      }
+                      if (typeof data.balance === 'number' && !data.isPending) {
+                        setSharedUsers((prev) =>
+                          prev.map((u, i) => (i === 0 ? { ...u, balance: data.balance } : u))
+                        );
+                        setGlobalWalletNotice(
+                          data.alreadyCredited
+                            ? 'ℹ️ ይህ ክፍያ በባንክ SMS Webhook ቀድሞ ገቢ ተደርጓል!'
+                            : `✅ በባንክ SMS Webhook ተረጋግጦ ${data.transaction?.amount ?? amount} ETB ወደ ዋሌትዎ ገቢ ሆኗል!`
+                        );
                       }
                     })
                     .catch(() => {});
