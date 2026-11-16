@@ -1,9 +1,32 @@
 @import "tailwindcss";
 
 @layer base {
+  html,
+  body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    position: fixed;
+    inset: 0;
+    overscroll-behavior: none;
+    overscroll-behavior-y: none;
+    touch-action: pan-x pan-y;
+  }
+
   body {
     font-family: 'Plus Jakarta Sans', 'Noto Sans Ethiopic', system-ui, sans-serif;
     -webkit-tap-highlight-color: transparent;
+  }
+
+  #root {
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
   }
 
   .font-mono-tabular {

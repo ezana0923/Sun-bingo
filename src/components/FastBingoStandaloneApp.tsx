@@ -101,8 +101,10 @@ import {
   dispatchServerRoomAction,
   getDeviceClientId,
   getOrCreateDevicePlayerIdentity,
+  getSignedAccountToken,
   hasDeviceRegisteredPhone,
   saveDevicePlayerIdentity,
+  saveSignedAccountToken,
   ServerLockedCartelaItem,
   ServerRoomStatePayload,
   subscribeRealtimeRoomSync,
@@ -236,6 +238,15 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
       // ignore
     }
   }, [isAdminAuthenticated]);
+
+  useEffect(() => {
+    try {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      document.getElementById('root')?.scrollTo(0, 0);
+    } catch {}
+  }, [activeTab]);
 
   // Listen for URL #admin hash change or Ctrl+Shift+A shortcut to open Admin Panel
   useEffect(() => {
@@ -447,11 +458,15 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
       queryParams.set('phone', devIdentity.phone);
     }
 
+    const savedAccountToken = devIdentity.phone ? getSignedAccountToken(devIdentity.phone) : '';
     fetch(buildApiUrl(`/api/telegram/user-status?${queryParams.toString()}`))
       .then((r) => r.json())
       .then((data) => {
         if (data?.ok && data?.registered && data?.phone) {
           saveDevicePlayerIdentity(data.name || devIdentity.name, String(data.phone));
+          if (data.accountToken) {
+            saveSignedAccountToken(String(data.phone), String(data.accountToken));
+          }
           setIsPhoneRegistered(true);
           setUsers((prev) =>
             prev.map((u, i) =>
@@ -464,9 +479,32 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                 : u
             )
           );
-        } else if (data?.ok && data?.registered === false && tgUser?.id) {
-          localStorage.removeItem('ezi_phone_registered_v2');
-          setIsPhoneRegistered(false);
+        } else if (data?.ok && data?.registered === false) {
+          if (savedAccountToken && devIdentity.phone) {
+            fetch(buildApiUrl('/api/auth/restore-session'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                phone: devIdentity.phone,
+                name: devIdentity.name,
+                accountToken: savedAccountToken,
+              }),
+            })
+              .then((res) => res.json())
+              .then((restored) => {
+                if (restored?.ok && restored.player) {
+                  if (restored.accountToken) {
+                    saveSignedAccountToken(restored.player.phone, restored.accountToken);
+                  }
+                  saveDevicePlayerIdentity(restored.player.name, restored.player.phone);
+                  setIsPhoneRegistered(true);
+                }
+              })
+              .catch(() => {});
+          } else if (tgUser?.id) {
+            localStorage.removeItem('ezi_phone_registered_v2');
+            setIsPhoneRegistered(false);
+          }
         }
       })
       .catch(() => {
@@ -1112,8 +1150,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
           if (srvMe) {
             nextList.push({
               ...me,
-              name:
-                srvMe.name && !srvMe.name.startsWith('Player_') ? srvMe.name : me.name || srvMe.name,
+              name: srvMe.name || me.name,
               balance: typeof srvMe.balance === 'number' ? srvMe.balance : me.balance,
               bonusBalance:
                 typeof srvMe.bonusBalance === 'number' ? srvMe.bonusBalance : me.bonusBalance,
@@ -4882,7 +4919,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const cmdList = `menu - 🏠 Main Menu\nplay - 🎮 Play Live Bingo\ndeposit - Deposit 💵\nwithdraw - Withdraw 💸\nbalance - Check Balance 💰\njackpot - Jackpot 🎰\ntransfer - Transfer 🔄\nleaderboard - Leaderboard 🏆\ntoken - 🔐 Get Login Token / ኮድ\nrules - Game Rules 📖\nsupport - Support 📞`;
+                        const cmdList = `menu - 🏠 Main Menu\nplay - 🎮 Play Live Bingo\ndeposit - Deposit 💵\nwithdraw - Withdraw 💸\nbalance - Check Balance 💰\ntransfer - Transfer 🔄\nrules - Game Rules 📖\nsupport - Support 📞`;
                         if (typeof window !== 'undefined' && navigator.clipboard) {
                           navigator.clipboard.writeText(cmdList);
                           setDownloadStatus('✓ ሁሉም የቦት ትዕዛዞች (ከ Main Menu ጋር) ኮፒ ተደርገዋል! @BotFather ላይ /setcommands ብለው Paste ያድርጉት።');
@@ -4899,10 +4936,7 @@ play - 🎮 Play Live Bingo
 deposit - Deposit 💵
 withdraw - Withdraw 💸
 balance - Check Balance 💰
-jackpot - Jackpot 🎰
 transfer - Transfer 🔄
-leaderboard - Leaderboard 🏆
-token - 🔐 Get Login Token / ኮድ
 rules - Game Rules 📖
 support - Support 📞`}
                   </pre>

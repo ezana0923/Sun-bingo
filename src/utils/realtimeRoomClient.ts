@@ -1,4 +1,9 @@
-import { GameHistoryRecord, TransactionRecord, WinnerAnnouncement } from '../types/bingo';
+import {
+  GameHistoryRecord,
+  GameStartNotificationEvent,
+  TransactionRecord,
+  WinnerAnnouncement,
+} from '../types/bingo';
 
 export interface ServerLockedCartelaItem {
   cartelaId: number;
@@ -52,6 +57,7 @@ export interface ServerRoomStatePayload {
     accountNumber: string;
     accountHolder: string;
     badgeBg: string;
+    isActive?: boolean;
   }[];
   sha256Hash: string;
   lastBallTickAt: number;
@@ -221,6 +227,76 @@ export function saveDevicePlayerIdentity(name: string, phone: string) {
   }
 }
 
+export function normalizePhoneKey(phone?: string): string {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('251') && digits.length === 12) return `0${digits.slice(3)}`;
+  if (digits.length === 9 && /^[79]/.test(digits)) return `0${digits}`;
+  return digits || String(phone || '').trim();
+}
+
+export function saveSignedAccountToken(phone?: string, token?: string): void {
+  if (typeof window === 'undefined' || !phone || !token) return;
+  const key = normalizePhoneKey(phone);
+  if (!key) return;
+  try {
+    const raw = localStorage.getItem('sun_account_tokens_v1');
+    const map = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    map[key] = token;
+    localStorage.setItem('sun_account_tokens_v1', JSON.stringify(map));
+  } catch {
+    // ignore
+  }
+}
+
+export function getSignedAccountToken(phone?: string): string | null {
+  if (typeof window === 'undefined' || !phone) return null;
+  const key = normalizePhoneKey(phone);
+  if (!key) return null;
+  try {
+    const raw = localStorage.getItem('sun_account_tokens_v1');
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, string>;
+    return typeof map[key] === 'string' && map[key] ? map[key] : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveLocalWalletBalanceByPhone(phone?: string, balance?: number): void {
+  if (typeof window === 'undefined' || !phone || typeof balance !== 'number' || Number.isNaN(balance)) {
+    return;
+  }
+  const key = normalizePhoneKey(phone);
+  if (!key) return;
+  try {
+    const raw = localStorage.getItem('sun_wallet_by_phone_v1');
+    const map = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+    map[key] = Math.max(0, Number(balance));
+    localStorage.setItem('sun_wallet_by_phone_v1', JSON.stringify(map));
+    localStorage.setItem('sun_unified_wallet_balance_v1', String(Math.max(0, Number(balance))));
+  } catch {
+    // ignore
+  }
+}
+
+export function getLocalWalletBalanceByPhone(phone?: string): number | null {
+  if (typeof window === 'undefined' || !phone) return null;
+  const key = normalizePhoneKey(phone);
+  if (!key) return null;
+  try {
+    const raw = localStorage.getItem('sun_wallet_by_phone_v1');
+    if (raw) {
+      const map = JSON.parse(raw) as Record<string, number>;
+      if (typeof map[key] === 'number' && !Number.isNaN(map[key]) && map[key] >= 0) {
+        return map[key];
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 export function buildApiUrl(path: string): string {
   if (SHARED_BACKEND_BASE) {
     return `${SHARED_BACKEND_BASE}${path}`;
@@ -228,7 +304,9 @@ export function buildApiUrl(path: string): string {
   return path;
 }
 
+export type GameNotificationListener = (event: GameStartNotificationEvent) => void;
 const listeners = new Set<RealtimeRoomSyncListener>();
+const gameNotifyListeners = new Set<GameNotificationListener>();
 let wsInstance: WebSocket | null = null;
 let sseInstance: EventSource | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -240,6 +318,24 @@ let lastRegularSeq = 0;
 let lastStateFingerprint = '';
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSyncMessage: RealtimeRoomSyncMessage | null = null;
+const seenNotifyIds = new Set<string>();
+
+function emitGameNotifyToListeners(event?: GameStartNotificationEvent) {
+  if (!event || !event.id) return;
+  if (seenNotifyIds.has(event.id)) return;
+  seenNotifyIds.add(event.id);
+  if (seenNotifyIds.size > 100) {
+    const first = seenNotifyIds.values().next().value;
+    if (first) seenNotifyIds.delete(first);
+  }
+  gameNotifyListeners.forEach((cb) => {
+    try {
+      cb(event);
+    } catch {
+      // ignore listener errors
+    }
+  });
+}
 
 function notifyListeners(msg: RealtimeRoomSyncMessage, fromStream = false) {
   if (!msg) return;
@@ -305,7 +401,9 @@ function notifyListeners(msg: RealtimeRoomSyncMessage, fromStream = false) {
     ? (rRoom || fRoom)!.heroBanners!.map((b) => `${b.id}:${b.title}:${b.imageUrl ? b.imageUrl.length : 0}`).join(',')
     : '';
   const bankSig = Array.isArray((rRoom || fRoom)?.bankAccounts)
-    ? (rRoom || fRoom)!.bankAccounts!.map((b) => `${b.id}:${b.shortName}:${b.accountNumber}`).join(',')
+    ? (rRoom || fRoom)!
+        .bankAccounts!.map((b) => `${b.id}:${b.shortName}:${b.accountNumber}:${b.isActive !== false}`)
+        .join(',')
     : '';
   const fingerprint = `${allFastSummary}|${rRoom?.gameMatchId}:${rRoom?.calledBalls?.length || 0}:${rRoom?.activeBall}:${rRoom?.preGameCountdown}:${rRoom?.bingoClaimCountdown}:${rRoom?.winnerDisplayCountdown}:${rRoom?.isPlaying}:${rRoom?.isPaused}:${rRoom?.winnersList?.length || 0}:${rRoom?.blockedCartelaIds?.length || 0}:${rRoom?.stakeAmount || 10}:${rRoom?.prizeAmount || 500}:${rRoom?.activePatternId || 5}:${rRoom?.gameHistory?.length || 0}:${rRoom?.adminRoomMessage || ''}:${rRoom?.bonusCartelasForOver20 ?? 5}:${bannerSig}:${bankSig}|${txSummary}:${playersSummary}:${msg.requireDepositApproval}`;
   if (fingerprint === lastStateFingerprint) {
@@ -344,11 +442,16 @@ function connectEventSource() {
 
     es.onmessage = (event) => {
       try {
-        const parsed = JSON.parse(event.data) as RealtimeRoomSyncMessage;
+        const parsed = JSON.parse(event.data) as {
+          type?: string;
+          notification?: GameStartNotificationEvent;
+        };
         if (parsed && parsed.type === 'room:sync') {
           isSseConnected = true;
           isWsConnected = true;
-          notifyListeners(parsed, true);
+          notifyListeners(parsed as unknown as RealtimeRoomSyncMessage, true);
+        } else if (parsed && parsed.type === 'game:notify' && parsed.notification) {
+          emitGameNotifyToListeners(parsed.notification);
         }
       } catch {
         // ignore
@@ -377,16 +480,25 @@ function startPollingBackup() {
       return;
     }
     const devIdentity = getOrCreateDevicePlayerIdentity();
+    const accountToken = getSignedAccountToken(devIdentity.phone);
     fetch(
       buildApiUrl(
         `/api/live-room/state?mode=fast&clientId=${encodeURIComponent(
           getDeviceClientId()
-        )}&phone=${encodeURIComponent(devIdentity.phone)}&name=${encodeURIComponent(devIdentity.name)}&_t=${Date.now()}`
+        )}&phone=${encodeURIComponent(devIdentity.phone)}&name=${encodeURIComponent(
+          devIdentity.name
+        )}${accountToken ? `&accountToken=${encodeURIComponent(accountToken)}` : ''}&_t=${Date.now()}`
       ),
-      { cache: 'no-store' }
+      {
+        cache: 'no-store',
+        headers: accountToken ? { 'x-account-token': accountToken } : undefined,
+      }
     )
       .then((r) => r.json())
       .then((data) => {
+        if (data?.ok && data.accountToken && data.player?.phone) {
+          saveSignedAccountToken(data.player.phone, data.accountToken);
+        }
         if (data?.ok && (data.fastRoom || data.regularRoom)) {
           isWsConnected = true;
           notifyListeners(
@@ -443,10 +555,15 @@ function connectWebSocket() {
 
     ws.onmessage = (event) => {
       try {
-        const parsed = JSON.parse(event.data) as RealtimeRoomSyncMessage;
+        const parsed = JSON.parse(event.data) as {
+          type?: string;
+          notification?: GameStartNotificationEvent;
+        };
         if (parsed && parsed.type === 'room:sync') {
           isWsConnected = true;
-          notifyListeners(parsed, true);
+          notifyListeners(parsed as unknown as RealtimeRoomSyncMessage, true);
+        } else if (parsed && parsed.type === 'game:notify' && parsed.notification) {
+          emitGameNotifyToListeners(parsed.notification);
         }
       } catch {
         // ignore invalid json
@@ -479,6 +596,14 @@ export function subscribeRealtimeRoomSync(listener: RealtimeRoomSyncListener): (
   }
   return () => {
     listeners.delete(listener);
+  };
+}
+
+export function subscribeGameNotifications(listener: GameNotificationListener): () => void {
+  gameNotifyListeners.add(listener);
+  connectWebSocket();
+  return () => {
+    gameNotifyListeners.delete(listener);
   };
 }
 

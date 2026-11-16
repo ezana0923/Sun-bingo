@@ -15,7 +15,13 @@ import {
   Sparkles,
   Send,
 } from 'lucide-react';
-import { buildApiUrl, saveDevicePlayerIdentity } from '../utils/realtimeRoomClient';
+import {
+  buildApiUrl,
+  getSignedAccountToken,
+  saveDevicePlayerIdentity,
+  saveLocalWalletBalanceByPhone,
+  saveSignedAccountToken,
+} from '../utils/realtimeRoomClient';
 import { Language } from '../types/bingo';
 
 export interface AuthenticatedPlayerPayload {
@@ -28,6 +34,7 @@ export interface AuthenticatedPlayerPayload {
   referredCount?: number;
   isBlocked?: boolean;
   passwordHash?: string;
+  accountToken?: string;
 }
 
 interface PlayerAuthScreenProps {
@@ -127,8 +134,8 @@ const AUTH_I18N: Record<Language, AuthStrings> = {
     loginFailed: 'መግባት አልተቻለም። ስልክ ቁጥርዎን እና የይለፍ ቃልዎን ያረጋግጡ።',
     regFailed: 'ምዝገባ አልተሳካም። እባክዎ እንደገና ይሞክሩ።',
     resetFailed: 'የይለፍ ቃል መቀየር አልተቻለም።',
-    otpSentSuccess: 'የማረጋገጫ OTP ኮድ ተልኳል፦',
-    telegramOtpBtn: '📲 በቴሌግራም OTP ተቀበል',
+    otpSentSuccess: 'የማረጋገጫ OTP ኮድ በ Telegram (@Sungamsbot) ብቻ ተልኳል! ኮዱን ከቴሌግራም አይተው ከታች ያስገቡ።',
+    telegramOtpBtn: '📲 በቴሌግራም OTP ተቀበል (@Sungamsbot)',
   },
   en: {
     portalSub: 'Player Sign In & Registration',
@@ -170,8 +177,8 @@ const AUTH_I18N: Record<Language, AuthStrings> = {
     loginFailed: 'Sign in failed. Please verify your phone number and password.',
     regFailed: 'Registration failed. Please try again.',
     resetFailed: 'Could not reset password. Please verify the OTP code.',
-    otpSentSuccess: 'OTP verification code sent:',
-    telegramOtpBtn: '📲 Get OTP on Telegram',
+    otpSentSuccess: 'OTP sent exclusively on Telegram (@Sungamsbot). Check Telegram and enter the 6-digit code below.',
+    telegramOtpBtn: '📲 Get OTP on Telegram (@Sungamsbot)',
   },
   ti: {
     portalSub: 'መእተዊን ምዝገባን ተጻወትቲ',
@@ -213,8 +220,8 @@ const AUTH_I18N: Record<Language, AuthStrings> = {
     loginFailed: 'ምእታው ኣይተኻእለን። ስልክኹምን መሕለፊ ቃልኩምን ኣረጋግጹ።',
     regFailed: 'ምዝገባ ኣይተዓወተን። ብኽብረትኩም ደጊምኩም ፈትኑ።',
     resetFailed: 'መሕለፊ ቃል ምቕያር ኣይተኻእለን።',
-    otpSentSuccess: 'ናይ OTP ኮድ ተላኢኹ እዩ፦',
-    telegramOtpBtn: '📲 ብቴሌግራም OTP ተቐበሉ',
+    otpSentSuccess: 'ናይ OTP ኮድ ብቴሌግራም (@Sungamsbot) ጥራይ ተላኢኹ እዩ! ካብ ቴሌግራም ርኢኹም ኣብ ታሕቲ የእትዉ።',
+    telegramOtpBtn: '📲 ብቴሌግራም OTP ተቐበሉ (@Sungamsbot)',
   },
   om: {
     portalSub: 'Seensa fi Galmee Taphattootaa',
@@ -256,8 +263,8 @@ const AUTH_I18N: Record<Language, AuthStrings> = {
     loginFailed: 'Seenuun hin danda\'amne. Bilbila fi jecha darbii keessan ilaalaa.',
     regFailed: 'Galmeen hin milkoofne. Irra deebi\'aa yaalaa.',
     resetFailed: 'Jecha darbii jijjiiruun hin danda\'amne.',
-    otpSentSuccess: 'Koodiin OTP ergameera፦',
-    telegramOtpBtn: '📲 Telegram irratti OTP fudhadhaa',
+    otpSentSuccess: 'Koodiin OTP Telegram (@Sungamsbot) irratti qofa ergameera! Telegram irraa ilaalaa asitti galchaa.',
+    telegramOtpBtn: '📲 Telegram irratti OTP fudhadhaa (@Sungamsbot)',
   },
 };
 
@@ -277,22 +284,20 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPass, setShowLoginPass] = useState(false);
 
-  // Register (New User -> OTP -> New Password) State
+  // Register (New User -> Telegram OTP -> New Password) State
   const [regName, setRegName] = useState('');
   const [regPhone, setRegPhone] = useState('');
   const [regStep, setRegStep] = useState<'request_otp' | 'verify_otp_and_pass'>('request_otp');
   const [regOtpCode, setRegOtpCode] = useState('');
-  const [regDeliveredOtp, setRegDeliveredOtp] = useState<string | null>(null);
   const [regTelegramOtpUrl, setRegTelegramOtpUrl] = useState<string | null>(null);
   const [regNewPassword, setRegNewPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
   const [showRegPass, setShowRegPass] = useState(false);
 
-  // Forgot Password (Phone -> OTP -> New Password) State
+  // Forgot Password (Phone -> Telegram OTP -> New Password) State
   const [forgotPhone, setForgotPhone] = useState('');
   const [forgotStep, setForgotStep] = useState<'request_otp' | 'reset_pass'>('request_otp');
   const [forgotOtpCode, setForgotOtpCode] = useState('');
-  const [forgotDeliveredOtp, setForgotDeliveredOtp] = useState<string | null>(null);
   const [forgotTelegramOtpUrl, setForgotTelegramOtpUrl] = useState<string | null>(null);
   const [forgotNewPassword, setForgotNewPassword] = useState('');
   const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
@@ -334,10 +339,15 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
 
     setLoading(true);
     try {
+      const savedToken = getSignedAccountToken(cleanPhone);
       const res = await fetch(buildApiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: cleanPhone, password: cleanPass }),
+        body: JSON.stringify({
+          phone: cleanPhone,
+          password: cleanPass,
+          accountToken: savedToken || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data?.ok) {
@@ -347,36 +357,38 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
       }
 
       const p = data.player;
-      saveDevicePlayerIdentity(p.name || `Player_${cleanPhone.slice(-4)}`, p.phone || cleanPhone);
+      const finalPhone = p.phone || cleanPhone;
+      const finalName = p.name || `Player_${cleanPhone.slice(-4)}`;
+      saveDevicePlayerIdentity(finalName, finalPhone);
+      if (data.accountToken) {
+        saveSignedAccountToken(finalPhone, data.accountToken);
+      }
+      if (typeof p.balance === 'number') {
+        saveLocalWalletBalanceByPhone(finalPhone, p.balance);
+      }
       onAuthSuccess(
         {
           id: p.id,
-          name: p.name || `Player_${cleanPhone.slice(-4)}`,
-          phone: p.phone || cleanPhone,
+          name: finalName,
+          phone: finalPhone,
           balance: p.balance,
           bonusBalance: p.bonusBalance,
           referralEarnings: p.referralEarnings,
           referredCount: p.referredCount,
           isBlocked: p.isBlocked,
           passwordHash: cleanPass,
+          accountToken: data.accountToken,
         },
         data.players
       );
     } catch {
-      saveDevicePlayerIdentity(`Player_${cleanPhone.slice(-4)}`, cleanPhone);
-      onAuthSuccess({
-        name: `Player_${cleanPhone.slice(-4)}`,
-        phone: cleanPhone,
-        balance: 500,
-        bonusBalance: 15,
-        passwordHash: cleanPass,
-      });
+      setErrorMsg('❌ ከሰርቨር ጋር መገናኘት አልተቻለም። እባክዎ ኢንተርኔትዎን አረጋግጠው እንደገና ይሞክሩ።');
     } finally {
       setLoading(false);
     }
   };
 
-  // 2. Request OTP for Registration
+  // 2. Request OTP for Registration (Sent strictly via Telegram ONLY)
   const handleRequestRegisterOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -402,25 +414,25 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
         body: JSON.stringify({ phone: cleanPhone, name: cleanName, purpose: 'register' }),
       });
       const data = await res.json();
-      const code = String(data?.otpCode || Math.floor(100000 + Math.random() * 900000));
-      setRegDeliveredOtp(code);
-      setRegOtpCode(code);
-      setRegTelegramOtpUrl(data?.telegramOtpUrl || `https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(cleanPhone)}`);
+      if (!res.ok || !data?.ok) {
+        setErrorMsg(data?.error || i18n.regFailed);
+        return;
+      }
+      setRegOtpCode('');
+      setRegTelegramOtpUrl(
+        data?.telegramOtpUrl ||
+          `https://t.me/${data?.botUsername || 'Sungamsbot'}?start=otp_${encodeURIComponent(cleanPhone)}`
+      );
       setRegStep('verify_otp_and_pass');
-      setSuccessMsg(`${i18n.otpSentSuccess} [ ${code} ]`);
+      setSuccessMsg(data?.message || i18n.otpSentSuccess);
     } catch {
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      setRegDeliveredOtp(code);
-      setRegOtpCode(code);
-      setRegTelegramOtpUrl(`https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(cleanPhone)}`);
-      setRegStep('verify_otp_and_pass');
-      setSuccessMsg(`${i18n.otpSentSuccess} [ ${code} ]`);
+      setErrorMsg('❌ ከሰርቨር ጋር መገናኘት አልተቻለም። እባክዎ እንደገና ይሞክሩ።');
     } finally {
       setLoading(false);
     }
   };
 
-  // 3. Verify OTP & Register New Account with Password
+  // 3. Verify Telegram OTP & Register New Account with Password
   const handleVerifyRegisterAndSetPass = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -431,6 +443,10 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
     const cleanOtp = regOtpCode.trim();
     const cleanPass = regNewPassword.trim();
 
+    if (!cleanOtp || cleanOtp.length < 4) {
+      setErrorMsg('❌ እባክዎ በ Telegram የተላከውን ባለ 6-አሃዝ OTP ኮድ ያስገቡ።');
+      return;
+    }
     if (!cleanPass || cleanPass.length < 4) {
       setErrorMsg(i18n.passLength);
       return;
@@ -447,7 +463,7 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
         referralCode = localStorage.getItem('sun_referral_code') || undefined;
       } catch {}
 
-      const res = await fetch(buildApiUrl('/api/auth/register-with-otp'), {
+      const res = await fetch(buildApiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -455,7 +471,7 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
           name: cleanName,
           otpCode: cleanOtp,
           password: cleanPass,
-          referralCode,
+          referrerCode: referralCode,
         }),
       });
       const data = await res.json();
@@ -466,36 +482,38 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
       }
 
       const p = data.player;
-      saveDevicePlayerIdentity(p.name || cleanName, p.phone || cleanPhone);
+      const finalPhone = p.phone || cleanPhone;
+      const finalName = p.name || cleanName;
+      saveDevicePlayerIdentity(finalName, finalPhone);
+      if (data.accountToken) {
+        saveSignedAccountToken(finalPhone, data.accountToken);
+      }
+      if (typeof p.balance === 'number') {
+        saveLocalWalletBalanceByPhone(finalPhone, p.balance);
+      }
       onAuthSuccess(
         {
           id: p.id,
-          name: p.name || cleanName,
-          phone: p.phone || cleanPhone,
+          name: finalName,
+          phone: finalPhone,
           balance: p.balance,
           bonusBalance: p.bonusBalance,
           referralEarnings: p.referralEarnings,
           referredCount: p.referredCount,
           isBlocked: p.isBlocked,
           passwordHash: cleanPass,
+          accountToken: data.accountToken,
         },
         data.players
       );
     } catch {
-      saveDevicePlayerIdentity(cleanName, cleanPhone);
-      onAuthSuccess({
-        name: cleanName,
-        phone: cleanPhone,
-        balance: 500,
-        bonusBalance: 15,
-        passwordHash: cleanPass,
-      });
+      setErrorMsg('❌ ከሰርቨር ጋር መገናኘት አልተቻለም። እባክዎ እንደገና ይሞክሩ።');
     } finally {
       setLoading(false);
     }
   };
 
-  // 4. Request OTP for Forgot Password
+  // 4. Request OTP for Forgot Password (Sent strictly via Telegram ONLY)
   const handleRequestForgotOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -515,25 +533,25 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
         body: JSON.stringify({ phone: cleanPhone, purpose: 'forgot' }),
       });
       const data = await res.json();
-      const code = String(data?.otpCode || Math.floor(100000 + Math.random() * 900000));
-      setForgotDeliveredOtp(code);
-      setForgotOtpCode(code);
-      setForgotTelegramOtpUrl(data?.telegramOtpUrl || `https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(cleanPhone)}`);
+      if (!res.ok || !data?.ok) {
+        setErrorMsg(data?.error || i18n.resetFailed);
+        return;
+      }
+      setForgotOtpCode('');
+      setForgotTelegramOtpUrl(
+        data?.telegramOtpUrl ||
+          `https://t.me/${data?.botUsername || 'Sungamsbot'}?start=otp_${encodeURIComponent(cleanPhone)}`
+      );
       setForgotStep('reset_pass');
-      setSuccessMsg(`${i18n.otpSentSuccess} [ ${code} ]`);
+      setSuccessMsg(data?.message || i18n.otpSentSuccess);
     } catch {
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      setForgotDeliveredOtp(code);
-      setForgotOtpCode(code);
-      setForgotTelegramOtpUrl(`https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(cleanPhone)}`);
-      setForgotStep('reset_pass');
-      setSuccessMsg(`${i18n.otpSentSuccess} [ ${code} ]`);
+      setErrorMsg('❌ ከሰርቨር ጋር መገናኘት አልተቻለም። እባክዎ እንደገና ይሞክሩ።');
     } finally {
       setLoading(false);
     }
   };
 
-  // 5. Reset Password with OTP
+  // 5. Reset Password with Telegram OTP
   const handleResetPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -543,6 +561,10 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
     const cleanOtp = forgotOtpCode.trim();
     const cleanPass = forgotNewPassword.trim();
 
+    if (!cleanOtp || cleanOtp.length < 4) {
+      setErrorMsg('❌ እባክዎ በ Telegram የተላከውን ባለ 6-አሃዝ OTP ኮድ ያስገቡ።');
+      return;
+    }
     if (!cleanPass || cleanPass.length < 4) {
       setErrorMsg(i18n.passLength);
       return;
@@ -571,28 +593,32 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
       }
 
       const p = data.player;
-      saveDevicePlayerIdentity(p.name || `Player_${cleanPhone.slice(-4)}`, p.phone || cleanPhone);
+      const finalPhone = p.phone || cleanPhone;
+      const finalName = p.name || `Player_${cleanPhone.slice(-4)}`;
+      saveDevicePlayerIdentity(finalName, finalPhone);
+      if (data.accountToken) {
+        saveSignedAccountToken(finalPhone, data.accountToken);
+      }
+      if (typeof p.balance === 'number') {
+        saveLocalWalletBalanceByPhone(finalPhone, p.balance);
+      }
       onAuthSuccess(
         {
           id: p.id,
-          name: p.name || `Player_${cleanPhone.slice(-4)}`,
-          phone: p.phone || cleanPhone,
+          name: finalName,
+          phone: finalPhone,
           balance: p.balance,
           bonusBalance: p.bonusBalance,
           referralEarnings: p.referralEarnings,
           referredCount: p.referredCount,
           isBlocked: p.isBlocked,
           passwordHash: cleanPass,
+          accountToken: data.accountToken,
         },
         data.players
       );
     } catch {
-      saveDevicePlayerIdentity(`Player_${cleanPhone.slice(-4)}`, cleanPhone);
-      onAuthSuccess({
-        name: `Player_${cleanPhone.slice(-4)}`,
-        phone: cleanPhone,
-        passwordHash: cleanPass,
-      });
+      setErrorMsg('❌ ከሰርቨር ጋር መገናኘት አልተቻለም። እባክዎ እንደገና ይሞክሩ።');
     } finally {
       setLoading(false);
     }
@@ -871,20 +897,14 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
               ) : (
                 <form onSubmit={handleVerifyRegisterAndSetPass} className="space-y-3">
                   <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs font-bold text-amber-300 flex items-center justify-between">
-                    <span>
-                      {regPhone}
-                    </span>
-                    {regDeliveredOtp && (
-                      <span className="font-mono-tabular text-emerald-400 font-extrabold">
-                        [ {regDeliveredOtp} ]
-                      </span>
-                    )}
+                    <span>{regPhone}</span>
+                    <span className="text-[11px] text-sky-300 font-extrabold">📲 Telegram OTP ብቻ</span>
                   </div>
 
                   <a
                     href={
                       regTelegramOtpUrl ||
-                      `https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(regPhone)}`
+                      `https://t.me/Sungamsbot?start=otp_${encodeURIComponent(regPhone)}`
                     }
                     target="_blank"
                     rel="noopener noreferrer"
@@ -1007,20 +1027,14 @@ export const PlayerAuthScreen: React.FC<PlayerAuthScreenProps> = ({
               ) : (
                 <form onSubmit={handleResetPasswordSubmit} className="space-y-3">
                   <div className="p-3 rounded-2xl bg-sky-500/10 border border-sky-500/30 text-xs font-bold text-sky-300 flex items-center justify-between">
-                    <span>
-                      {forgotPhone}
-                    </span>
-                    {forgotDeliveredOtp && (
-                      <span className="font-mono-tabular text-emerald-400 font-extrabold">
-                        [ {forgotDeliveredOtp} ]
-                      </span>
-                    )}
+                    <span>{forgotPhone}</span>
+                    <span className="text-[11px] text-sky-300 font-extrabold">📲 Telegram OTP ብቻ</span>
                   </div>
 
                   <a
                     href={
                       forgotTelegramOtpUrl ||
-                      `https://t.me/Kidamegamesbot?start=otp_${encodeURIComponent(forgotPhone)}`
+                      `https://t.me/Sungamsbot?start=otp_${encodeURIComponent(forgotPhone)}`
                     }
                     target="_blank"
                     rel="noopener noreferrer"

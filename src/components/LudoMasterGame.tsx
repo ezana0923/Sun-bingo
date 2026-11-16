@@ -39,6 +39,11 @@ import {
 import { KidameGamesLogo } from './KidameGamesLogo';
 import { soundFX } from '../utils/soundAndVoice';
 import { TransactionRecord, UserAccount } from '../types/bingo';
+import {
+  buildApiUrl,
+  saveDevicePlayerIdentity,
+  saveSignedAccountToken,
+} from '../utils/realtimeRoomClient';
 
 export type LudoColor = 'red' | 'green' | 'yellow' | 'blue';
 export type LudoSubScreen =
@@ -370,14 +375,28 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
   ]);
   const [openRoomsFilter, setOpenRoomsFilter] = useState<'all' | '20' | '50' | '100' | '200+' | '2p' | '4p'>('all');
 
-  // Real Players Names per House
+  // Real Players Names per House (Red synced with Unified Sun Games Username)
   const [playerNames, setPlayerNames] = useState<Record<LudoColor, string>>({
-    red: 'ተጫዋች 1 (ቀይ)',
+    red: sharedUsers?.[0]?.name || 'ተጫዋች 1 (ቀይ)',
     green: 'ተጫዋች 2 (አረንጓዴ)',
     yellow: 'ተጫዋች 3 (ቢጫ)',
     blue: 'ተጫዋች 4 (ሰማያዊ)',
   });
-  const [profilePhone, setProfilePhone] = useState<string>('0942742684');
+  const [profilePhone, setProfilePhone] = useState<string>(
+    sharedUsers?.[0]?.phone || '0942742684'
+  );
+  const [profileSaveMsg, setProfileSaveMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unifiedName = sharedUsers?.[0]?.name?.trim();
+    const unifiedPhone = sharedUsers?.[0]?.phone?.trim();
+    if (unifiedName) {
+      setPlayerNames((prev) => (prev.red === unifiedName ? prev : { ...prev, red: unifiedName }));
+    }
+    if (unifiedPhone) {
+      setProfilePhone((prev) => (prev === unifiedPhone ? prev : unifiedPhone));
+    }
+  }, [sharedUsers?.[0]?.name, sharedUsers?.[0]?.phone]);
 
   // Audio & Haptics Settings
   const [sfxEnabled, setSfxEnabled] = useState<boolean>(true);
@@ -1969,13 +1988,14 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-400 block mb-1">ዋና የተጫዋች ስም</label>
+              <label className="text-xs font-bold text-slate-400 block mb-1">ዋና የተጫዋች ስም (Unified Username)</label>
               <input
                 type="text"
                 value={playerNames.red}
-                onChange={(e) =>
-                  setPlayerNames((prev) => ({ ...prev, red: e.target.value }))
-                }
+                onChange={(e) => {
+                  const nextName = e.target.value;
+                  setPlayerNames((prev) => ({ ...prev, red: nextName }));
+                }}
                 className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-bold text-white"
               />
             </div>
@@ -1984,10 +2004,48 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
               <input
                 type="text"
                 value={profilePhone}
-                onChange={(e) => setProfilePhone(e.target.value)}
-                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono font-bold text-white"
+                readOnly
+                className="w-full px-4 py-2.5 rounded-xl bg-slate-950/70 border border-slate-800 text-sm font-mono font-bold text-slate-300"
               />
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={async () => {
+                const cleanName = playerNames.red.trim();
+                if (cleanName.length < 2) {
+                  setProfileSaveMsg('❌ እባክዎ ቢያንስ 2 ፊደላት ያሉት ስም ያስገቡ።');
+                  return;
+                }
+                if (onUpdateSharedUsers) {
+                  onUpdateSharedUsers((prev) =>
+                    prev.map((u, idx) => (idx === 0 ? { ...u, name: cleanName } : u))
+                  );
+                }
+                saveDevicePlayerIdentity(cleanName, profilePhone);
+                try {
+                  const res = await fetch(buildApiUrl('/api/player/update-profile'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone: profilePhone, name: cleanName }),
+                  });
+                  const data = await res.json();
+                  if (data?.ok && data.accountToken) {
+                    saveSignedAccountToken(profilePhone, data.accountToken);
+                  }
+                } catch {}
+                setProfileSaveMsg(`✅ ስምዎ «${cleanName}» በሁሉም ጨዋታዎች ላይ ተቀምጧል!`);
+                window.setTimeout(() => setProfileSaveMsg(null), 3500);
+              }}
+              className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black cursor-pointer shadow-md"
+            >
+              ✅ ስም አስቀምጥ (Save Username)
+            </button>
+            {profileSaveMsg && (
+              <span className="text-xs font-bold text-emerald-400">{profileSaveMsg}</span>
+            )}
           </div>
 
           <div className="grid grid-cols-3 gap-3 pt-2">

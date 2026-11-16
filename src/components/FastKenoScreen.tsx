@@ -1387,13 +1387,22 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
   const birrBalanceRef = useRef<number>(initialBalance);
   birrBalanceRef.current = user.birrBalance;
 
-  // Keep internal balance in sync if parent initialBalance changes
+  // Keep internal balance & unified username/id in sync if parent props change
   useEffect(() => {
-    if (initialBalance !== undefined) {
-      birrBalanceRef.current = initialBalance;
-      setUser((prev) => (prev.birrBalance !== initialBalance ? { ...prev, birrBalance: initialBalance } : prev));
-    }
-  }, [initialBalance]);
+    setUser((prev) => {
+      const nextBal = initialBalance !== undefined ? initialBalance : prev.birrBalance;
+      if (prev.birrBalance === nextBal && prev.name === myKenoHandle && prev.id === myKenoPlayerId) {
+        return prev;
+      }
+      birrBalanceRef.current = nextBal;
+      return {
+        ...prev,
+        id: myKenoPlayerId,
+        name: myKenoHandle,
+        birrBalance: nextBal,
+      };
+    });
+  }, [initialBalance, myKenoHandle, myKenoPlayerId]);
 
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [language, setLanguage] = useState<Language>(externalLanguage || 'am');

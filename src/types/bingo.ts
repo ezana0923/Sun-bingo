@@ -61,6 +61,22 @@ export interface BankPaymentAccount {
   accountNumber: string;
   accountHolder: string;
   badgeBg: string;
+  isActive?: boolean;
+}
+
+export interface AutoNotifyGamesConfig {
+  fast: boolean;
+  regular: boolean;
+  keno: boolean;
+  ramino: boolean;
+}
+
+export interface GameStartNotificationEvent {
+  id: string;
+  game: 'fast' | 'regular' | 'keno' | 'ramino' | 'admin';
+  title: string;
+  message: string;
+  timestamp: number;
 }
 
 export interface TransactionRecord {

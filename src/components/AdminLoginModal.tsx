@@ -165,7 +165,6 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                 <input
                   type={showPass ? 'text' : 'password'}
                   required
-                  autoFocus
                   value={pinOrPass}
                   onChange={(e) => setPinOrPass(e.target.value)}
                   placeholder={usePinMode ? '7788' : '••••••••'}

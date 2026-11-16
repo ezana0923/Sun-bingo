@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Copy,
   Check,
@@ -10,6 +10,9 @@ import {
   Clock,
   CheckCircle2,
   XCircle,
+  ArrowLeft,
+  ArrowRight,
+  ClipboardPaste,
 } from 'lucide-react';
 import { PAYMENT_ACCOUNTS, TRANSLATIONS } from '../utils/translations';
 import { parseEthiopianPaymentSms, normalizeTransactionReference } from '../utils/smsParser';
@@ -50,20 +53,33 @@ export const WalletView: React.FC<WalletViewProps> = ({
   onSubmitTransfer,
 }) => {
   const t = TRANSLATIONS[language];
-  const activeBanksList: BankPaymentAccount[] =
+  const rawBanksList: BankPaymentAccount[] =
     Array.isArray(bankAccounts) && bankAccounts.length > 0 ? bankAccounts : PAYMENT_ACCOUNTS;
+  const activeBanksList: BankPaymentAccount[] = rawBanksList.filter((b) => b.isActive !== false);
 
   const [activeSubTab, setActiveSubTab] = useState<'deposit' | 'withdraw' | 'transfer' | 'history'>(
     initialSubTab
   );
   const [selectedBank, setSelectedBank] = useState<string>(
-    activeBanksList[0]?.id || 'Telebirr'
+    activeBanksList[0]?.id || rawBanksList[0]?.id || 'Telebirr'
   );
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  React.useEffect(() => {
+  // Explicit 3-Step Flows for Deposit & Withdraw
+  const [depStep, setDepStep] = useState<1 | 2 | 3>(1);
+  const [withStep, setWithStep] = useState<1 | 2 | 3>(1);
+
+  useEffect(() => {
     setActiveSubTab(initialSubTab);
+    setDepStep(1);
+    setWithStep(1);
   }, [initialSubTab]);
+
+  useEffect(() => {
+    if (activeBanksList.length > 0 && !activeBanksList.some((b) => b.id === selectedBank)) {
+      setSelectedBank(activeBanksList[0].id);
+    }
+  }, [activeBanksList, selectedBank]);
 
   // Deposit Form
   const [depAmount, setDepAmount] = useState('');
@@ -82,12 +98,56 @@ export const WalletView: React.FC<WalletViewProps> = ({
   const [transAmount, setTransAmount] = useState('');
 
   const selectedAccountObj =
-    activeBanksList.find((a) => a.id === selectedBank) || activeBanksList[0];
+    activeBanksList.find((a) => a.id === selectedBank) || activeBanksList[0] || rawBanksList[0];
 
   const handleCopy = (text: string, id: string) => {
-    navigator.clipboard.writeText(text).catch(() => {});
+    navigator.clipboard?.writeText(text).catch(() => {});
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleCopyBankAndProceedToReceipt = (acct: BankPaymentAccount) => {
+    setSelectedBank(acct.id);
+    if (acct.id !== 'Cash') {
+      handleCopy(acct.accountNumber, `step2-${acct.id}`);
+      setFeedbackMsg({
+        type: 'ok',
+        text: `📋 ${acct.shortName} ቁጥር (${acct.accountNumber}) Copy ተደርጓል! ክፍያውን ፈጽመው የደረሰኝ SMS ወይም Ref ቁጥር ከታች ያስገቡ።`,
+      });
+    } else {
+      setFeedbackMsg(null);
+    }
+    setDepStep(3);
+  };
+
+  const handlePasteReceiptFromClipboard = async () => {
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+        setFeedbackMsg({
+          type: 'err',
+          text: '📋 እባክዎ ከስልክዎ/ኪቦርድ Paste በመንካት ደረሰኙን ሳጥኑ ውስጥ ይለጥፉ።',
+        });
+        return;
+      }
+      const clipText = await navigator.clipboard.readText();
+      if (!clipText || !clipText.trim()) {
+        setFeedbackMsg({
+          type: 'err',
+          text: '📋 በ Clipboard ውስጥ የተቀዳ ጽሁፍ የለም! መጀመሪያ የባንክ SMS ወይም Ref ቁጥር Copy ያድርጉ።',
+        });
+        return;
+      }
+      handleSmsInputChange(clipText.trim());
+      setFeedbackMsg({
+        type: 'ok',
+        text: '✅ ደረሰኙ በተሳካ ሁኔታ Paste ተደርጓል! ከታች ያረጋግጡ።',
+      });
+    } catch {
+      setFeedbackMsg({
+        type: 'err',
+        text: '📋 Browser clipboard ፍቃድ አልሰጠም — እባክዎ ሳጥኑን ተጭነው Paste ያድርጉ።',
+      });
+    }
   };
 
   const parseCleanAmount = (raw: string): number => {
@@ -115,11 +175,12 @@ export const WalletView: React.FC<WalletViewProps> = ({
     e.preventDefault();
     const parsedFromSms = parseEthiopianPaymentSms(depFullSms);
     const parsedFromRefField = parseEthiopianPaymentSms(depRefNumber);
-    const typedAmt = parseCleanAmount(depAmount);
+    const chosenAmt = parseCleanAmount(depAmount);
 
     // If the user pasted a withdrawal message inside the deposit box, automatically switch or process as withdrawal!
     if (parsedFromSms.detectedType === 'withdraw' && !parsedFromSms.referenceNumber) {
       setActiveSubTab('withdraw');
+      setWithStep(1);
       if (parsedFromSms.amount) setWithAmount(String(parsedFromSms.amount));
       if (parsedFromSms.detectedBank) setSelectedBank(parsedFromSms.detectedBank);
       setFeedbackMsg({
@@ -130,7 +191,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
     }
 
     const amt =
-      (Number.isFinite(typedAmt) && typedAmt > 0 ? typedAmt : null) ??
+      (Number.isFinite(chosenAmt) && chosenAmt > 0 ? chosenAmt : null) ??
       parsedFromSms.amount ??
       parsedFromRefField.amount ??
       NaN;
@@ -139,6 +200,19 @@ export const WalletView: React.FC<WalletViewProps> = ({
       setFeedbackMsg({
         type: 'err',
         text: 'እባክዎ የላኩትን የብር መጠን ያስገቡ ወይም የባንክ/ቴሌብር SMS ደረሰኝ ይለጥፉ።',
+      });
+      return;
+    }
+
+    if (
+      Number.isFinite(chosenAmt) &&
+      chosenAmt > 0 &&
+      parsedFromSms.amount !== null &&
+      Math.abs(parsedFromSms.amount - chosenAmt) > 0.01
+    ) {
+      setFeedbackMsg({
+        type: 'err',
+        text: `⚠️ የመረጡት መጠን (${chosenAmt} ETB) እና በደረሰኙ SMS ላይ ያለው መጠን (${parsedFromSms.amount} ETB) አይመሳሰልም! እባክዎ ትክክለኛውን ደረሰኝ ያስገቡ ወይም ተመለስ በመንካት መጠኑን ያስተካክሉ።`,
       });
       return;
     }
@@ -157,11 +231,11 @@ export const WalletView: React.FC<WalletViewProps> = ({
     const isCash = bankToUse === 'Cash' || selectedBank === 'Cash';
     const cleanRef = isCash
       ? depRefNumber.trim() || `CASH-${Date.now().toString().slice(-6)}`
-      : (normalizeTransactionReference(rawRef) || rawRef);
+      : normalizeTransactionReference(rawRef) || rawRef;
 
     const cleanSms = isCash
-      ? (depFullSms.trim() || `Cash Deposit ${amt} ETB by ${currentUser.phone} (Note: ${cleanRef})`)
-      : (depFullSms.trim() || `${bankToUse} Deposit ${amt} ETB (Ref: ${cleanRef})`);
+      ? depFullSms.trim() || `Cash Deposit ${amt} ETB by ${currentUser.phone} (Note: ${cleanRef})`
+      : depFullSms.trim() || `${bankToUse} Deposit ${amt} ETB (Ref: ${cleanRef})`;
 
     if (!isCash && !cleanRef && !depFullSms.trim()) {
       setFeedbackMsg({
@@ -206,16 +280,12 @@ export const WalletView: React.FC<WalletViewProps> = ({
       }
     }
 
-    onSubmitDeposit(
-      bankToUse,
-      amt,
-      cleanRef,
-      cleanSms
-    );
+    onSubmitDeposit(bankToUse, amt, cleanRef, cleanSms);
     setDepAmount('');
     setDepRefNumber('');
     setDepFullSms('');
     setDetectedTxType(null);
+    setDepStep(1);
     setFeedbackMsg({
       type: 'ok',
       text: isCash
@@ -248,6 +318,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
       : withAccount.trim();
     onSubmitWithdraw(selectedBank, amt, targetAcctDisplay);
     setWithAmount('');
+    setWithStep(1);
     setFeedbackMsg({
       type: 'ok',
       text: requireAdminApproval
@@ -442,224 +513,70 @@ export const WalletView: React.FC<WalletViewProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* TAB 1: DEPOSIT 💵 (WHEN USER TAPS DEPOSIT)                            */}
+      {/* TAB 1: DEPOSIT 💵 (3-STEP WIZARD: AMOUNT -> BANK+COPY -> RECEIPT)     */}
       {/* ===================================================================== */}
       {activeSubTab === 'deposit' && (
-        <div className="space-y-4">
-          {/* Step 1: Select Deposit Method & Copy Account */}
-          <div
-            className={`rounded-2xl border p-4 sm:p-5 space-y-4 ${
-              isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
-            }`}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-base sm:text-lg font-black flex items-center gap-2">
-                  <span>Deposit 💵 (ገንዘብ ማስገቢያ)</span>
-                </h3>
-                <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                  1. የሚያስገቡበትን ባንክ ይምረጡ · 2. ቁጥሩን Copy አድርገው ይላኩ · 3. የደረሰዎትን SMS/Ref ያስገቡ
-                </p>
-              </div>
-              <span className="px-3 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-extrabold">
-                🔒 Verified by Bank SMS Webhook
-              </span>
+        <div
+          className={`rounded-2xl border p-4 sm:p-5 space-y-4 ${
+            isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+          }`}
+        >
+          {/* Step Progress Header */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-700/40">
+            <div>
+              <h3 className="text-base sm:text-lg font-black">Deposit 💵 (ገንዘብ ማስገቢያ)</h3>
+              <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                ደረጃ {depStep} ከ 3
+              </p>
             </div>
-
-            {/* Payment Method Buttons (Dynamic from Admin Bank Accounts) */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              {activeBanksList.map((acct) => {
-                const isSelected = selectedBank === acct.id;
-                return (
-                  <button
-                    key={acct.id}
-                    type="button"
-                    onClick={() => setSelectedBank(acct.id)}
-                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
-                      isSelected
-                        ? 'bg-emerald-600 text-white border-emerald-400 shadow-md ring-2 ring-emerald-400/50'
-                        : isDark
-                        ? 'bg-slate-800/80 border-slate-700 text-slate-200 hover:bg-slate-800'
-                        : 'bg-slate-50 border-slate-200 text-slate-800 hover:bg-slate-100'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-black ${
-                          isSelected ? 'bg-slate-950 text-emerald-400' : acct.badgeBg
-                        }`}
-                      >
-                        {acct.shortName}
-                      </span>
-                      {isSelected && <CheckCircle2 className="w-4 h-4 text-white" />}
-                    </div>
-                    <div className="text-xs font-extrabold truncate">{acct.bankName}</div>
-                    <div className="font-mono-tabular text-xs font-black opacity-90">
-                      {acct.accountNumber}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Highlighted Selected Deposit Account Box with One-Tap Copy */}
-            <div
-              className={`p-4 rounded-2xl border-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                isDark
-                  ? 'bg-slate-950/90 border-emerald-500/50'
-                  : 'bg-emerald-50/70 border-emerald-400'
-              }`}
-            >
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className={`px-2.5 py-0.5 rounded-md text-xs font-black ${selectedAccountObj.badgeBg}`}>
-                    {selectedAccountObj.shortName}
-                  </span>
-                  <span className="text-xs sm:text-sm font-extrabold">
-                    {selectedAccountObj.bankName}
-                  </span>
-                </div>
-                <div className="text-2xl sm:text-3xl font-black font-mono-tabular tracking-wider text-emerald-400 select-all">
-                  {selectedAccountObj.accountNumber}
-                </div>
-                <div className={`text-xs sm:text-sm ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                  {selectedAccountObj.id === 'Cash'
-                    ? 'ክፍያ መቀበያ: '
-                    : 'የሂሳብ ባለቤት ስም (Account Holder): '}
-                  <strong className="font-black underline">{selectedAccountObj.accountHolder}</strong>
-                </div>
-              </div>
-
-              {selectedAccountObj.id === 'Cash' ? (
-                <div className="px-4 py-3 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-xs sm:text-sm font-extrabold flex items-center gap-2 shrink-0">
-                  <span>💵 ክፍያ በጥሬ ገንዘብ / ወኪል</span>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => handleCopy(selectedAccountObj.accountNumber, selectedAccountObj.id)}
-                  className={`px-5 py-3.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md shrink-0 ${
-                    copiedId === selectedAccountObj.id
-                      ? 'bg-emerald-500 text-slate-950'
-                      : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
-                  }`}
-                >
-                  {copiedId === selectedAccountObj.id ? (
-                    <>
-                      <Check className="w-4 h-4 stroke-[3]" />
-                      <span>ቁጥሩ Copy ተደርጓል! ({selectedAccountObj.accountNumber})</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-4 h-4" />
-                      <span>📋 Copy {selectedAccountObj.shortName} ({selectedAccountObj.accountNumber})</span>
-                    </>
-                  )}
-                </button>
-              )}
-            </div>
-
-            {/* All Accounts Quick Copy List */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-              {activeBanksList.map((acct) => (
-                <div
-                  key={acct.id}
-                  onClick={() => setSelectedBank(acct.id)}
-                  className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${
-                    selectedBank === acct.id
-                      ? isDark
-                        ? 'bg-emerald-950/30 border-emerald-500/50'
-                        : 'bg-emerald-50 border-emerald-400'
+            <div className="flex items-center gap-1.5 text-[11px] font-black">
+              {[
+                { s: 1, label: '1. መጠን' },
+                { s: 2, label: '2. ባንክ' },
+                { s: 3, label: '3. ደረሰኝ' },
+              ].map((st) => (
+                <span
+                  key={st.s}
+                  className={`px-2.5 py-1 rounded-lg border ${
+                    depStep === st.s
+                      ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                      : depStep > st.s
+                      ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
                       : isDark
-                      ? 'bg-slate-800/50 border-slate-700/80 hover:bg-slate-800'
-                      : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                      ? 'bg-slate-800 text-slate-400 border-slate-700'
+                      : 'bg-slate-100 text-slate-500 border-slate-200'
                   }`}
                 >
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${acct.badgeBg}`}>
-                        {acct.shortName}
-                      </span>
-                      <span className="text-xs font-bold">{acct.accountHolder}</span>
-                    </div>
-                    <div className="font-mono-tabular text-sm font-black mt-0.5">
-                      {acct.accountNumber}
-                    </div>
-                  </div>
-                  {acct.id === 'Cash' ? (
-                    <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-emerald-500/20 text-emerald-400">
-                      በካሽ 💵
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleCopy(acct.accountNumber, `list-${acct.id}`);
-                      }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1 cursor-pointer ${
-                        copiedId === `list-${acct.id}`
-                          ? 'bg-emerald-600 text-white'
-                          : isDark
-                          ? 'bg-slate-700 text-slate-200 hover:bg-slate-600'
-                          : 'bg-white text-slate-800 border border-slate-300'
-                      }`}
-                    >
-                      {copiedId === `list-${acct.id}` ? (
-                        <>
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Copied</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5" />
-                          <span>Copy</span>
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
+                  {st.label}
+                </span>
               ))}
             </div>
           </div>
 
-          {/* Step 2: Deposit Amount & SMS / Reference Verification Form */}
-          <form
-            onSubmit={submitDepositForm}
-            className={`rounded-2xl border p-4 sm:p-5 space-y-4 ${
-              isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
-            }`}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 className="text-sm sm:text-base font-extrabold flex items-center gap-2">
-                <FileText className="w-4 h-4 text-emerald-500" />
-                <span>
-                  {selectedAccountObj.id === 'Cash'
-                    ? 'የከፈሉበትን የካሽ መረጃ ማረጋገጫ (በካሽ / Cash)'
-                    : `የከፈሉበትን መረጃ / SMS ደረሰኝ ማረጋገጫ (${selectedAccountObj.shortName})`}
-                </span>
-              </h4>
-              <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-[11px] font-bold text-emerald-400">
-                🔒 በ Webhook የሚረጋገጥ
-              </span>
-            </div>
+          {/* DEPOSIT STEP 1: Choose Amount */}
+          {depStep === 1 && (
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-sm sm:text-base font-black text-emerald-400">
+                  💵 ስንት ብር ገቢ ማድረግ ይፈልጋሉ?
+                </h4>
+                <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  ፈጣን የብር መጠን ይምረጡ ወይም ከታች በእጅዎ ይጻፉ።
+                </p>
+              </div>
 
-            {/* Quick Deposit Amount Pills */}
-            <div>
-              <label className="block text-xs font-bold mb-1.5 opacity-85">
-                {selectedAccountObj.id === 'Cash'
-                  ? 'ፈጣን የካሽ መጠን ይምረጡ፦'
-                  : 'ፈጣን የብር መጠን ይምረጡ (Quick Deposit Amount)፦'}
-              </label>
-              <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+              <div className="grid grid-cols-3 sm:grid-cols-7 gap-2">
                 {[50, 100, 200, 500, 1000, 1500, 2000].map((preset) => (
                   <button
                     key={preset}
                     type="button"
-                    onClick={() => setDepAmount(String(preset))}
-                    className={`py-2 px-2 rounded-xl font-mono-tabular text-xs font-black border cursor-pointer transition-all ${
+                    onClick={() => {
+                      setDepAmount(String(preset));
+                      setFeedbackMsg(null);
+                    }}
+                    className={`py-2.5 px-2 rounded-xl font-mono-tabular text-xs font-black border cursor-pointer transition-all ${
                       parseCleanAmount(depAmount) === preset
-                        ? 'bg-emerald-600 text-white border-emerald-400 shadow-xs'
+                        ? 'bg-emerald-500 text-slate-950 border-emerald-300 shadow-sm scale-[1.02]'
                         : isDark
                         ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
                         : 'bg-slate-100 border-slate-300 text-slate-800 hover:bg-slate-200'
@@ -669,13 +586,9 @@ export const WalletView: React.FC<WalletViewProps> = ({
                   </button>
                 ))}
               </div>
-            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold mb-1">
-                  {selectedAccountObj.id === 'Cash' ? 'የከፈሉት የካሽ መጠን (ETB) *፦' : 'የላኩት የብር መጠን (ETB) *፦'}
-                </label>
+                <label className="block text-xs font-bold mb-1">የብር መጠን (በእጅ መጻፊያ — ETB)፦</label>
                 <input
                   type="text"
                   inputMode="decimal"
@@ -688,288 +601,643 @@ export const WalletView: React.FC<WalletViewProps> = ({
                       handleSmsInputChange(rawVal);
                     }
                   }}
-                  placeholder="ምሳሌ: 1,500 ወይም 500"
-                  className={`w-full px-3.5 py-2.5 rounded-xl text-sm font-mono-tabular font-bold border ${
+                  placeholder="ምሳሌ: 100, 500 ወይም 1,500"
+                  className={`w-full px-3.5 py-3 rounded-xl text-sm font-mono-tabular font-black border ${
                     isDark
                       ? 'bg-slate-800 border-slate-700 text-white'
                       : 'bg-slate-50 border-slate-300 text-slate-900'
                   }`}
                 />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const amt = parseCleanAmount(depAmount);
+                  if (isNaN(amt) || amt <= 0) {
+                    setFeedbackMsg({
+                      type: 'err',
+                      text: 'እባክዎ መጀመሪያ ገቢ የሚያደርጉትን የብር መጠን ይምረጡ ወይም ይጻፉ (ምሳሌ: 100)።',
+                    });
+                    return;
+                  }
+                  setFeedbackMsg(null);
+                  setDepStep(2);
+                }}
+                className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm cursor-pointer shadow-lg flex items-center justify-center gap-2"
+              >
+                <span>ቀጥል — ባንክ ምረጥ</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* DEPOSIT STEP 2: Show Admin-Enabled Banks + Copy & Go to Receipt */}
+          {depStep === 2 && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeedbackMsg(null);
+                    setDepStep(1);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer border ${
+                    isDark
+                      ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
+                      : 'bg-slate-100 border-slate-300 text-slate-800'
+                  }`}
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>ተመለስ (መጠን ቀይር)</span>
+                </button>
+                <span className="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-xs font-black font-mono-tabular">
+                  💵 የመረጡት መጠን፦ {depAmount} ETB
+                </span>
               </div>
 
               <div>
-                <label className="block text-xs font-bold mb-1">
-                  {selectedAccountObj.id === 'Cash'
-                    ? 'የወኪሉ/ካሸሩ ስም ወይም ደረሰኝ ቁጥር (ማስታወሻ)፦'
-                    : 'የግብይት ቁጥር (Transaction ID / Ref No)፦'}
-                </label>
-                <input
-                  type="text"
-                  value={depRefNumber}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (selectedAccountObj.id !== 'Cash' && (v.length > 28 || /\s/.test(v.trim()))) {
-                      handleSmsInputChange(v);
-                    } else {
-                      setDepRefNumber(v);
-                    }
+                <h4 className="text-sm sm:text-base font-black">
+                  🏦 የባንክ አካውንት ይምረጡ እና ቁጥሩን Copy ያድርጉ፦
+                </h4>
+                <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  «📋 Copy አድርግና ወደ ደረሰኝ ሂድ» ሲነኩ ቁጥሩ Copy ሆኖ ወደ ደረሰኝ ማስገቢያ ይወስድዎታል።
+                </p>
+              </div>
+
+              {activeBanksList.length === 0 ? (
+                <div className="p-4 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-400 text-xs font-bold text-center">
+                  ⚠️ ለጊዜው በአድሚን የነቁ የባንክ አካውንቶች የሉም።
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {activeBanksList.map((acct) => {
+                    const isSelected = selectedBank === acct.id;
+                    return (
+                      <div
+                        key={acct.id}
+                        className={`p-4 rounded-2xl border-2 flex flex-col justify-between gap-3 transition-all ${
+                          isSelected
+                            ? isDark
+                              ? 'bg-slate-950 border-emerald-500 shadow-lg'
+                              : 'bg-emerald-50 border-emerald-500'
+                            : isDark
+                            ? 'bg-slate-800/60 border-slate-700'
+                            : 'bg-slate-50 border-slate-200'
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`px-2.5 py-0.5 rounded-md text-xs font-black ${acct.badgeBg}`}>
+                              {acct.shortName}
+                            </span>
+                            <span className="text-[11px] font-bold opacity-75 truncate">
+                              {acct.bankName}
+                            </span>
+                          </div>
+                          <div className="text-xl font-black font-mono-tabular text-emerald-400 select-all pt-1">
+                            {acct.accountNumber}
+                          </div>
+                          <div className="text-xs font-bold opacity-85">
+                            {acct.id === 'Cash' ? 'መቀበያ፦ ' : 'ስም፦ '}
+                            <span className="underline">{acct.accountHolder}</span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleCopyBankAndProceedToReceipt(acct)}
+                          className={`w-full py-2.5 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-md ${
+                            copiedId === `step2-${acct.id}`
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                          }`}
+                        >
+                          {acct.id === 'Cash' ? (
+                            <span>💵 በካሽ ደረሰኝ ሂድ →</span>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>📋 Copy አድርግና ወደ ደረሰኝ ሂድ</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* DEPOSIT STEP 3: Paste Receipt / SMS & Verify against chosen amount */}
+          {depStep === 3 && selectedAccountObj && (
+            <form onSubmit={submitDepositForm} className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeedbackMsg(null);
+                    setDepStep(2);
                   }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer border ${
+                    isDark
+                      ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
+                      : 'bg-slate-100 border-slate-300 text-slate-800'
+                  }`}
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>ተመለስ (ባንክ ቀይር)</span>
+                </button>
+                <div className="flex items-center gap-2 text-xs font-black">
+                  <span className={`px-2 py-1 rounded-lg ${selectedAccountObj.badgeBg}`}>
+                    {selectedAccountObj.shortName}
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-400 font-mono-tabular">
+                    {depAmount} ETB
+                  </span>
+                </div>
+              </div>
+
+              <div
+                className={`p-3 rounded-xl border flex flex-wrap items-center justify-between gap-2 ${
+                  isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'
+                }`}
+              >
+                <div className="text-xs">
+                  <span className="opacity-75">የተመረጠ አካውንት ({selectedAccountObj.shortName})፦ </span>
+                  <strong className="font-mono-tabular text-emerald-400 select-all">
+                    {selectedAccountObj.accountNumber}
+                  </strong>
+                  <span className="opacity-75"> ({selectedAccountObj.accountHolder})</span>
+                </div>
+                {selectedAccountObj.id !== 'Cash' && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleCopy(selectedAccountObj.accountNumber, `step3-${selectedAccountObj.id}`)
+                    }
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 text-amber-400 text-[11px] font-black flex items-center gap-1 cursor-pointer"
+                  >
+                    {copiedId === `step3-${selectedAccountObj.id}` ? (
+                      <>
+                        <Check className="w-3 h-3" />
+                        <span>Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" />
+                        <span>Copy</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-sm font-extrabold flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-emerald-500" />
+                  <span>
+                    {selectedAccountObj.id === 'Cash'
+                      ? 'የካሽ ደረሰኝ ማረጋገጫ'
+                      : 'ደረሰኝ (SMS ወይም Ref ቁጥር) Paste አድርገው ያረጋግጡ'}
+                  </span>
+                </h4>
+                {selectedAccountObj.id !== 'Cash' && (
+                  <button
+                    type="button"
+                    onClick={handlePasteReceiptFromClipboard}
+                    className="px-3.5 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  >
+                    <ClipboardPaste className="w-4 h-4" />
+                    <span>📋 ደረሰኝ Paste አድርግ</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-xs font-bold mb-1">የላኩት የብር መጠን (ETB) *፦</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={depAmount}
+                    onChange={(e) => {
+                      const rawVal = e.target.value;
+                      if (/^[\d,.\s]*$/.test(rawVal)) {
+                        setDepAmount(rawVal.replace(/\s+/g, ''));
+                      } else {
+                        handleSmsInputChange(rawVal);
+                      }
+                    }}
+                    placeholder="ምሳሌ: 500"
+                    className={`w-full px-3.5 py-2.5 rounded-xl text-sm font-mono-tabular font-bold border ${
+                      isDark
+                        ? 'bg-slate-800 border-slate-700 text-white'
+                        : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-1">
+                    {selectedAccountObj.id === 'Cash'
+                      ? 'የወኪሉ ስም / ደረሰኝ ቁጥር፦'
+                      : 'የግብይት ቁጥር (Transaction ID / Ref No)፦'}
+                  </label>
+                  <input
+                    type="text"
+                    value={depRefNumber}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (selectedAccountObj.id !== 'Cash' && (v.length > 28 || /\s/.test(v.trim()))) {
+                        handleSmsInputChange(v);
+                      } else {
+                        setDepRefNumber(v);
+                      }
+                    }}
+                    placeholder={
+                      selectedAccountObj.id === 'Cash'
+                        ? 'ምሳሌ: ወኪል ዮናስ #1024'
+                        : 'ምሳሌ: FT26108XYZ ወይም DKA00C24SE'
+                    }
+                    className={`w-full px-3.5 py-2.5 rounded-xl text-sm font-mono-tabular font-bold border ${
+                      isDark
+                        ? 'bg-slate-800 border-slate-700 text-white'
+                        : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                  <label className="block text-xs font-bold">
+                    {selectedAccountObj.id === 'Cash'
+                      ? 'ተጨማሪ የካሽ ማስታወሻ (አማራጭ)፦'
+                      : 'ሙሉ የባንክ / ቴሌብር SMS ደረሰኝ እዚህ Paste ያድርጉ፦'}
+                  </label>
+                  {depFullSms.trim() && selectedAccountObj.id !== 'Cash' && (
+                    <span className="text-[11px] font-extrabold text-emerald-400">
+                      ✓ የተለየ፦ {detectedTxType === 'withdraw' ? 'ወጪ' : 'ገቢ'} |{' '}
+                      {selectedAccountObj.shortName} | {depAmount ? `${depAmount} ETB` : '—'} | Ref:{' '}
+                      {depRefNumber || '—'}
+                    </span>
+                  )}
+                </div>
+                <textarea
+                  rows={3}
+                  value={depFullSms}
+                  onChange={(e) => handleSmsInputChange(e.target.value)}
                   placeholder={
                     selectedAccountObj.id === 'Cash'
-                      ? 'ምሳሌ: ወኪል ዮናስ ወይም ደረሰኝ #1024'
-                      : 'ምሳሌ: FT26108XYZ ወይም DCO412389A'
+                      ? 'የካሽ ክፍያ የፈጸሙበት ቦታ ወይም ተጨማሪ መረጃ...'
+                      : 'ከባንክ ወይም ከቴሌብር የደረሰዎትን SMS መልዕክት ሙሉውን እዚህ Paste ያድርጉ...'
                   }
-                  className={`w-full px-3.5 py-2.5 rounded-xl text-sm font-mono-tabular font-bold border ${
+                  className={`w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm border ${
                     isDark
                       ? 'bg-slate-800 border-slate-700 text-white'
                       : 'bg-slate-50 border-slate-300 text-slate-900'
                   }`}
                 />
               </div>
-            </div>
 
-            <div>
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                <label className="block text-xs font-bold">
-                  {selectedAccountObj.id === 'Cash'
-                    ? 'ተጨማሪ የካሽ ማስታወሻ (አማራጭ)፦'
-                    : 'ወይም የደረሰዎትን ሙሉ የባንክ / ቴሌብር SMS ደረሰኝ እዚህ ይለጥፉ፦'}
-                </label>
-                {depFullSms.trim() && selectedAccountObj.id !== 'Cash' && (
-                  <span className="text-[11px] font-extrabold text-emerald-400">
-                    ✓ የተለየ፦ {detectedTxType === 'withdraw' ? 'ወጪ (Withdraw)' : 'ገቢ (Deposit)'} | {selectedAccountObj.shortName} | {depAmount ? `${depAmount} ETB` : '—'} | Ref: {depRefNumber || '—'}
-                  </span>
-                )}
-              </div>
-              <textarea
-                rows={selectedAccountObj.id === 'Cash' ? 2 : 3}
-                value={depFullSms}
-                onChange={(e) => handleSmsInputChange(e.target.value)}
-                placeholder={
-                  selectedAccountObj.id === 'Cash'
-                    ? 'የካሽ ክፍያ የፈጸሙበት ቦታ ወይም ተጨማሪ መረጃ ይጻፉ...'
-                    : 'Dear Customer, your account 1000112964936 has been credited with ETB 500.00... ወይም የቴሌብር SMS ይለጥፉ'
-                }
-                className={`w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm border ${
-                  isDark
-                    ? 'bg-slate-800 border-slate-700 text-white'
-                    : 'bg-slate-50 border-slate-300 text-slate-900'
-                }`}
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm sm:text-base cursor-pointer shadow-lg flex items-center justify-center gap-2"
-            >
-              <ArrowDownCircle className="w-5 h-5" />
-              <span>
-                {selectedAccountObj.id === 'Cash'
-                  ? '💵 በካሽ ገቢ አረጋግጥ (Submit Cash Deposit)'
-                  : `ገቢ አረጋግጥ (Submit ${selectedAccountObj.shortName} Deposit)`}
-              </span>
-            </button>
-          </form>
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm sm:text-base cursor-pointer shadow-lg flex items-center justify-center gap-2"
+              >
+                <CheckCircle2 className="w-5 h-5" />
+                <span>✅ አረጋግጥና ላክ (Submit {selectedAccountObj.shortName} Deposit)</span>
+              </button>
+            </form>
+          )}
         </div>
       )}
 
       {/* ===================================================================== */}
-      {/* TAB 2: WITHDRAW 💸 (WHEN USER TAPS WITHDRAW)                          */}
+      {/* TAB 2: WITHDRAW 💸 (3-STEP WIZARD: AMOUNT -> BANK -> ACCOUNT/CONFIRM) */}
       {/* ===================================================================== */}
       {activeSubTab === 'withdraw' && (
-        <form
-          onSubmit={submitWithdrawForm}
+        <div
           className={`rounded-2xl border p-4 sm:p-5 space-y-5 ${
             isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
           }`}
         >
           <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3 border-slate-700/40">
             <div>
-              <h3 className="text-base sm:text-lg font-black flex items-center gap-2">
-                <span>Withdraw 💸 (ገንዘብ ማውጫ)</span>
-              </h3>
-              <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                ገንዘብ የሚያወጡበትን ባንክ ይምረጡ፣ መጠን እና የሂሳብ ቁጥርዎን ያስገቡ
-              </p>
+              <h3 className="text-base sm:text-lg font-black">Withdraw 💸 (ገንዘብ ማውጫ)</h3>
+              <div className="flex items-center gap-1.5 text-[11px] font-black mt-1">
+                {[
+                  { s: 1, label: '1. መጠን' },
+                  { s: 2, label: '2. ባንክ' },
+                  { s: 3, label: '3. ማረጋገጫ' },
+                ].map((st) => (
+                  <span
+                    key={st.s}
+                    className={`px-2 py-0.5 rounded-lg border ${
+                      withStep === st.s
+                        ? 'bg-amber-400 text-slate-950 border-amber-300'
+                        : withStep > st.s
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                        : isDark
+                        ? 'bg-slate-800 text-slate-400 border-slate-700'
+                        : 'bg-slate-100 text-slate-500 border-slate-200'
+                    }`}
+                  >
+                    {st.label}
+                  </span>
+                ))}
+              </div>
             </div>
             <div className="px-3.5 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-right">
-              <div className="text-[11px] font-bold text-amber-300">ማውጣት የሚችሉት (Cash Balance)</div>
+              <div className="text-[11px] font-bold text-amber-300">ማውጣት የሚችሉት (Balance)</div>
               <div className="text-base sm:text-lg font-black font-mono-tabular text-amber-400">
                 {currentUser.balance.toFixed(2)} ETB
               </div>
             </div>
           </div>
 
-          {/* Step 1: Bank / Mobile Money Selector for Withdrawal */}
-          <div>
-            <label className="block text-xs font-extrabold mb-2">
-              1. ገንዘብ የሚያወጡበትን መንገድ ይምረጡ (Select Withdrawal Method)፦
-            </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              {activeBanksList.map((m) => {
-                const isSelected = selectedBank === m.id;
-                const isMobileMoney =
-                  m.id === 'Telebirr' ||
-                  m.id === 'M-Pesa' ||
-                  m.shortName.toLowerCase().includes('tele') ||
-                  m.shortName.toLowerCase().includes('pesa');
-                return (
+          {/* WITHDRAW STEP 1: Amount (50 - 75,000 ETB or All) */}
+          {withStep === 1 && (
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-sm sm:text-base font-black text-amber-400">
+                  💸 ስንት ብር ማውጣት ይፈልጋሉ? (50 – 75,000 ETB)
+                </h4>
+                <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  ፈጣን መጠን ይምረጡ ወይም በእጅዎ ይጻፉ።
+                </p>
+              </div>
+
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                {[50, 100, 200, 500, 1000].map((preset) => (
                   <button
-                    key={m.id}
+                    key={preset}
                     type="button"
                     onClick={() => {
-                      setSelectedBank(m.id);
-                      if (isMobileMoney && !withAccount) {
-                        setWithAccount(currentUser.phone);
-                      }
+                      setWithAmount(String(preset));
+                      setFeedbackMsg(null);
                     }}
-                    className={`p-3 rounded-xl text-left border transition-all cursor-pointer ${
-                      isSelected
-                        ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-md ring-2 ring-amber-400/50'
+                    className={`py-2.5 px-2.5 rounded-xl font-mono-tabular text-xs font-black border cursor-pointer transition-all ${
+                      withAmount === String(preset)
+                        ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-xs'
                         : isDark
-                        ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                        : 'bg-slate-50 text-slate-800 border-slate-300 hover:bg-slate-100'
+                        ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
+                        : 'bg-slate-100 border-slate-300 text-slate-800 hover:bg-slate-200'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-base">{isMobileMoney ? '📱' : '🏦'}</span>
-                      {isSelected && <CheckCircle2 className="w-4 h-4 text-slate-950" />}
-                    </div>
-                    <div className="text-xs font-black mt-1 truncate">{m.shortName}</div>
-                    <div
-                      className={`text-[10px] font-bold truncate ${
-                        isSelected ? 'text-slate-900' : 'opacity-65'
-                      }`}
-                    >
-                      {m.bankName}
-                    </div>
+                    {preset} ETB
                   </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Step 2: Quick Withdrawal Amount Pills */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-extrabold">
-                2. የሚያወጡትን የብር መጠን ይምረጡ (Min: 50 ETB · Max: 75,000 ETB)፦
-              </label>
-            </div>
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-              {[50, 100, 200, 500, 1000].map((preset) => (
+                ))}
                 <button
-                  key={preset}
                   type="button"
-                  onClick={() => setWithAmount(String(preset))}
-                  className={`py-2 px-2.5 rounded-xl font-mono-tabular text-xs font-black border cursor-pointer transition-all ${
-                    withAmount === String(preset)
-                      ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-xs'
+                  onClick={() => {
+                    setWithAmount(String(Math.floor(currentUser.balance)));
+                    setFeedbackMsg(null);
+                  }}
+                  className={`py-2.5 px-2.5 rounded-xl text-xs font-black border cursor-pointer transition-all ${
+                    withAmount === String(Math.floor(currentUser.balance))
+                      ? 'bg-amber-500 text-slate-950 border-amber-300'
                       : isDark
-                      ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
-                      : 'bg-slate-100 border-slate-300 text-slate-800 hover:bg-slate-200'
+                      ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-400 hover:bg-emerald-900/50'
+                      : 'bg-emerald-50 border-emerald-300 text-emerald-800'
                   }`}
                 >
-                  {preset} ETB
+                  ሁሉንም ({Math.floor(currentUser.balance)})
                 </button>
-              ))}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold mb-1">የወጪ መጠን (ETB)፦</label>
+                <input
+                  type="number"
+                  min={50}
+                  max={75000}
+                  value={withAmount}
+                  onChange={(e) => setWithAmount(e.target.value)}
+                  placeholder="50 - 75,000 ETB"
+                  className={`w-full px-3.5 py-3 rounded-xl text-sm font-mono-tabular font-black border ${
+                    isDark
+                      ? 'bg-slate-800 border-slate-700 text-white'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
+
               <button
                 type="button"
-                onClick={() => setWithAmount(String(Math.floor(currentUser.balance)))}
-                className={`py-2 px-2.5 rounded-xl text-xs font-black border cursor-pointer transition-all ${
-                  withAmount === String(Math.floor(currentUser.balance))
-                    ? 'bg-amber-500 text-slate-950 border-amber-300'
-                    : isDark
-                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-400 hover:bg-emerald-900/50'
-                    : 'bg-emerald-50 border-emerald-300 text-emerald-800'
-                }`}
+                onClick={() => {
+                  const amt = parseFloat(withAmount);
+                  if (isNaN(amt) || amt < 50) {
+                    setFeedbackMsg({ type: 'err', text: 'ዝቅተኛው የወጪ መጠን 50 ETB ነው።' });
+                    return;
+                  }
+                  if (amt > 75000) {
+                    setFeedbackMsg({ type: 'err', text: 'ከፍተኛው የወጪ መጠን 75,000 ETB ነው።' });
+                    return;
+                  }
+                  if (amt > currentUser.balance) {
+                    setFeedbackMsg({ type: 'err', text: 'በቂ ቀሪ ሂሳብ የለዎትም!' });
+                    return;
+                  }
+                  setFeedbackMsg(null);
+                  setWithStep(2);
+                }}
+                className="w-full py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm cursor-pointer shadow-lg flex items-center justify-center gap-2"
               >
-                ሁሉንም ({Math.floor(currentUser.balance)})
+                <span>ቀጥል — ባንክ / መንገድ ምረጥ</span>
+                <ArrowRight className="w-4 h-4" />
               </button>
             </div>
-          </div>
+          )}
 
-          {/* Step 3: Amount & Account Details Inputs */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-bold mb-1">
-                የወጪ መጠን (ETB)፦
-              </label>
-              <input
-                type="number"
-                min={50}
-                max={75000}
-                value={withAmount}
-                onChange={(e) => setWithAmount(e.target.value)}
-                placeholder="50 - 75,000 ETB"
-                className={`w-full px-3.5 py-2.5 rounded-xl text-sm font-mono-tabular font-bold border ${
-                  isDark
-                    ? 'bg-slate-800 border-slate-700 text-white'
-                    : 'bg-slate-50 border-slate-300 text-slate-900'
-                }`}
-              />
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-xs font-bold">
-                  የእርስዎ {selectedBank === 'Abyssinia' ? 'BOA' : selectedBank} ቁጥር፦
-                </label>
-                {(selectedBank === 'Telebirr' || selectedBank === 'M-Pesa') && (
-                  <button
-                    type="button"
-                    onClick={() => setWithAccount(currentUser.phone)}
-                    className="text-[11px] font-extrabold text-amber-400 hover:underline cursor-pointer"
-                  >
-                    የተመዘገበ ስልኬን ሙላ
-                  </button>
-                )}
+          {/* WITHDRAW STEP 2: Bank / Method Selection (Synced with Admin Active Banks) */}
+          {withStep === 2 && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeedbackMsg(null);
+                    setWithStep(1);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer border ${
+                    isDark
+                      ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
+                      : 'bg-slate-100 border-slate-300 text-slate-800'
+                  }`}
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>ተመለስ (መጠን ቀይር)</span>
+                </button>
+                <span className="px-3 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-black font-mono-tabular">
+                  💸 የሚያወጡት መጠን፦ {withAmount} ETB
+                </span>
               </div>
-              <input
-                type="text"
-                value={withAccount}
-                onChange={(e) => setWithAccount(e.target.value)}
-                placeholder={
-                  selectedBank === 'CBE'
-                    ? '1000...'
-                    : selectedBank === 'Abyssinia'
-                    ? 'BOA Account Number...'
-                    : '09... / 07...'
-                }
-                className={`w-full px-3.5 py-2.5 rounded-xl text-sm font-mono-tabular font-bold border ${
-                  isDark
-                    ? 'bg-slate-800 border-slate-700 text-white'
-                    : 'bg-slate-50 border-slate-300 text-slate-900'
-                }`}
-              />
-            </div>
 
-            <div>
-              <label className="block text-xs font-bold mb-1">
-                የሂሳብ ባለቤት ሙሉ ስም፦
-              </label>
-              <input
-                type="text"
-                value={withHolderName}
-                onChange={(e) => setWithHolderName(e.target.value)}
-                placeholder="ሙሉ ስም"
-                className={`w-full px-3.5 py-2.5 rounded-xl text-sm font-bold border ${
-                  isDark
-                    ? 'bg-slate-800 border-slate-700 text-white'
-                    : 'bg-slate-50 border-slate-300 text-slate-900'
-                }`}
-              />
-            </div>
-          </div>
+              <div>
+                <h4 className="text-sm sm:text-base font-black">
+                  🏦 ገንዘብ የሚቀበሉበትን ባንክ / መንገድ ይምረጡ፦
+                </h4>
+              </div>
 
-          <button
-            type="submit"
-            className="w-full py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm sm:text-base cursor-pointer shadow-lg flex items-center justify-center gap-2"
-          >
-            <ArrowUpCircle className="w-5 h-5" />
-            <span>ወጪ ጠይቅ (Withdraw via {selectedBank === 'Abyssinia' ? 'BOA' : selectedBank})</span>
-          </button>
-        </form>
+              {activeBanksList.length === 0 ? (
+                <div className="p-4 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-400 text-xs font-bold text-center">
+                  ⚠️ ለጊዜው በአድሚን የነቁ ባንኮች የሉም።
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {activeBanksList.map((m) => {
+                    const isSelected = selectedBank === m.id;
+                    const isMobileMoney =
+                      m.id === 'Telebirr' ||
+                      m.id === 'M-Pesa' ||
+                      m.shortName.toLowerCase().includes('tele') ||
+                      m.shortName.toLowerCase().includes('pesa');
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedBank(m.id);
+                          if (isMobileMoney && !withAccount) {
+                            setWithAccount(currentUser.phone);
+                          }
+                          setFeedbackMsg(null);
+                          setWithStep(3);
+                        }}
+                        className={`p-3 rounded-xl text-left border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-md ring-2 ring-amber-400/50'
+                            : isDark
+                            ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                            : 'bg-slate-50 text-slate-800 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-base">{isMobileMoney ? '📱' : '🏦'}</span>
+                          {isSelected && <CheckCircle2 className="w-4 h-4 text-slate-950" />}
+                        </div>
+                        <div className="text-xs font-black mt-1 truncate">{m.shortName}</div>
+                        <div
+                          className={`text-[10px] font-bold truncate ${
+                            isSelected ? 'text-slate-900' : 'opacity-65'
+                          }`}
+                        >
+                          {m.bankName}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {activeBanksList.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeedbackMsg(null);
+                    setWithStep(3);
+                  }}
+                  className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm cursor-pointer shadow-lg flex items-center justify-center gap-2"
+                >
+                  <span>ቀጥል ({selectedBank})</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* WITHDRAW STEP 3: Confirm Account / Phone & Submit */}
+          {withStep === 3 && (
+            <form onSubmit={submitWithdrawForm} className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeedbackMsg(null);
+                    setWithStep(2);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer border ${
+                    isDark
+                      ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
+                      : 'bg-slate-100 border-slate-300 text-slate-800'
+                  }`}
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>ተመለስ (ባንክ ቀይር)</span>
+                </button>
+                <div className="flex items-center gap-2 text-xs font-black">
+                  <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-amber-300">
+                    {selectedBank === 'Abyssinia' ? 'BOA' : selectedBank}
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-400 font-mono-tabular">
+                    {withAmount} ETB
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold">
+                      የእርስዎ {selectedBank === 'Abyssinia' ? 'BOA' : selectedBank} ሂሳብ / ስልክ ቁጥር፦
+                    </label>
+                    {(selectedBank === 'Telebirr' || selectedBank === 'M-Pesa') && (
+                      <button
+                        type="button"
+                        onClick={() => setWithAccount(currentUser.phone)}
+                        className="text-[11px] font-extrabold text-amber-400 hover:underline cursor-pointer"
+                      >
+                        ስልኬን ሙላ
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={withAccount}
+                    onChange={(e) => setWithAccount(e.target.value)}
+                    placeholder={
+                      selectedBank === 'CBE'
+                        ? '1000...'
+                        : selectedBank === 'Abyssinia'
+                        ? 'BOA Account Number...'
+                        : '09... / 07...'
+                    }
+                    className={`w-full px-3.5 py-2.5 rounded-xl text-sm font-mono-tabular font-bold border ${
+                      isDark
+                        ? 'bg-slate-800 border-slate-700 text-white'
+                        : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-1">የሂሳብ ባለቤት ሙሉ ስም፦</label>
+                  <input
+                    type="text"
+                    value={withHolderName}
+                    onChange={(e) => setWithHolderName(e.target.value)}
+                    placeholder="ሙሉ ስም"
+                    className={`w-full px-3.5 py-2.5 rounded-xl text-sm font-bold border ${
+                      isDark
+                        ? 'bg-slate-800 border-slate-700 text-white'
+                        : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm sm:text-base cursor-pointer shadow-lg flex items-center justify-center gap-2"
+              >
+                <ArrowUpCircle className="w-5 h-5" />
+                <span>✅ አረጋግጥና ወጪ ጠይቅ ({withAmount} ETB → {selectedBank === 'Abyssinia' ? 'BOA' : selectedBank})</span>
+              </button>
+            </form>
+          )}
+        </div>
       )}
 
       {activeSubTab === 'transfer' && (

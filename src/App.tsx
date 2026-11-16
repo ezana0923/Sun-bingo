@@ -16,7 +16,13 @@ import {
   hasDeviceRegisteredPhone,
   getDeviceClientId,
   subscribeRealtimeRoomSync,
+  subscribeGameNotifications,
+  getSignedAccountToken,
+  saveSignedAccountToken,
+  getLocalWalletBalanceByPhone,
+  saveLocalWalletBalanceByPhone,
 } from './utils/realtimeRoomClient';
+import { applyTelegramSwipeLock, scrollAppToTop } from './utils/telegramViewport';
 import {
   Language,
   TransactionRecord,
@@ -24,6 +30,7 @@ import {
   BankPaymentAccount,
   HeroBannerAd,
   CallSpeed,
+  GameStartNotificationEvent,
 } from './types/bingo';
 import { PAYMENT_ACCOUNTS } from './utils/translations';
 import {
@@ -47,6 +54,8 @@ import {
   X,
   User,
   Home,
+  Edit3,
+  Check,
 } from 'lucide-react';
 import homePromoBannerImg from './assets/images/home_promo_banner_1794572556701.jpg';
 import gameTileLudoImg from './assets/images/game_tile_ludo_1794572556916.jpg';
@@ -477,6 +486,11 @@ export default function App() {
   const [promoSlideIndex, setPromoSlideIndex] = useState(0);
   const [hubMenuOpen, setHubMenuOpen] = useState(false);
   const [hubNotice, setHubNotice] = useState<string | null>(null);
+  const [isEditingHubName, setIsEditingHubName] = useState(false);
+  const [hubNameDraft, setHubNameDraft] = useState('');
+  const [isSavingHubName, setIsSavingHubName] = useState(false);
+  const [activeGameNotification, setActiveGameNotification] =
+    useState<GameStartNotificationEvent | null>(null);
   const hubMenuRef = useRef<HTMLDivElement | null>(null);
   const [liveGameCounts, setLiveGameCounts] = useState<{
     fast: number;
@@ -627,6 +641,41 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [hubNotice]);
 
+  // Persistent Telegram Mini App Viewport Lock (prevent downward swipe-close or page jump)
+  useEffect(() => {
+    const lockTg = () => {
+      try {
+        const w = window as unknown as {
+          Telegram?: {
+            WebApp?: {
+              ready?: () => void;
+              expand?: () => void;
+              disableVerticalSwipes?: () => void;
+            };
+          };
+          TelegramWebviewProxy?: {
+            postEvent?: (name: string, data: string) => void;
+          };
+        };
+        w.Telegram?.WebApp?.ready?.();
+        w.Telegram?.WebApp?.expand?.();
+        w.Telegram?.WebApp?.disableVerticalSwipes?.();
+        w.TelegramWebviewProxy?.postEvent?.('web_app_expand', '');
+        w.TelegramWebviewProxy?.postEvent?.(
+          'web_app_setup_swipe_behavior',
+          JSON.stringify({ allow_vertical_swipe: false })
+        );
+      } catch {}
+    };
+    lockTg();
+    const timer = window.setInterval(lockTg, 2000);
+    window.addEventListener('focus', lockTg);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', lockTg);
+    };
+  }, []);
+
   // Active game mode: defaults to 'fast' (Fast Bingo)
   const [gameMode, setGameMode] = useState<'fast' | 'regular' | 'keno' | 'ludo' | 'ramino'>(() => {
     if (typeof window !== 'undefined') {
@@ -665,6 +714,8 @@ export default function App() {
       setHubNotice(tHub.soonNotice(titleMap[mode] || mode));
       return;
     }
+    scrollAppToTop();
+    applyTelegramSwipeLock();
     setOpenSettingsTrigger(0);
     setGameMode(mode);
     setShowGameHub(false);
@@ -678,6 +729,8 @@ export default function App() {
   };
 
   const handleReturnToHub = useCallback(() => {
+    scrollAppToTop();
+    applyTelegramSwipeLock();
     setShowGameHub(true);
     setHubMenuOpen(false);
     try {
@@ -848,11 +901,14 @@ export default function App() {
   // Shared Birr Wallet and Users (single unified wallet across all games)
   const [sharedUsers, setSharedUsers] = useState<UserAccount[]>(() => {
     const devIdentity = getOrCreateDevicePlayerIdentity();
-    let initialBalance = 500.0;
+    let initialBalance = 0;
     if (typeof window !== 'undefined') {
-      const savedBal = parseFloat(localStorage.getItem('sun_unified_wallet_balance_v1') || '');
-      if (!Number.isNaN(savedBal) && savedBal >= 0) {
-        initialBalance = savedBal;
+      const phoneSaved = getLocalWalletBalanceByPhone(devIdentity.phone);
+      const legacySaved = parseFloat(localStorage.getItem('sun_unified_wallet_balance_v1') || '');
+      if (phoneSaved !== null) {
+        initialBalance = phoneSaved;
+      } else if (!Number.isNaN(legacySaved) && legacySaved >= 0) {
+        initialBalance = legacySaved;
       }
     }
     return [
@@ -878,6 +934,22 @@ export default function App() {
   const [isGlobalWalletOpen, setIsGlobalWalletOpen] = useState<boolean>(false);
   const [globalWalletTab, setGlobalWalletTab] = useState<'deposit' | 'withdraw' | 'transfer' | 'history'>('deposit');
   const [globalWalletNotice, setGlobalWalletNotice] = useState<string | null>(null);
+
+  // Reset scroll to top whenever navigating between Hub, Games, Settings, Wallet, or Admin
+  useEffect(() => {
+    const resetScrollTop = () => {
+      scrollAppToTop();
+      applyTelegramSwipeLock();
+      try {
+        document.querySelectorAll('[data-scroll-reset="true"]').forEach((el) => {
+          (el as HTMLElement).scrollTop = 0;
+        });
+      } catch {}
+    };
+    resetScrollTop();
+    const rafId = window.requestAnimationFrame(resetScrollTop);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [isLoggedIn, showGameHub, gameMode, viewMode, isGlobalWalletOpen, globalWalletTab, openSettingsTrigger]);
 
   const sharedUsersRef = useRef<UserAccount[]>(sharedUsers);
   sharedUsersRef.current = sharedUsers;
@@ -955,12 +1027,15 @@ export default function App() {
           }),
         })
           .then((r) => r.json())
-          .then((data) => {
+            .then((data) => {
             if (data?.ok && data.transaction) {
               setSharedTransactions((prev) => {
                 const filtered = prev.filter((t) => t.id !== tempId && t.id !== data.transaction.id);
                 return [data.transaction as TransactionRecord, ...filtered].slice(0, 600);
               });
+            }
+            if (data?.ok && data.accountToken && curUser?.phone) {
+              saveSignedAccountToken(curUser.phone, data.accountToken);
             }
           })
           .catch(() => {});
@@ -972,32 +1047,121 @@ export default function App() {
   const currentUserPhone = sharedUsers[0]?.phone;
   const currentUserBalance = sharedUsers[0]?.balance;
 
-  // Persist unified wallet locally whenever it changes
+  // Persist unified wallet locally (globally + per-phone) whenever it changes
   useEffect(() => {
     if (typeof currentUserBalance === 'number' && !Number.isNaN(currentUserBalance)) {
       try {
         localStorage.setItem('sun_unified_wallet_balance_v1', String(currentUserBalance));
+        if (currentUserPhone) {
+          saveLocalWalletBalanceByPhone(currentUserPhone, currentUserBalance);
+        }
       } catch {}
     }
-  }, [currentUserBalance]);
+  }, [currentUserBalance, currentUserPhone]);
 
-  // Keep unified wallet & transactions synced with server across Home Hub, Bingo, Keno, and Ramino
+  // Subscribe to real-time game start & admin notifications
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    let hideTimer: number | null = null;
+    const unsubNotify = subscribeGameNotifications((notif) => {
+      setActiveGameNotification(notif);
+      if (hideTimer) window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => {
+        setActiveGameNotification(null);
+      }, 8000);
+    });
+    return () => {
+      unsubNotify();
+      if (hideTimer) window.clearTimeout(hideTimer);
+    };
+  }, [isLoggedIn]);
+
+  // Keep unified wallet, username, bank accounts & session recovery synced across all games
   useEffect(() => {
     if (!isLoggedIn) return;
     const clientId = getDeviceClientId();
-    const phoneParam = encodeURIComponent(sharedUsersRef.current[0]?.phone || '');
-    const nameParam = encodeURIComponent(sharedUsersRef.current[0]?.name || 'Sun Player');
+    const curPhone = sharedUsersRef.current[0]?.phone || '';
+    const curName = sharedUsersRef.current[0]?.name || 'Sun Player';
+    const accountToken = curPhone ? getSignedAccountToken(curPhone) : '';
+    const phoneParam = encodeURIComponent(curPhone);
+    const nameParam = encodeURIComponent(curName);
+
+    if (curPhone && accountToken) {
+      fetch(buildApiUrl('/api/auth/restore-session'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: curPhone,
+          name: curName,
+          accountToken,
+        }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res?.ok && res.player) {
+            if (res.accountToken) {
+              saveSignedAccountToken(res.player.phone, res.accountToken);
+            }
+            saveDevicePlayerIdentity(res.player.name, res.player.phone);
+            if (typeof res.player.balance === 'number') {
+              saveLocalWalletBalanceByPhone(res.player.phone, res.player.balance);
+            }
+            setSharedUsers((prev) =>
+              prev.map((u, idx) =>
+                idx === 0
+                  ? {
+                      ...u,
+                      name: res.player.name || u.name,
+                      phone: res.player.phone || u.phone,
+                      balance:
+                        typeof res.player.balance === 'number' ? res.player.balance : u.balance,
+                      bonusBalance:
+                        typeof res.player.bonusBalance === 'number'
+                          ? res.player.bonusBalance
+                          : u.bonusBalance,
+                      isBlocked: !!res.player.isBlocked,
+                    }
+                  : u
+              )
+            );
+          }
+        })
+        .catch(() => {});
+    }
 
     fetch(
       buildApiUrl(
-        `/api/live-room/state?mode=fast&phone=${phoneParam}&name=${nameParam}&clientId=${encodeURIComponent(clientId)}`
-      )
+        `/api/live-room/state?mode=fast&phone=${phoneParam}&name=${nameParam}&clientId=${encodeURIComponent(
+          clientId
+        )}${accountToken ? `&accountToken=${encodeURIComponent(accountToken)}` : ''}`
+      ),
+      {
+        headers: accountToken ? { 'x-account-token': accountToken } : undefined,
+      }
     )
       .then((r) => r.json())
       .then((data) => {
         if (!data?.ok) return;
+        if (data.accountToken && data.player?.phone) {
+          saveSignedAccountToken(data.player.phone, data.accountToken);
+        }
         if (typeof data.requireDepositApproval === 'boolean') {
           setRequireDepositApproval(data.requireDepositApproval);
+        }
+        const incomingBanks =
+          (Array.isArray(data.bankAccounts) && data.bankAccounts.length > 0 && data.bankAccounts) ||
+          (Array.isArray(data.fastRoom?.bankAccounts) &&
+            data.fastRoom.bankAccounts.length > 0 &&
+            data.fastRoom.bankAccounts) ||
+          (Array.isArray(data.regularRoom?.bankAccounts) &&
+            data.regularRoom.bankAccounts.length > 0 &&
+            data.regularRoom.bankAccounts) ||
+          null;
+        if (incomingBanks) {
+          setBankAccounts(incomingBanks);
+          try {
+            localStorage.setItem('ezi_bank_accounts_v2', JSON.stringify(incomingBanks));
+          } catch {}
         }
         if (Array.isArray(data.transactions)) {
           mergeGlobalTransactions(data.transactions);
@@ -1010,6 +1174,9 @@ export default function App() {
             const myPhone = prev[0]?.phone;
             if (!myPhone) return prev;
             const serverMe = syncedPlayers.find((p) => p.phone === myPhone);
+            if (serverMe?.name && serverMe.name !== prev[0].name) {
+              saveDevicePlayerIdentity(serverMe.name, myPhone);
+            }
             const others = syncedPlayers
               .filter((p) => p.phone !== myPhone)
               .map((p, idx) => ({
@@ -1029,6 +1196,7 @@ export default function App() {
             const updatedMe = serverMe
               ? {
                   ...prev[0],
+                  name: serverMe.name || prev[0].name,
                   balance: typeof serverMe.balance === 'number' ? serverMe.balance : prev[0].balance,
                   bonusBalance:
                     typeof serverMe.bonusBalance === 'number' ? serverMe.bonusBalance : prev[0].bonusBalance,
@@ -1045,6 +1213,20 @@ export default function App() {
       if (typeof msg?.requireDepositApproval === 'boolean') {
         setRequireDepositApproval(msg.requireDepositApproval);
       }
+      const msgBanks =
+        (Array.isArray(msg?.fastRoom?.bankAccounts) &&
+          msg.fastRoom.bankAccounts.length > 0 &&
+          msg.fastRoom.bankAccounts) ||
+        (Array.isArray(msg?.regularRoom?.bankAccounts) &&
+          msg.regularRoom.bankAccounts.length > 0 &&
+          msg.regularRoom.bankAccounts) ||
+        null;
+      if (msgBanks) {
+        setBankAccounts(msgBanks);
+        try {
+          localStorage.setItem('ezi_bank_accounts_v2', JSON.stringify(msgBanks));
+        } catch {}
+      }
       if (Array.isArray(msg?.transactions)) {
         mergeGlobalTransactions(msg.transactions);
       }
@@ -1054,6 +1236,9 @@ export default function App() {
           const myPhone = prev[0]?.phone;
           if (!myPhone) return prev;
           const serverMe = syncedPlayers.find((p) => p.phone === myPhone);
+          if (serverMe?.name && serverMe.name !== prev[0].name) {
+            saveDevicePlayerIdentity(serverMe.name, myPhone);
+          }
           const others = syncedPlayers
             .filter((p) => p.phone !== myPhone)
             .map((p, idx) => ({
@@ -1073,6 +1258,7 @@ export default function App() {
           const updatedMe = serverMe
             ? {
                 ...prev[0],
+                name: serverMe.name || prev[0].name,
                 balance: typeof serverMe.balance === 'number' ? serverMe.balance : prev[0].balance,
                 bonusBalance:
                   typeof serverMe.bonusBalance === 'number' ? serverMe.bonusBalance : prev[0].bonusBalance,
@@ -1155,6 +1341,12 @@ export default function App() {
       }
     } catch {}
     saveDevicePlayerIdentity(player.name, player.phone);
+    if (player.accountToken) {
+      saveSignedAccountToken(player.phone, player.accountToken);
+    }
+    if (typeof player.balance === 'number') {
+      saveLocalWalletBalanceByPhone(player.phone, player.balance);
+    }
     setIsLoggedIn(true);
 
     setSharedUsers((prev) => {
@@ -1172,7 +1364,7 @@ export default function App() {
         name: player.name,
         phone: player.phone,
         passwordHash: player.passwordHash || me?.passwordHash || '****',
-        balance: typeof player.balance === 'number' ? player.balance : me?.balance ?? 500,
+        balance: typeof player.balance === 'number' ? player.balance : me?.balance ?? 0,
         bonusBalance:
           typeof player.bonusBalance === 'number' ? player.bonusBalance : me?.bonusBalance ?? 15,
       };
@@ -1200,6 +1392,50 @@ export default function App() {
     });
   };
 
+  // Inline Home Hub Menu Username Save Handler (syncs to backend & all games)
+  const handleSaveHubUsername = useCallback(async () => {
+    const me = sharedUsersRef.current[0];
+    const cleanName = hubNameDraft.trim();
+    if (!me || cleanName.length < 2 || isSavingHubName) return;
+    setIsSavingHubName(true);
+    try {
+      const accountToken = getSignedAccountToken(me.phone);
+      const res = await fetch(buildApiUrl('/api/player/update-profile'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: me.phone,
+          name: cleanName,
+          accountToken: accountToken || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data?.ok) {
+        const finalName = data.player?.name || cleanName;
+        saveDevicePlayerIdentity(finalName, me.phone);
+        if (data.accountToken) {
+          saveSignedAccountToken(me.phone, data.accountToken);
+        }
+        setSharedUsers((prev) =>
+          prev.map((u, idx) => (idx === 0 ? { ...u, name: finalName } : u))
+        );
+        setIsEditingHubName(false);
+        setHubNotice(`✅ የመጫወቻ ስምዎ ወደ "${finalName}" ተቀይሯል (ሁሉም ጨዋታዎች ላይ ተስተካክሏል)!`);
+      } else {
+        setHubNotice(data?.error || '❌ ስሙን መቀየር አልተቻለም።');
+      }
+    } catch {
+      saveDevicePlayerIdentity(cleanName, me.phone);
+      setSharedUsers((prev) =>
+        prev.map((u, idx) => (idx === 0 ? { ...u, name: cleanName } : u))
+      );
+      setIsEditingHubName(false);
+      setHubNotice(`✅ የመጫወቻ ስምዎ ወደ "${cleanName}" ተቀይሯል!`);
+    } finally {
+      setIsSavingHubName(false);
+    }
+  }, [hubNameDraft, isSavingHubName]);
+
   // Admin Panel states
   const [adminCallSpeed, setAdminCallSpeed] = useState<CallSpeed>(3);
   const [adminIsPlaying, setAdminIsPlaying] = useState<boolean>(false);
@@ -1214,7 +1450,7 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen font-sans flex flex-col transition-colors ${
+      className={`min-h-full font-sans flex flex-col transition-colors overscroll-y-contain ${
         isDark
           ? 'bg-[#050B16] text-slate-100 selection:bg-amber-500 selection:text-slate-950'
           : 'bg-slate-100 text-slate-900 selection:bg-blue-500 selection:text-white'
@@ -1688,16 +1924,65 @@ export default function App() {
                     }`}
                   >
                     <div
-                      className={`px-3 py-2 rounded-xl text-xs border ${
+                      className={`px-3 py-2 rounded-xl text-xs border space-y-2 ${
                         isDark
                           ? 'bg-slate-900/80 border-slate-800 text-slate-300'
                           : 'bg-slate-50 border-slate-200 text-slate-700'
                       }`}
                     >
-                      <div className="font-black text-amber-400 truncate">
-                        {sharedUsers[0]?.name || 'Sun Player'}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-black text-amber-400 truncate">
+                            {sharedUsers[0]?.name || 'Sun Player'}
+                          </div>
+                          <div className="text-[11px] opacity-75">{sharedUsers[0]?.phone}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHubNameDraft(sharedUsers[0]?.name || '');
+                            setIsEditingHubName((v) => !v);
+                          }}
+                          className={`px-2 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 cursor-pointer transition-colors ${
+                            isDark
+                              ? 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700'
+                              : 'bg-white hover:bg-slate-100 text-amber-700 border border-slate-300'
+                          }`}
+                          title="ስም አስተካክል"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          <span>ስም ቀይር</span>
+                        </button>
                       </div>
-                      <div className="text-[11px] opacity-75">{sharedUsers[0]?.phone}</div>
+
+                      {isEditingHubName && (
+                        <div className="flex items-center gap-1.5 pt-1 border-t border-slate-700/40">
+                          <input
+                            type="text"
+                            value={hubNameDraft}
+                            onChange={(e) => setHubNameDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveHubUsername();
+                            }}
+                            maxLength={24}
+                            placeholder="አዲስ ስም ያስገቡ..."
+                            className={`flex-1 min-w-0 px-2 py-1 rounded-lg text-xs border outline-none ${
+                              isDark
+                                ? 'bg-slate-950 border-slate-700 text-white focus:border-amber-400'
+                                : 'bg-white border-slate-300 text-slate-900 focus:border-amber-500'
+                            }`}
+                          />
+                          <button
+                            type="button"
+                            disabled={isSavingHubName || hubNameDraft.trim().length < 2}
+                            onClick={handleSaveHubUsername}
+                            className="p-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-black cursor-pointer shrink-0"
+                            title="አስቀምጥ"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* Notifications / Bell inside Menu */}
@@ -2058,7 +2343,7 @@ export default function App() {
               onRemoveBankAccount={handleRemoveBankAccount}
             />
           ) : gameMode === 'keno' ? (
-            <div className="flex-1 w-full flex flex-col items-center justify-start overflow-y-auto">
+            <div data-scroll-reset="true" className="flex-1 w-full flex flex-col items-center justify-start overflow-y-auto overscroll-y-contain">
               <div className="w-full max-w-2xl min-h-full">
                 <FastKenoScreen
                   language={language}
@@ -2084,7 +2369,7 @@ export default function App() {
               </div>
             </div>
           ) : gameMode === 'ludo' ? (
-            <div className="flex-1 w-full flex flex-col items-center justify-start overflow-y-auto p-2 sm:p-4">
+            <div data-scroll-reset="true" className="flex-1 w-full flex flex-col items-center justify-start overflow-y-auto overscroll-y-contain p-2 sm:p-4">
               <div className="w-full max-w-4xl">
                 <LudoMasterGame
                   balanceBirr={sharedUsers[0]?.balance ?? 500}
@@ -2102,7 +2387,7 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <div className="fixed inset-0 z-50 bg-[#0f0728] overflow-y-auto overflow-x-hidden flex flex-col">
+            <div data-scroll-reset="true" className="fixed inset-0 z-50 bg-[#0f0728] overflow-y-auto overscroll-y-contain overflow-x-hidden flex flex-col">
               <ModernRaminoGame
                 language={language}
                 onChangeLanguage={handleUpdateLanguage}
@@ -2385,6 +2670,60 @@ export default function App() {
           window.location.hash = '';
         }}
       />
+
+      {/* Global Real-time Game Start / Admin Broadcast Toast */}
+      {isLoggedIn && activeGameNotification && (
+        <div className="fixed top-3 inset-x-3 sm:left-auto sm:right-4 sm:max-w-sm z-[250000] pointer-events-auto">
+          <div
+            className={`rounded-2xl border shadow-2xl p-3 flex items-start gap-2.5 backdrop-blur-md ${
+              isDark
+                ? 'bg-[#0F172A]/95 border-amber-500/50 text-slate-100'
+                : 'bg-white/95 border-amber-400 text-slate-900'
+            }`}
+          >
+            <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+              <Bell className="w-4 h-4" />
+            </div>
+            <div className="flex-1 min-w-0 space-y-1">
+              <div className="text-xs font-black text-amber-400 truncate">
+                {activeGameNotification.title}
+              </div>
+              <div className="text-[11px] leading-snug opacity-90 whitespace-pre-line">
+                {activeGameNotification.message}
+              </div>
+              {activeGameNotification.game &&
+                activeGameNotification.game !== 'admin' &&
+                ['fast', 'regular', 'keno', 'ramino', 'ludo'].includes(activeGameNotification.game) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = activeGameNotification.game as
+                        | 'fast'
+                        | 'regular'
+                        | 'keno'
+                        | 'ramino'
+                        | 'ludo';
+                      setActiveGameNotification(null);
+                      setViewMode('game');
+                      handleSwitchMode(target);
+                    }}
+                    className="mt-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-black cursor-pointer"
+                  >
+                    🎮 አሁን ግባ
+                  </button>
+                )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveGameNotification(null)}
+              className="p-1 rounded-lg opacity-70 hover:opacity-100 cursor-pointer shrink-0"
+              aria-label="Close Notification"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

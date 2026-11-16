@@ -206,6 +206,15 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
       localStorage.setItem('ezi_pref_regular_sort_mode', sortMode);
     }
   }, [sortMode]);
+
+  useEffect(() => {
+    try {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      document.getElementById('root')?.scrollTo(0, 0);
+    } catch {}
+  }, [activeTab]);
   const [registrationMinutes, setRegistrationMinutes] = useState<number | null>(null);
   const [isPatternExplicitlySelected, setIsPatternExplicitlySelected] = useState<boolean>(true);
 

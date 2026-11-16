@@ -46,6 +46,9 @@ const SHARED_APP_URL =
   'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
 
 const BOT_STORE_PATH = path.join(__dirname, '.telegram-bots.json');
+const BOT_STORE_BACKUP_PATH = '/tmp/sunbingo-bots-backup.json';
+const ACCOUNT_TOKEN_SECRET =
+  process.env.SESSION_HMAC_SECRET || 'SunBingo_2026_Secure_Account_Ledger_Key_v1';
 
 // Store active Telegram bot polling loops by token
 const activeBots = new Map<
@@ -76,19 +79,22 @@ const pendingRaminoRoomByChatId = new Map<number, string>();
 const chatWelcomeBonusClaimed = new Set<number>();
 // Track prompt message IDs per chatId so we can delete the "📱 Share Phone Number" prompt bubbles once registered
 const promptMessageIdsByChat = new Map<number, number[]>();
-// Track per-chat interactive Deposit / Withdraw / Transfer flow state so typed amounts or account numbers work seamlessly
+// Track per-chat interactive Deposit / Withdraw / Transfer / Registration flow state
 interface ChatFlowState {
   mode:
+    | 'register_password'
     | 'deposit'
     | 'deposit_amount'
     | 'deposit_method'
     | 'deposit_sms'
     | 'withdraw_amount'
+    | 'withdraw_method'
     | 'withdraw_account'
     | 'transfer';
   method?: 'CBE' | 'Abyssinia' | 'Telebirr' | 'M-Pesa' | 'Cash' | string;
   amount?: number;
   reference?: string;
+  targetPhone?: string;
 }
 const chatFlowByChatId = new Map<number, ChatFlowState>();
 let globalRegisteredPhone: string | null = null;
@@ -187,6 +193,12 @@ let adminPinConfig = {
   depositBonusPercent: 0,
   minDepositAmount: 10,
   minWithdrawAmount: 100,
+  autoNotifyGames: {
+    fast: true,
+    regular: true,
+    keno: true,
+    ramino: true,
+  },
 };
 
 // 2. MULTIPLAYER LIVE SERVER GAME ROOMS (Server-Authoritative Real-Time Sync for ALL Connected Phones)
@@ -265,6 +277,7 @@ export interface ServerLiveRoomState {
     accountNumber: string;
     accountHolder: string;
     badgeBg: string;
+    isActive?: boolean;
   }[];
   sha256Hash: string;
   lastBallTickAt: number;
@@ -280,6 +293,7 @@ const DEFAULT_SERVER_BANK_ACCOUNTS: {
   accountNumber: string;
   accountHolder: string;
   badgeBg: string;
+  isActive?: boolean;
 }[] = [
   {
     id: 'CBE',
@@ -288,6 +302,7 @@ const DEFAULT_SERVER_BANK_ACCOUNTS: {
     accountNumber: '1000112964936',
     accountHolder: 'Ezana Gebremedhin',
     badgeBg: 'bg-purple-700 text-white',
+    isActive: true,
   },
   {
     id: 'Abyssinia',
@@ -296,6 +311,7 @@ const DEFAULT_SERVER_BANK_ACCOUNTS: {
     accountNumber: '66816532',
     accountHolder: 'Ezana Gebremedhin',
     badgeBg: 'bg-amber-500 text-slate-950',
+    isActive: true,
   },
   {
     id: 'Telebirr',
@@ -304,6 +320,7 @@ const DEFAULT_SERVER_BANK_ACCOUNTS: {
     accountNumber: '0942742684',
     accountHolder: 'Ezana Gebremedhin',
     badgeBg: 'bg-sky-500 text-white',
+    isActive: true,
   },
   {
     id: 'M-Pesa',
@@ -312,6 +329,7 @@ const DEFAULT_SERVER_BANK_ACCOUNTS: {
     accountNumber: '0711742684',
     accountHolder: 'Ezana Gebremedhin',
     badgeBg: 'bg-emerald-600 text-white',
+    isActive: true,
   },
 ];
 
@@ -322,7 +340,12 @@ let persistedBankAccounts: {
   accountNumber: string;
   accountHolder: string;
   badgeBg: string;
+  isActive?: boolean;
 }[] = [...DEFAULT_SERVER_BANK_ACCOUNTS];
+
+function getActiveServerBankAccounts() {
+  return persistedBankAccounts.filter((b) => b.isActive !== false);
+}
 
 const DEFAULT_SERVER_HERO_BANNERS: {
   id: string;
@@ -509,8 +532,10 @@ function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
     regularLockedCartelas: Array.from(regularRoomLockedCartelas.values()),
     transactions: serverTransactions,
     players: Array.from(playersByPhone.values()),
+    bankAccounts: persistedBankAccounts,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
     smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+    autoNotifyGames: adminPinConfig.autoNotifyGames,
     timestamp: now,
   });
 
@@ -529,6 +554,70 @@ function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
       res.write(`data: ${payload}\n\n`);
     } catch {
       sseClients.delete(res);
+    }
+  }
+}
+
+const lastGameNotifySentAt = new Map<string, number>();
+
+function emitGameNotification(opts: {
+  game: 'fast' | 'regular' | 'keno' | 'ramino' | 'admin';
+  title: string;
+  message: string;
+  sendTelegram?: boolean;
+  throttleMs?: number;
+}) {
+  const { game, title, message, sendTelegram = true, throttleMs = 45000 } = opts;
+  if (game !== 'admin') {
+    const cfg = adminPinConfig.autoNotifyGames || { fast: true, regular: true, keno: true, ramino: true };
+    if (cfg[game] === false) return;
+    const prevTs = lastGameNotifySentAt.get(game) || 0;
+    if (Date.now() - prevTs < throttleMs) return;
+    lastGameNotifySentAt.set(game, Date.now());
+  }
+
+  const eventObj = {
+    id: `gntf-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    game,
+    title,
+    message,
+    timestamp: Date.now(),
+  };
+
+  const payload = JSON.stringify({
+    type: 'game:notify',
+    notification: eventObj,
+  });
+
+  for (const client of wsClients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payload);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  for (const res of sseClients) {
+    try {
+      res.write(`data: ${payload}\n\n`);
+    } catch {
+      sseClients.delete(res);
+    }
+  }
+
+  if (sendTelegram) {
+    const firstActiveBot = Array.from(activeBots.keys())[0];
+    if (firstActiveBot) {
+      const targetChatIds = new Set<number>();
+      for (const cid of registeredChatPhones.keys()) targetChatIds.add(cid);
+      for (const p of playersByPhone.values()) {
+        if (p.chatId) targetChatIds.add(p.chatId);
+      }
+      const tgText = `🔔 *${escapeTelegramMarkdown(title)}*\n━━━━━━━━━━━━━━━━━━\n${message}`;
+      for (const cid of targetChatIds) {
+        sendTelegramMessage(firstActiveBot, cid, tgText, undefined, undefined, true).catch(() => {});
+      }
     }
   }
 }
@@ -711,6 +800,15 @@ setInterval(() => {
           room.isPaused = false;
           deductLockedStakesOnGameStart(room, lockedMap);
           drawNextServerBallForRoom(room);
+          emitGameNotification({
+            game: mode,
+            title: mode === 'fast' ? `⚡ Fast Bingo (${room.stakeAmount} ETB) ተጀምሯል!` : `👑 ልዩ ቢንጎ (${room.stakeAmount} ETB) ተጀምሯል!`,
+            message:
+              mode === 'fast'
+                ? `የ ${room.stakeAmount} ETB ዙር #${room.gameMatchId} ቁጥር ጥሪ ተጀምሯል! በቀጣዩ ዙር ይቀላቀሉ።`
+                : `የልዩ ቢንጎ ዙር #${room.gameMatchId} (መደብ ${room.stakeAmount} ETB) ተጀምሯል!`,
+            throttleMs: 30000,
+          });
         } else {
           room.preGameCountdown -= 1;
           broadcastRealtimeSync(mode);
@@ -787,6 +885,85 @@ function normalizeEthiopianPhone(rawPhone: string): string {
     return `0${digits}`;
   }
   return digits;
+}
+
+interface SignedAccountSnapshotPayload {
+  phone: string;
+  name: string;
+  passwordHash?: string;
+  balance: number;
+  bonusBalance: number;
+  referralEarnings: number;
+  referredCount: number;
+  chatId?: number;
+  ts: number;
+}
+
+function createSignedPlayerToken(player: ServerPlayerRecord): string {
+  const payloadObj: SignedAccountSnapshotPayload = {
+    phone: normalizeEthiopianPhone(player.phone) || player.phone,
+    name: player.name,
+    passwordHash: player.passwordHash,
+    balance: Number((player.balance ?? 0).toFixed(2)),
+    bonusBalance: Number((player.bonusBalance ?? 0).toFixed(2)),
+    referralEarnings: Number((player.referralEarnings ?? 0).toFixed(2)),
+    referredCount: Number(player.referredCount ?? 0),
+    chatId: player.chatId,
+    ts: Date.now(),
+  };
+  const dataB64 = Buffer.from(JSON.stringify(payloadObj), 'utf-8').toString('base64url');
+  const sig = crypto.createHmac('sha256', ACCOUNT_TOKEN_SECRET).update(dataB64).digest('base64url');
+  return `${dataB64}.${sig}`;
+}
+
+function verifySignedPlayerToken(token?: string | null): SignedAccountSnapshotPayload | null {
+  try {
+    if (!token || typeof token !== 'string' || !token.includes('.')) return null;
+    const [dataB64, sig] = token.trim().split('.');
+    if (!dataB64 || !sig) return null;
+    const expectedSig = crypto
+      .createHmac('sha256', ACCOUNT_TOKEN_SECRET)
+      .update(dataB64)
+      .digest('base64url');
+    if (sig.length !== expectedSig.length) return null;
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) return null;
+    const parsed = JSON.parse(Buffer.from(dataB64, 'base64url').toString('utf-8')) as SignedAccountSnapshotPayload;
+    if (!parsed || !parsed.phone || !Number.isFinite(parsed.balance) || parsed.balance < 0 || parsed.balance > 2000000) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function restorePlayerFromSignedTokenIfMissing(token?: string | null): ServerPlayerRecord | null {
+  const snap = verifySignedPlayerToken(token);
+  if (!snap) return null;
+  const cleanPhone = normalizeEthiopianPhone(snap.phone) || snap.phone;
+  const existing = playersByPhone.get(cleanPhone);
+  if (!existing) {
+    const restored: ServerPlayerRecord = {
+      id: `usr-${cleanPhone.slice(-4)}-${Date.now().toString().slice(-3)}`,
+      phone: cleanPhone,
+      name: snap.name || `Player_${cleanPhone.slice(-4)}`,
+      passwordHash: snap.passwordHash,
+      chatId: snap.chatId,
+      balance: Number(snap.balance.toFixed(2)),
+      bonusBalance: Number((snap.bonusBalance ?? 15).toFixed(2)),
+      referralEarnings: Number((snap.referralEarnings ?? 0).toFixed(2)),
+      referredCount: Number(snap.referredCount ?? 0),
+      isBlocked: false,
+      updatedAt: new Date().toLocaleString(),
+    };
+    playersByPhone.set(cleanPhone, restored);
+    if (snap.chatId) {
+      registeredChatPhones.set(snap.chatId, cleanPhone);
+    }
+    saveBotsToDisk();
+    return restored;
+  }
+  return existing;
 }
 
 function ensurePlayerRecord(phone: string, name = 'Player', chatId?: number): ServerPlayerRecord {
@@ -983,7 +1160,17 @@ function saveBotsToDisk() {
       gameVisibility: persistedGameVisibility,
       homeHeroAds: persistedHomeHeroAds.slice(0, 25),
     };
-    fs.writeFileSync(BOT_STORE_PATH, JSON.stringify(payload, null, 2), 'utf-8');
+    const serialized = JSON.stringify(payload, null, 2);
+    const tmpMain = `${BOT_STORE_PATH}.tmp`;
+    fs.writeFileSync(tmpMain, serialized, 'utf-8');
+    fs.renameSync(tmpMain, BOT_STORE_PATH);
+    try {
+      const tmpBak = `${BOT_STORE_BACKUP_PATH}.tmp`;
+      fs.writeFileSync(tmpBak, serialized, 'utf-8');
+      fs.renameSync(tmpBak, BOT_STORE_BACKUP_PATH);
+    } catch {
+      // ignore backup write errors
+    }
   } catch {
     // ignore disk write errors
   }
@@ -991,13 +1178,21 @@ function saveBotsToDisk() {
 
 function loadBotsFromDisk() {
   try {
-    if (!fs.existsSync(BOT_STORE_PATH)) {
+    const sourcePath = fs.existsSync(BOT_STORE_PATH)
+      ? BOT_STORE_PATH
+      : fs.existsSync(BOT_STORE_BACKUP_PATH)
+      ? BOT_STORE_BACKUP_PATH
+      : null;
+    if (!sourcePath) {
       return;
     }
-    const raw = fs.readFileSync(BOT_STORE_PATH, 'utf-8');
+    const raw = fs.readFileSync(sourcePath, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<PersistedBotData>;
     if (Array.isArray(parsed.persistedBankAccounts) && parsed.persistedBankAccounts.length > 0) {
-      persistedBankAccounts = parsed.persistedBankAccounts;
+      persistedBankAccounts = parsed.persistedBankAccounts.map((b) => ({
+        ...b,
+        isActive: b.isActive !== false,
+      }));
       for (const stk of FAST_STAKE_TIERS) {
         if (fastRoomsByStake[stk]) fastRoomsByStake[stk].bankAccounts = [...persistedBankAccounts];
       }
@@ -1126,6 +1321,12 @@ function loadBotsFromDisk() {
           typeof parsed.adminPinConfig.smsWebhookEnabled === 'boolean'
             ? parsed.adminPinConfig.smsWebhookEnabled
             : adminPinConfig.smsWebhookEnabled,
+        autoNotifyGames: {
+          fast: parsed.adminPinConfig.autoNotifyGames?.fast !== false,
+          regular: parsed.adminPinConfig.autoNotifyGames?.regular !== false,
+          keno: parsed.adminPinConfig.autoNotifyGames?.keno !== false,
+          ramino: parsed.adminPinConfig.autoNotifyGames?.ramino !== false,
+        },
       };
     }
     if (Array.isArray(parsed.verifiedBankSmsReceipts)) {
@@ -1202,13 +1403,9 @@ function loadBotsFromDisk() {
                   { command: 'deposit', description: 'Deposit 💵' },
                   { command: 'withdraw', description: 'Withdraw 💸' },
                   { command: 'balance', description: 'Check Balance 💰' },
-                  { command: 'jackpot', description: 'Jackpot 🎰' },
                   { command: 'transfer', description: 'Transfer 🔄' },
-                  { command: 'leaderboard', description: 'Leaderboard 🏆' },
-                  { command: 'token', description: '🔐 Get Login Token / ኮድ' },
                   { command: 'rules', description: 'Game Rules 📖' },
                   { command: 'support', description: 'Support 📞' },
-                  { command: 'android', description: '📲 Download Android App' },
                 ],
               }),
             }).catch(() => {});
@@ -1280,19 +1477,11 @@ function buildInlineWelcomeMenuKeyboard(appUrl: string, registeredPhone?: string
         { text: 'Check Balance 💰', callback_data: 'menu_balance' },
       ],
       [
-        { text: 'Jackpot 🎰', callback_data: 'menu_jackpot' },
         { text: 'Transfer 🔄', callback_data: 'menu_transfer' },
-      ],
-      [
-        { text: 'Leaderboard 🏆', callback_data: 'menu_leaderboard' },
         { text: 'Game Rules 📖', callback_data: 'menu_rules' },
       ],
       [
-        { text: '🔐 Get Login Token / ኮድ', callback_data: 'menu_token' },
         { text: 'Support 📞', callback_data: 'menu_support' },
-      ],
-      [
-        { text: '📲 Download Android App', callback_data: 'menu_android' },
         { text: '🏠 Main Menu', callback_data: 'menu_main' },
       ],
     ],
@@ -1625,6 +1814,7 @@ async function handleTelegramMenuAction(
 
   if (clean === '/register' || clean === '/logout' || clean === '/reset') {
     registeredChatPhones.delete(chatId);
+    chatFlowByChatId.delete(chatId);
     keyboardRemovedForChats.delete(chatId);
     saveBotsToDisk();
     await sendUnregisteredPhonePrompt(token, chatId, false, true);
@@ -1651,22 +1841,6 @@ async function handleTelegramMenuAction(
     !clean.startsWith('with_') &&
     !clean.startsWith('/')
   ) {
-    // If already registered, delete old prompt messages and send ONE welcome menu message
-    if (registeredChatPhones.has(chatId)) {
-      await deleteOldPhonePromptMessages(token, chatId);
-      const existingPhone = registeredChatPhones.get(chatId) || globalRegisteredPhone || '0942742684';
-      const welcomeText = buildWelcomeMessageText(firstName, existingPhone, true);
-      await sendTelegramMessage(
-        token,
-        chatId,
-        welcomeText,
-        buildInlineWelcomeMenuKeyboard(appUrl, existingPhone),
-        undefined,
-        true
-      );
-      return;
-    }
-
     let normalizedPhone = digitsOnly || '0942742684';
     if (normalizedPhone.startsWith('251') && normalizedPhone.length === 12) {
       normalizedPhone = `0${normalizedPhone.slice(3)}`;
@@ -1699,12 +1873,31 @@ async function handleTelegramMenuAction(
     saveBotsToDisk();
     broadcastRealtimeSync();
 
-    // Delete all old "📱 ስልክ ቁጥር አጋራ" prompt messages in the chat immediately (removes the ReplyKeyboardMarkup without flashing!)
+    // Delete all old "📱 ስልክ ቁጥር አጋራ" prompt messages in the chat immediately
     await deleteOldPhonePromptMessages(token, chatId);
     keyboardRemovedForChats.add(chatId);
 
-    // Send ONLY ONE single Welcome Message with the full inline keyboard menu (no double message!)
-    const welcomeText = buildWelcomeMessageText(firstName, normalizedPhone, true);
+    // If this player does not yet have a password set, prompt them to set a password FIRST!
+    if (!newPlayerRec.passwordHash || newPlayerRec.passwordHash === '****') {
+      chatFlowByChatId.set(chatId, { mode: 'register_password', targetPhone: normalizedPhone });
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `✅ *ስልክ ቁጥርዎ (${normalizedPhone}) ተረጋግጧል!*\n` +
+          `━━━━━━━━━━━━━━━━━━\n` +
+          `🔐 *ደረጃ 2/2፦ የይለፍ ቃል (Password) ያዘጋጁ*\n\n` +
+          `👇 አካውንትዎን በስልክ እና በይለፍ ቃል እንዲጠብቁ ቢያንስ *4 ፊደላት ወይም ቁጥሮች* ያለው የይለፍ ቃል እዚሁ ቻት ላይ ይጻፉ (ለምሳሌ፦ \`1234\` ወይም \`sun22\`):`,
+        {
+          inline_keyboard: [],
+        },
+        undefined,
+        true
+      );
+      return;
+    }
+
+    // Send Welcome Message with inline menu
+    const welcomeText = buildWelcomeMessageText(newPlayerRec.name || firstName, normalizedPhone, true);
     await sendTelegramMessage(
       token,
       chatId,
@@ -1740,113 +1933,6 @@ async function handleTelegramMenuAction(
         },
         undefined,
         true
-      );
-    }
-    return;
-  }
-
-  // Handle Android App 📲 (/android, /app, menu_android, or "android") BEFORE phone registration check so any Telegram user immediately receives Ezi-Bingo.apk in chat!
-  if (
-    clean.includes('android') ||
-    clean === '/android' ||
-    clean === '/app' ||
-    clean === 'menu_android'
-  ) {
-    const existingPhoneForAndroid =
-      registeredChatPhones.get(chatId) ||
-      Array.from(playersByPhone.values()).find((p) => p.chatId === chatId && p.phone)?.phone ||
-      globalRegisteredPhone ||
-      '0942742684';
-    const androidInstallUrl = buildWebAppUrl(appUrl, 'fast', existingPhoneForAndroid);
-    const apkDownloadUrl = `${appUrl.replace(/\/$/, '')}/Ezi-Bingo.apk`;
-    const androidCaption =
-      `📲 Ezi-Bingo.apk (Android App)\n` +
-      `━━━━━━━━━━━━━━━━━━\n` +
-      `👆 ይህንን Ezi-Bingo.apk ፋይል ነክተው በቀጥታ ስልክዎ ላይ Install ያድርጉ!`;
-
-    const inlineKeyboardMarkup = {
-      inline_keyboard: [
-        [
-          {
-            text: '📥 Ezi-Bingo.apk አውርድ (Direct Download)',
-            url: apkDownloadUrl,
-          },
-        ],
-        [
-          {
-            text: '🎮 Play Live Bingo',
-            web_app: { url: androidInstallUrl },
-          },
-        ],
-        [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
-      ],
-    };
-
-    let sentApkDocument = false;
-    // 1. Try instant delivery via cached Telegram file_id for @Ezigamsbot (works in <50ms even on Render without disk file!)
-    const EZI_APK_TELEGRAM_FILE_ID =
-      'BQACAgQAAxkDAAICb2rMcRJ8tXu221eD-Spd-oCKW36bAALuHgAC-YRhUk48IbK4pANjPQQ';
-    try {
-      const fastDocRes = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          document: EZI_APK_TELEGRAM_FILE_ID,
-          caption: androidCaption,
-          reply_markup: inlineKeyboardMarkup,
-        }),
-      });
-      const fastDocJson = await fastDocRes.json().catch(() => null);
-      if (fastDocJson?.ok) {
-        sentApkDocument = true;
-      }
-    } catch {
-      // fallback to local file upload below
-    }
-
-    // 2. Fallback: Upload Ezi-Bingo.apk from local disk if file_id wasn't accepted (e.g. different bot token)
-    if (!sentApkDocument) {
-      try {
-        const apkCandidates = [
-          path.join(__dirname, 'public', 'Ezi-Bingo.apk'),
-          path.join(__dirname, 'dist', 'Ezi-Bingo.apk'),
-        ];
-        const apkFilePath = apkCandidates.find((p) => fs.existsSync(p));
-        if (apkFilePath) {
-          const apkBuffer = fs.readFileSync(apkFilePath);
-          const form = new FormData();
-          form.append('chat_id', String(chatId));
-          form.append('caption', androidCaption);
-          form.append('reply_markup', JSON.stringify(inlineKeyboardMarkup));
-          form.append(
-            'document',
-            new Blob([new Uint8Array(apkBuffer)], {
-              type: 'application/vnd.android.package-archive',
-            }),
-            'Ezi-Bingo.apk'
-          );
-          const docRes = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
-            method: 'POST',
-            body: form,
-          });
-          const docJson = await docRes.json().catch(() => null);
-          if (docJson?.ok) {
-            sentApkDocument = true;
-          }
-        }
-      } catch (err) {
-        console.error('Telegram sendDocument APK error:', err);
-      }
-    }
-
-    if (!sentApkDocument) {
-      await sendTelegramMessage(
-        token,
-        chatId,
-        `📲 *Ezi Bingo ለ Android ስልክ*\n━━━━━━━━━━━━━━━━━━\n👇 ከታች ያለውን **📥 Ezi-Bingo.apk አውርድ** ቁልፍ በመጫን አፑን በቀጥታ ስልክዎ ላይ Install ያድርጉ፦`,
-        inlineKeyboardMarkup,
-        callbackMessageId
       );
     }
     return;
@@ -1921,6 +2007,77 @@ async function handleTelegramMenuAction(
 
   const regPhone = registeredChatPhones.get(chatId) || globalRegisteredPhone || '0942742684';
   const currentPlayer = ensurePlayerRecord(regPhone, firstName, chatId);
+
+  // Handle Telegram Registration Password Entry right after Phone Share
+  const regFlowCheck = chatFlowByChatId.get(chatId);
+  if (
+    regFlowCheck?.mode === 'register_password' &&
+    !clean.startsWith('/') &&
+    !clean.startsWith('menu_') &&
+    !clean.startsWith('dep_') &&
+    !clean.startsWith('with_')
+  ) {
+    const cleanPass = rawAction.trim();
+    if (cleanPass.length < 4) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ የይለፍ ቃሉ ቢያንስ *4 ፊደላት ወይም ቁጥሮች* መሆን አለበት! እባክዎ እንደገና ያስገቡ፦`,
+        { inline_keyboard: [] },
+        undefined,
+        true
+      );
+      return;
+    }
+    currentPlayer.passwordHash = cleanPass;
+    currentPlayer.updatedAt = new Date().toLocaleString();
+    chatFlowByChatId.delete(chatId);
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `🎉 *ምዝገባዎ በተሳካ ሁኔታ ተጠናቋል!*\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `📱 ስልክ፦ \`${regPhone}\`\n` +
+        `🔐 የይለፍ ቃል፦ ተዘጋጅቷል ✅\n\n` +
+        buildWelcomeMessageText(currentPlayer.name || firstName, regPhone, true),
+      buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+      undefined,
+      true
+    );
+
+    const pendingRoomAfterPwd = pendingRaminoRoomByChatId.get(chatId);
+    if (pendingRoomAfterPwd) {
+      pendingRaminoRoomByChatId.delete(chatId);
+      const privRoom = raminoPrivateRooms.get(pendingRoomAfterPwd);
+      const baseApp = buildWebAppUrl(appUrl, 'fast').split('/?')[0];
+      const joinWebUrl = `${baseApp}/?game=ramino&raminoRoom=${encodeURIComponent(pendingRoomAfterPwd)}&registered=1&phone=${encodeURIComponent(regPhone)}`;
+      const roomInviteMsg =
+        `♠️ *የራሚኖ የግል ክፍል ግብዣ (Ramino Private Room)*\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `🔑 የክፍል ኮድ፦ \`${pendingRoomAfterPwd}\`\n` +
+        (privRoom
+          ? `🪙 መደብ፦ *${privRoom.stake} ETB*\n👥 ተጫዋቾች፦ *${privRoom.players.length}/${privRoom.maxPlayers}*\n👑 ጋባዥ፦ *${escapeTelegramMarkdown(privRoom.hostName)}*\n`
+          : '') +
+        `\n👇 ክፍሉን በቀጥታ ለመቀላቀል ከታች ያለውን ቁልፍ ይጫኑ፦`;
+      await sendTelegramMessage(
+        token,
+        chatId,
+        roomInviteMsg,
+        {
+          inline_keyboard: [
+            [{ text: `🎮 ክፍሉን ተቀላቀል (${pendingRoomAfterPwd})`, web_app: { url: joinWebUrl } }],
+            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
+          ],
+        },
+        undefined,
+        true
+      );
+    }
+    return;
+  }
 
   // If registered user opened a Ramino Private Room deep link (/start ramino_CODE), send them straight to the room!
   if (raminoDeepMatch && pendingRaminoRoomByChatId.has(chatId)) {
@@ -2044,27 +2201,33 @@ async function handleTelegramMenuAction(
     return;
   }
 
-  const getLiveBankAccount = (method: 'Telebirr' | 'CBE' | 'Abyssinia' | 'M-Pesa') => {
-    const found = persistedBankAccounts.find(
-      (b) =>
-        b.id.toLowerCase() === method.toLowerCase() ||
-        b.shortName.toLowerCase() === method.toLowerCase()
-    );
+  const getLiveBankAccount = (method: string) => {
+    const activeBanks = getActiveServerBankAccounts();
+    const mLower = method.toLowerCase();
+    const found =
+      activeBanks.find(
+        (b) =>
+          b.id.toLowerCase() === mLower ||
+          b.shortName.toLowerCase() === mLower ||
+          b.bankName.toLowerCase().includes(mLower)
+      ) ||
+      persistedBankAccounts.find(
+        (b) =>
+          b.id.toLowerCase() === mLower ||
+          b.shortName.toLowerCase() === mLower ||
+          b.bankName.toLowerCase().includes(mLower)
+      ) ||
+      activeBanks[0] ||
+      persistedBankAccounts[0];
     if (found) return found;
     return {
       id: method,
       bankName: method,
       shortName: method,
-      accountNumber:
-        method === 'CBE'
-          ? '1000112964936'
-          : method === 'Abyssinia'
-          ? '66816532'
-          : method === 'M-Pesa'
-          ? '0711742684'
-          : '0942742684',
+      accountNumber: '0942742684',
       accountHolder: 'Ezana Gebremedhin',
       badgeBg: 'bg-sky-500 text-white',
+      isActive: true,
     };
   };
 
@@ -2079,51 +2242,80 @@ async function handleTelegramMenuAction(
 
   const sendDepositStep2PaymentDetails = async (amt: number, existingRef?: string) => {
     const refCode = existingRef || makeDepositRefCode();
+    const activeBanks = getActiveServerBankAccounts();
+    if (activeBanks.length === 0) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `⚠️ በአሁኑ ሰዓት በአድሚን የነቃ የባንክ አካውንት የለም። እባክዎ ቆይተው ይሞክሩ ወይም Support ያናግሩ።`,
+        buildSubMenuInlineKeyboard(appUrl, regPhone),
+        callbackMessageId,
+        true
+      );
+      return;
+    }
+
     chatFlowByChatId.set(chatId, { mode: 'deposit_method', amount: amt, reference: refCode });
-    const primaryAcct = getLiveBankAccount('Telebirr');
-    const cleanPhone = primaryAcct.accountNumber.startsWith('0')
-      ? `251${primaryAcct.accountNumber.slice(1)}`
-      : primaryAcct.accountNumber;
     const amtFormatted = Number.isInteger(amt) ? String(amt) : amt.toFixed(2);
-    const detailsBox = [
-      `Name:       ${primaryAcct.accountHolder}`,
-      `Phone:      ${cleanPhone}`,
-      `Amount:     ${amtFormatted}ETB`,
-      `reference:  ${refCode}`,
-      `ብር ማስገባት የምትችሉት ከታች ባሉት አማራጮች ብቻ ነው`,
-      `1. ከቴሌብር ወደ ቴሌብር ብቻ`,
-      `2. ከንግድ ባንክ ወደ ንግድ ባንክ ብቻ`,
-      `3. ከአቢሲኒያ ባንክ ወደ አቢሲኒያ ባንክ ብቻ`,
-      `4. ከኤም-ፔሳ ወደ ኤም-ፔሳ ብቻ`,
-    ].join('\n');
+    const bankLines = activeBanks
+      .map(
+        (b, idx) =>
+          `${idx + 1}. *${escapeTelegramMarkdown(b.shortName)}* — \`${escapeTelegramMarkdown(b.accountNumber)}\` (${escapeTelegramMarkdown(b.accountHolder)})`
+      )
+      .join('\n');
+
+    const keyboardRows: unknown[][] = [];
+    for (const b of activeBanks) {
+      keyboardRows.push([
+        { text: `📋 Copy ${b.shortName}`, copy_text: { text: b.accountNumber } },
+        {
+          text: `📩 በ${b.shortName} ደረሰኝ ላክ →`,
+          callback_data: `dep_step_${b.id}_${amtFormatted}_${refCode}`,
+        },
+      ]);
+    }
+    keyboardRows.push([
+      { text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_deposit' },
+      { text: '🏠 Main Menu', callback_data: 'menu_main' },
+    ]);
 
     await sendTelegramMessage(
       token,
       chatId,
-      `Payment details\n\`\`\`\n${detailsBox}\n\`\`\``,
-      {
-        inline_keyboard: [
-          [{ text: 'Pay from telebirr to telebirr only', callback_data: `dep_step_Telebirr_${amtFormatted}_${refCode}` }],
-          [{ text: 'Pay from CBEBANK to CBEBANK', callback_data: `dep_step_CBE_${amtFormatted}_${refCode}` }],
-          [{ text: 'Pay from Abyssinia to Abyssinia only', callback_data: `dep_step_Abyssinia_${amtFormatted}_${refCode}` }],
-          [{ text: 'Pay from MPESA to MPESA only', callback_data: `dep_step_M-Pesa_${amtFormatted}_${refCode}` }],
-          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
-        ],
-      },
+      `💵 *ገቢ (Deposit) — ደረጃ 2/3*\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `💰 የመረጡት መጠን፦ *${amtFormatted} ETB*\n` +
+        `🔖 Ref፦ \`${refCode}\`\n\n` +
+        `🏦 *በአድሚን የነቁ የባንክ አካውንቶች፦*\n${bankLines}\n\n` +
+        `👇 ከታች አካውንቱን *📋 Copy* ያድርጉ፣ ብሩን ከላኩ በኋላ *📩 በ... ደረሰኝ ላክ →* የሚለውን ይጫኑ፦`,
+      { inline_keyboard: keyboardRows },
       callbackMessageId,
       true
     );
   };
 
-  // 2. Deposit 💵 (Step 1: Ask Amount exactly like IMG_3940)
+  // 2. Deposit 💵 (Step 1: Ask Amount 50 – 2,000 ETB or Manual)
   if (clean.includes('deposit') || clean === '/deposit' || clean === 'menu_deposit') {
     chatFlowByChatId.set(chatId, { mode: 'deposit_amount' });
     await sendTelegramMessage(
       token,
       chatId,
-      `እንዲሞላልዎት የሚፈልጉትን የገንዘብ መጠን ያስገቡ:`,
+      `💵 *ገቢ (Deposit) — ደረጃ 1/3*\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `ስንት ብር ገቢ ማድረግ ይፈልጋሉ?\n\n` +
+        `👇 ከታች ካሉት ፈጣን መጠኖች (50 – 2,000 ETB) ይምረጡ ወይም የሚፈልጉትን የብር መጠን እዚሁ ይጻፉ፦`,
       {
         inline_keyboard: [
+          [
+            { text: '50 ETB', callback_data: 'dep_amt_50' },
+            { text: '100 ETB', callback_data: 'dep_amt_100' },
+            { text: '200 ETB', callback_data: 'dep_amt_200' },
+          ],
+          [
+            { text: '500 ETB', callback_data: 'dep_amt_500' },
+            { text: '1,000 ETB', callback_data: 'dep_amt_1000' },
+            { text: '2,000 ETB', callback_data: 'dep_amt_2000' },
+          ],
           [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
         ],
       },
@@ -2133,7 +2325,7 @@ async function handleTelegramMenuAction(
     return;
   }
 
-  // 2A. Return to Step 2 with amount (dep_amt_<amt>)
+  // 2A. Proceed to Step 2 with amount (dep_amt_<amt>)
   if (clean.startsWith('dep_amt_')) {
     const rawAmt = parseFloat(rawAction.replace(/^dep_amt_/i, ''));
     const validAmt = Number.isFinite(rawAmt) && rawAmt >= 10 ? rawAmt : 100;
@@ -2141,37 +2333,26 @@ async function handleTelegramMenuAction(
     return;
   }
 
-  // 2B. Deposit Step 3: User chose a payment option (dep_step_<method>_<amount>_<ref> or dep_bank_<method>)
+  // 2B. Deposit Step 3: User chose a payment option (dep_step_<bankId>_<amount>_<ref> or dep_bank_<method>)
   if (clean.startsWith('dep_step_') || clean.startsWith('dep_bank_')) {
     const activeFlowSnapshot = chatFlowByChatId.get(chatId);
-    let method: 'CBE' | 'Abyssinia' | 'Telebirr' | 'M-Pesa' = 'Telebirr';
+    let bankIdOrMethod = 'Telebirr';
     let amt = activeFlowSnapshot?.amount || 100;
     let refCode = activeFlowSnapshot?.reference || makeDepositRefCode();
 
     if (clean.startsWith('dep_step_')) {
       const rest = rawAction.replace(/^dep_step_/i, '');
       const parts = rest.split('_');
-      const rawBank = parts[0] || 'Telebirr';
-      method = /cbe/i.test(rawBank)
-        ? 'CBE'
-        : /abyssinia|boa/i.test(rawBank)
-        ? 'Abyssinia'
-        : /mpesa|m-pesa/i.test(rawBank)
-        ? 'M-Pesa'
-        : 'Telebirr';
+      bankIdOrMethod = parts[0] || 'Telebirr';
       const parsedStepAmt = parseFloat(parts[1] || '');
       if (Number.isFinite(parsedStepAmt) && parsedStepAmt > 0) amt = parsedStepAmt;
       if (parts[2]) refCode = parts[2];
     } else {
-      const rawBank = rawAction.replace(/^dep_bank_/i, '');
-      method = /cbe/i.test(rawBank)
-        ? 'CBE'
-        : /abyssinia|boa/i.test(rawBank)
-        ? 'Abyssinia'
-        : /mpesa|m-pesa/i.test(rawBank)
-        ? 'M-Pesa'
-        : 'Telebirr';
+      bankIdOrMethod = rawAction.replace(/^dep_bank_/i, '');
     }
+
+    const acct = getLiveBankAccount(bankIdOrMethod);
+    const method = acct.shortName || bankIdOrMethod;
 
     chatFlowByChatId.set(chatId, {
       mode: 'deposit_sms',
@@ -2180,70 +2361,88 @@ async function handleTelegramMenuAction(
       reference: refCode,
     });
 
-    const acct = getLiveBankAccount(method);
-    const labelMap: Record<'Telebirr' | 'CBE' | 'Abyssinia' | 'M-Pesa', { header: string; bankAm: string; smsSender: string }> = {
-      Telebirr: { header: 'የቴሌብር አካውንት', bankAm: 'የቴሌብር', smsSender: 'ከቴሌብር' },
-      CBE: { header: 'የንግድ ባንክ (CBE) አካውንት', bankAm: 'የንግድ ባንክ', smsSender: 'ከንግድ ባንክ' },
-      Abyssinia: { header: 'የአቢሲኒያ ባንክ አካውንት', bankAm: 'የአቢሲኒያ ባንክ', smsSender: 'ከአቢሲኒያ ባንክ' },
-      'M-Pesa': { header: 'የኤም-ፔሳ (M-Pesa) አካውንት', bankAm: 'የኤም-ፔሳ', smsSender: 'ከኤም-ፔሳ' },
-    };
-    const lbl = labelMap[method];
     const amtStr = Number.isInteger(amt) ? String(amt) : amt.toFixed(2);
-
-    // First bubble: copyable account number (exact match to IMG_3941 top)
-    await sendTelegramMessage(
-      token,
-      chatId,
-      `${lbl.header}\n\n\`${acct.accountNumber}\`\n👤 ስም፦ *${escapeTelegramMarkdown(acct.accountHolder)}*`,
-      {
-        inline_keyboard: [
-          [{ text: `📋 Copy ${acct.shortName} (${acct.accountNumber})`, copy_text: { text: acct.accountNumber } }],
-        ],
-      },
-      undefined,
-      true
-    );
-
-    // Second bubble: exact step-by-step monospace instructions + prompt (matching IMG_3941)
     const stepsBox = [
-      `1. ከላይ ባለው ${lbl.bankAm} አካውንት ${amtStr}ብር ያስገቡ`,
-      ``,
-      `2. የምትልኩት የገንዘብ መጠን እና እዚህ ላይ እንዲሞላልዎ የምታስገቡት የብር መጠን ተመሳሳይ መሆኑን እርግጠኛ ይሁኑ`,
-      ``,
-      `3. ብሩን ስትልኩ የከፈላችሁበትን መረጃ የያዘ አጭር የጽሁፍ መልክት(sms) ${lbl.smsSender} ይደርሳችኋል`,
-      ``,
-      `4. የደረሳችሁን አጭር የጽሁፍ መልክት(sms) ሙሉውን ኮፒ(copy) በማድረግ ከታች ባለው የቴሌግራም የጽሁፍ ማስገቢያው ላይ ፔስት(paste) በማድረግ ይላኩት`,
-      `ማሳሰቢያ: ዲፖዚት ባረጋቹ ቁጥር አካውንቶች ሊቀያየሩ ስለሚችሉ ከላይ ወደሚሰጣችሁ አካውንት ብቻ ብር መላካችሁን እርግጠኛ ይሁኑ።`,
+      `1. ከላይ ባለው የ${acct.shortName} አካውንት ${amtStr} ብር ያስገቡ`,
+      `2. የምትልኩት የገንዘብ መጠን እና የመረጡት ${amtStr} ብር ተመሳሳይ መሆኑን ያረጋግጡ`,
+      `3. የደረሳችሁን የ SMS ደረሰኝ ሙሉውን ወይም Ref ቁጥሩን Copy አድርገው እዚህ ቻት ላይ Paste ያድርጉ`,
     ].join('\n');
 
     await sendTelegramMessage(
       token,
       chatId,
-      `\`\`\`\n${stepsBox}\n\`\`\`\nየከፈላችሁበትን አጭር የጽሁፍ መልእክት(sms) እዚህ ላይ ያስገቡት 👇👇👇`,
+      `📩 *ገቢ (Deposit) — ደረጃ 3/3 (${escapeTelegramMarkdown(acct.shortName)})*\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `🏦 ባንክ፦ *${escapeTelegramMarkdown(acct.bankName)}*\n` +
+        `🔢 አካውንት ቁጥር፦ \`${acct.accountNumber}\`\n` +
+        `👤 ስም፦ *${escapeTelegramMarkdown(acct.accountHolder)}*\n` +
+        `💰 የመረጡት መጠን፦ *${amtStr} ETB*\n\n` +
+        `\`\`\`\n${stepsBox}\n\`\`\`\n` +
+        `👇 የከፈሉበትን የባንክ SMS ወይም Ref ቁጥር እዚህ ላይ Paste ያድርጉ:`,
       {
         inline_keyboard: [
+          [{ text: `📋 Copy ${acct.shortName} (${acct.accountNumber})`, copy_text: { text: acct.accountNumber } }],
           [
-            { text: '🔙 ባንክ ቀይር', callback_data: `dep_amt_${amtStr}` },
+            { text: '← ተመለስ (ባንክ ቀይር)', callback_data: `dep_amt_${amtStr}` },
             { text: '🏠 Main Menu', callback_data: 'menu_main' },
           ],
         ],
       },
-      undefined,
+      callbackMessageId,
       true
     );
     return;
   }
 
-  // 3. Withdraw 💸 (Main Withdraw Menu & Method Selection)
+  const sendWithdrawStep2Banks = async (amt: number) => {
+    const activeBanks = getActiveServerBankAccounts();
+    chatFlowByChatId.set(chatId, { mode: 'withdraw_method', amount: amt });
+    const amtStr = Number.isInteger(amt) ? String(amt) : amt.toFixed(2);
+    const bankRows: unknown[][] = [];
+    for (let i = 0; i < activeBanks.length; i += 2) {
+      const row: unknown[] = [];
+      const b1 = activeBanks[i];
+      row.push({
+        text: `🏦 ${b1.shortName}`,
+        callback_data: `with_bank_step_${b1.shortName}_${amtStr}`,
+      });
+      if (activeBanks[i + 1]) {
+        const b2 = activeBanks[i + 1];
+        row.push({
+          text: `🏦 ${b2.shortName}`,
+          callback_data: `with_bank_step_${b2.shortName}_${amtStr}`,
+        });
+      }
+      bankRows.push(row);
+    }
+    bankRows.push([
+      { text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_withdraw' },
+      { text: '🏠 Main Menu', callback_data: 'menu_main' },
+    ]);
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `💸 *ወጪ (Withdraw) — ደረጃ 2/3*\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `💰 የሚያወጡት መጠን፦ *${amtStr} ETB*\n\n` +
+        `👇 ገንዘቡ የሚላክበትን ባንክ / መንገድ ከታች ይምረጡ፦`,
+      { inline_keyboard: bankRows },
+      callbackMessageId,
+      true
+    );
+  };
+
+  // 3. Withdraw 💸 (Step 1: Choose / Enter Amount 50 – 75,000 ETB or All)
   if (clean.includes('withdraw') || clean === '/withdraw' || clean === 'menu_withdraw') {
-    chatFlowByChatId.set(chatId, { mode: 'withdraw_amount', method: 'Telebirr' });
+    chatFlowByChatId.set(chatId, { mode: 'withdraw_amount' });
+    const maxAvail = Math.min(75000, Math.floor(currentPlayer.balance));
     const withdrawText =
-      `Withdraw 💸 *(ገንዘብ ማውጫ)*\n\n` +
+      `💸 *ወጪ (Withdraw) — ደረጃ 1/3*\n` +
+      `━━━━━━━━━━━━━━━━━━\n` +
       `💰 ማውጣት የሚችሉት (Cash Balance): *${currentPlayer.balance.toFixed(2)} ETB*\n` +
-      `• ዝቅተኛ ማውጫ (Min): *50 ETB*\n` +
-      `• ከፍተኛ ማውጫ (Max): *75,000 ETB*\n\n` +
-      `👇 *1. ገንዘብ የሚያወጡበትን ባንክ / መንገድ ከታች ይምረጡ፦*\n` +
-      `*(ወይም የሚያወጡትን የብር መጠን እና የሂሳብ ቁጥርዎን ለምሳሌ \`200 0942742684\` ብለው እዚሁ ቻት ላይ ይላኩ)*`;
+      `• ዝቅተኛ፦ *50 ETB* | ከፍተኛ፦ *75,000 ETB*\n\n` +
+      `👇 የሚያወጡትን የብር መጠን ከታች ይምረጡ ወይም እዚሁ ቻት ላይ ይጻፉ፦`;
 
     await sendTelegramMessage(
       token,
@@ -2252,104 +2451,46 @@ async function handleTelegramMenuAction(
       {
         inline_keyboard: [
           [
-            { text: '📱 Telebirr (ቴሌብር)', callback_data: 'with_bank_Telebirr' },
-            { text: '🏦 CBE (ንግድ ባንክ)', callback_data: 'with_bank_CBE' },
+            { text: '50 ETB', callback_data: 'with_amt_pick_50' },
+            { text: '100 ETB', callback_data: 'with_amt_pick_100' },
+            { text: '200 ETB', callback_data: 'with_amt_pick_200' },
           ],
           [
-            { text: '🏦 Abyssinia (BOA)', callback_data: 'with_bank_Abyssinia' },
-            { text: '📱 M-Pesa (ኤም-ፔሳ)', callback_data: 'with_bank_M-Pesa' },
-          ],
-          [
-            { text: '50 ETB', callback_data: 'with_amt_Telebirr_50' },
-            { text: '100 ETB', callback_data: 'with_amt_Telebirr_100' },
-            { text: '200 ETB', callback_data: 'with_amt_Telebirr_200' },
-          ],
-          [
-            { text: '500 ETB', callback_data: 'with_amt_Telebirr_500' },
-            { text: '1,000 ETB', callback_data: 'with_amt_Telebirr_1000' },
+            { text: '500 ETB', callback_data: 'with_amt_pick_500' },
+            { text: '1,000 ETB', callback_data: 'with_amt_pick_1000' },
             {
-              text: `All (${Math.floor(currentPlayer.balance)} ETB)`,
-              callback_data: `with_amt_Telebirr_${Math.max(50, Math.floor(currentPlayer.balance))}`,
-            },
-          ],
-          [
-            {
-              text: '💸 Open Withdraw in App',
-              web_app: { url: buildWebAppUrl(appUrl, 'fast', regPhone, 'withdraw') },
+              text: `ሁሉንም (${maxAvail} ETB)`,
+              callback_data: `with_amt_pick_${Math.max(50, maxAvail)}`,
             },
           ],
           [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
         ],
       },
-      callbackMessageId
+      callbackMessageId,
+      true
     );
     return;
   }
 
-  // 3B. Withdraw Bank Selected (with_bank_*)
-  if (clean.startsWith('with_bank_')) {
-    const rawBank = rawAction.replace(/^with_bank_/i, '');
-    const method: 'CBE' | 'Abyssinia' | 'Telebirr' | 'M-Pesa' =
-      /cbe/i.test(rawBank)
-        ? 'CBE'
-        : /abyssinia|boa/i.test(rawBank)
-        ? 'Abyssinia'
-        : /mpesa|m-pesa/i.test(rawBank)
-        ? 'M-Pesa'
-        : 'Telebirr';
-
-    chatFlowByChatId.set(chatId, { mode: 'withdraw_amount', method });
-
-    const stepText =
-      `Withdraw via *${method === 'Abyssinia' ? 'Abyssinia (BOA)' : method}* 💸\n\n` +
-      `💰 ቀሪ ሂሳብዎ፦ *${currentPlayer.balance.toFixed(2)} ETB*\n\n` +
-      `👇 *የሚያወጡትን የብር መጠን ከታች ይምረጡ (ከ 50 – 75,000 ETB)፦*\n` +
-      `*(ወይም መጠኑን እና የ ${method} ቁጥርዎን እዚሁ ቻት ላይ ይጻፉ)*`;
-
-    await sendTelegramMessage(
-      token,
-      chatId,
-      stepText,
-      {
-        inline_keyboard: [
-          [
-            { text: '50 ETB', callback_data: `with_amt_${method}_50` },
-            { text: '100 ETB', callback_data: `with_amt_${method}_100` },
-            { text: '200 ETB', callback_data: `with_amt_${method}_200` },
+  // 3A. Withdraw Step 1 -> Step 2 (Amount Chosen)
+  if (clean.startsWith('with_amt_pick_')) {
+    const amt = parseFloat(rawAction.replace(/^with_amt_pick_/i, ''));
+    if (!Number.isFinite(amt) || amt < 50 || amt > 75000) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ እባክዎ ከ *50 ETB* እስከ *75,000 ETB* መካከል ትክክለኛ የወጪ መጠን ይምረጡ።`,
+        {
+          inline_keyboard: [
+            [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
+            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
-          [
-            { text: '500 ETB', callback_data: `with_amt_${method}_500` },
-            { text: '1,000 ETB', callback_data: `with_amt_${method}_1000` },
-            {
-              text: `ሁሉንም (${Math.floor(currentPlayer.balance)} ETB)`,
-              callback_data: `with_amt_${method}_${Math.max(50, Math.floor(currentPlayer.balance))}`,
-            },
-          ],
-          [
-            { text: '🔙 ወደ ባንክ ምርጫ (Back)', callback_data: 'menu_withdraw' },
-            { text: '🏠 Main Menu', callback_data: 'menu_main' },
-          ],
-        ],
-      },
-      callbackMessageId
-    );
-    return;
-  }
-
-  // 3C. Withdraw Amount Selected (with_amt_<method>_<amount>)
-  if (clean.startsWith('with_amt_')) {
-    const parts = rawAction.split('_');
-    const methodRaw = parts[2] || 'Telebirr';
-    const amt = parseFloat(parts[3] || '100');
-    const method: 'CBE' | 'Abyssinia' | 'Telebirr' | 'M-Pesa' =
-      /cbe/i.test(methodRaw)
-        ? 'CBE'
-        : /abyssinia|boa/i.test(methodRaw)
-        ? 'Abyssinia'
-        : /mpesa|m-pesa/i.test(methodRaw)
-        ? 'M-Pesa'
-        : 'Telebirr';
-
+        },
+        callbackMessageId,
+        true
+      );
+      return;
+    }
     if (amt > currentPlayer.balance) {
       await sendTelegramMessage(
         token,
@@ -2358,34 +2499,78 @@ async function handleTelegramMenuAction(
         {
           inline_keyboard: [
             [{ text: 'Deposit 💵 (ገቢ አድርግ)', callback_data: 'menu_deposit' }],
+            [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
             [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         },
-        callbackMessageId
+        callbackMessageId,
+        true
+      );
+      return;
+    }
+    await sendWithdrawStep2Banks(amt);
+    return;
+  }
+
+  // 3B. Withdraw Step 2 -> Step 3 (Bank Selected -> Confirm Account/Phone)
+  if (clean.startsWith('with_bank_step_') || clean.startsWith('with_bank_') || clean.startsWith('with_amt_')) {
+    let method = 'Telebirr';
+    let amt = chatFlowByChatId.get(chatId)?.amount || 100;
+    if (clean.startsWith('with_bank_step_')) {
+      const rest = rawAction.replace(/^with_bank_step_/i, '');
+      const parts = rest.split('_');
+      method = parts[0] || 'Telebirr';
+      const parsedAmt = parseFloat(parts[1] || '');
+      if (Number.isFinite(parsedAmt) && parsedAmt >= 50) amt = parsedAmt;
+    } else if (clean.startsWith('with_amt_')) {
+      const parts = rawAction.split('_');
+      method = parts[2] || 'Telebirr';
+      const parsedAmt = parseFloat(parts[3] || '');
+      if (Number.isFinite(parsedAmt) && parsedAmt >= 50) amt = parsedAmt;
+    } else {
+      method = rawAction.replace(/^with_bank_/i, '') || 'Telebirr';
+    }
+
+    if (amt > currentPlayer.balance) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ *በቂ ቀሪ ሂሳብ የለዎትም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\nያለዎት ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`,
+        {
+          inline_keyboard: [
+            [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
+            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
+          ],
+        },
+        callbackMessageId,
+        true
       );
       return;
     }
 
     chatFlowByChatId.set(chatId, { mode: 'withdraw_account', method, amount: amt });
-
-    const isMobileMoney = method === 'Telebirr' || method === 'M-Pesa';
+    const amtStr = Number.isInteger(amt) ? String(amt) : amt.toFixed(2);
+    const isMobileMoney = /telebirr|mpesa|m-pesa/i.test(method);
     const promptAcctText =
-      `Withdraw *${amt.toFixed(2)} ETB* via *${method}* 💸\n\n` +
+      `💸 *ወጪ (Withdraw) — ደረጃ 3/3*\n` +
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `💰 መጠን፦ *${amtStr} ETB*\n` +
+      `🏦 ባንክ / መንገድ፦ *${escapeTelegramMarkdown(method)}*\n\n` +
       (isMobileMoney
-        ? `📱 ወደ ተመዘገበው ስልክ ቁጥርዎ (*${regPhone}*) እንዲላክ ከታች ያለውን ቁልፍ ይጫኑ፣ ወይም ሌላ ስልክ ቁጥር ቻቱ ላይ ይጻፉ፦`
-        : `🏦 እባክዎ የእርስዎን *${method === 'Abyssinia' ? 'Bank of Abyssinia (BOA)' : 'CBE'} ሂሳብ ቁጥር* እዚሁ ቻት ላይ ይጻፉ፦`);
+        ? `📱 ወደ ተመዘገበው ስልክ ቁጥርዎ (\`${regPhone}\`) ለማውጣት ከታች ያለውን ቁልፍ ይጫኑ ወይም ሌላ ስልክ ቁጥር እዚሁ ይጻፉ፦`
+        : `🔢 እባክዎ የእርስዎን የ *${escapeTelegramMarkdown(method)}* ሂሳብ ቁጥር (Account Number) እዚሁ ቻት ላይ ይጻፉ፦`);
 
     const inlineRows: unknown[][] = [];
     if (isMobileMoney) {
       inlineRows.push([
         {
-          text: `✅ ወደ ${regPhone} (${amt} ETB) ላክ`,
-          callback_data: `with_confirm_${method}_${amt}_${regPhone}`,
+          text: `✅ ወደ ${regPhone} (${amtStr} ETB) ላክ`,
+          callback_data: `with_confirm_${method}_${amtStr}_${regPhone}`,
         },
       ]);
     }
     inlineRows.push([
-      { text: '🔙 መጠን ቀይር (Back)', callback_data: `with_bank_${method}` },
+      { text: '← ተመለስ (ባንክ ቀይር)', callback_data: `with_amt_pick_${amtStr}` },
       { text: '🏠 Main Menu', callback_data: 'menu_main' },
     ]);
 
@@ -2393,10 +2578,9 @@ async function handleTelegramMenuAction(
       token,
       chatId,
       promptAcctText,
-      {
-        inline_keyboard: inlineRows,
-      },
-      callbackMessageId
+      { inline_keyboard: inlineRows },
+      callbackMessageId,
+      true
     );
     return;
   }
@@ -2404,25 +2588,17 @@ async function handleTelegramMenuAction(
   // 3D. One-Tap Withdraw Confirmation (with_confirm_<method>_<amount>_<account>)
   if (clean.startsWith('with_confirm_')) {
     const parts = rawAction.split('_');
-    const methodRaw = parts[2] || 'Telebirr';
+    const method = parts[2] || 'Telebirr';
     const amt = parseFloat(parts[3] || '100');
     const targetAccount = parts.slice(4).join('_') || regPhone;
-    const method: 'CBE' | 'Abyssinia' | 'Telebirr' | 'M-Pesa' =
-      /cbe/i.test(methodRaw)
-        ? 'CBE'
-        : /abyssinia|boa/i.test(methodRaw)
-        ? 'Abyssinia'
-        : /mpesa|m-pesa/i.test(methodRaw)
-        ? 'M-Pesa'
-        : 'Telebirr';
 
     chatFlowByChatId.delete(chatId);
 
-    if (amt > globalWalletBalance || amt < 50) {
+    if (amt > currentPlayer.balance || amt < 50 || amt > 75000) {
       await sendTelegramMessage(
         token,
         chatId,
-        `❌ *የወጪ ጥያቄው አልተሳካም!*\nዝቅተኛ ማውጫ 50 ETB ሲሆን ያለዎት ቀሪ ሂሳብ *${globalWalletBalance.toFixed(2)} ETB* ነው።`,
+        `❌ *የወጪ ጥያቄው አልተሳካም!*\nከ 50 – 75,000 ETB መካከል መሆን አለበት። ያለዎት ቀሪ ሂሳብ *${currentPlayer.balance.toFixed(2)} ETB* ነው።`,
         buildSubMenuInlineKeyboard(appUrl, regPhone)
       );
       return;
@@ -2454,13 +2630,13 @@ async function handleTelegramMenuAction(
     const confirmWithdrawMsg = adminPinConfig.requireDepositApproval
       ? `⏳ *የወጪ ጥያቄዎ ተልኳል (በመጠባበቅ ላይ)*\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
-        `🏦 መንገድ፦ *${method}*\n` +
+        `🏦 መንገድ፦ *${escapeTelegramMarkdown(method)}*\n` +
         `💰 የብር መጠን፦ *${amt.toFixed(2)} ETB*\n` +
         `🔢 ሂሳብ / ስልክ፦ \`${targetAccount}\`\n\n` +
         `ጥያቄዎ ደርሶናል! ልክ ተጣርቶ ሲጸድቅ (*Approved*) ወዲያውኑ ወደ ሂሳብዎ ይላካል።`
       : `✅ *የወጪ ጥያቄዎ ተፈጽሟል!*\n` +
-        `💰 *${amt.toFixed(2)} ETB* ወደ *${method}* (\`${targetAccount}\`) ተልኳል!\n` +
-        `አዲስ ቀሪ ሂሳብ፦ *${globalWalletBalance.toFixed(2)} ETB*`;
+        `💰 *${amt.toFixed(2)} ETB* ወደ *${escapeTelegramMarkdown(method)}* (\`${targetAccount}\`) ተልኳል!\n` +
+        `አዲስ ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`;
 
     await sendTelegramMessage(token, chatId, confirmWithdrawMsg, buildSubMenuInlineKeyboard(appUrl, regPhone));
     return;
@@ -2475,37 +2651,17 @@ async function handleTelegramMenuAction(
   ) {
     const has15Bonus = chatWelcomeBonusClaimed.has(chatId);
     const balanceText =
-      `Check Balance 💰 *(የሂሳብ መረጃ — Ezi Bingo & Ezi Fast Bingo)*\n` +
+      `Check Balance 💰 *(የሂሳብ መረጃ)*\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
-      `👋 Selam, *${firstName}*!\n` +
+      `👋 Selam, *${escapeTelegramMarkdown(currentPlayer.name || firstName)}*!\n` +
       (regPhone ? `📱 Phone: *${regPhone}*\n` : '') +
       `💰 Cash Balance: *${currentPlayer.balance.toFixed(2)} ETB*\n` +
-      `🎁 Bonus Balance: *${currentPlayer.bonusBalance.toFixed(2)} ETB${has15Bonus ? ' (+15 ETB Welcome Bonus!)' : ''}*\n` +
-      `🎰 Jackpot Pool: *${fastLiveRoomState.jackpotPool.toFixed(2)} ETB*`;
+      `🎁 Bonus Balance: *${currentPlayer.bonusBalance.toFixed(2)} ETB${has15Bonus ? ' (+15 ETB Welcome Bonus!)' : ''}*`;
 
     await sendTelegramMessage(
       token,
       chatId,
       balanceText,
-      buildSubMenuInlineKeyboard(appUrl, regPhone),
-      callbackMessageId
-    );
-    return;
-  }
-
-  // 5. Jackpot 🎰
-  if (clean.includes('jackpot') || clean === '/jackpot' || clean === 'menu_jackpot') {
-    const jackpotText =
-      `Jackpot 🎰 *(5% Progressive Jackpot)*\n` +
-      `━━━━━━━━━━━━━━━━━━\n` +
-      `🎰 Jackpot Pool: *${fastLiveRoomState.jackpotPool.toFixed(2)} / 500.00 ETB*\n` +
-      `📈 ከእያንዳንዱ ዙር *5%* ወደ ጃክፓቱ ይጨመራል!\n` +
-      `🏆 *500 ብር* ሲሞላ በዚያ ዙር የሚያሸንፈው ተጫዋች *ደራሹን + 500 ብር ጃክፓቱን* በአንድ ላይ ይወስደዋል!`;
-
-    await sendTelegramMessage(
-      token,
-      chatId,
-      jackpotText,
       buildSubMenuInlineKeyboard(appUrl, regPhone),
       callbackMessageId
     );
@@ -2532,57 +2688,6 @@ async function handleTelegramMenuAction(
     return;
   }
 
-  // 7. Leaderboard 🏆
-  if (
-    clean.includes('leaderboard') ||
-    clean === '/leaderboard' ||
-    clean === 'menu_leaderboard'
-  ) {
-    const leaderboardText =
-      `Leaderboard 🏆 *(ደረጃ ሰንጠረዥ)*\n` +
-      `━━━━━━━━━━━━━━━━━━\n` +
-      `🥇 1. *Ezana_Player* — 14,500 ETB (42 Wins)\n` +
-      `🥈 2. *Yonas_Fast* — 9,820 ETB (31 Wins)\n` +
-      `🥉 3. *Dawit_Bingo* — 7,400 ETB (24 Wins)\n` +
-      `🏅 4. *Meron_Hailu* — 5,120 ETB (19 Wins)\n` +
-      `🏅 5. *Abebe_K* — 3,900 ETB (15 Wins)`;
-
-    await sendTelegramMessage(
-      token,
-      chatId,
-      leaderboardText,
-      buildSubMenuInlineKeyboard(appUrl, regPhone),
-      callbackMessageId
-    );
-    return;
-  }
-
-  // 8. 🔐 Get Login Token / ኮድ
-  if (
-    clean.includes('get login token') ||
-    clean.includes('ኮድ') ||
-    clean.includes('token') ||
-    clean === '/token' ||
-    clean === 'menu_token'
-  ) {
-    const randomCode = Math.floor(100000 + Math.random() * 900000);
-    const loginToken = `EZI-${randomCode}`;
-    const tokenText =
-      `🔐 *Get Login Token / ኮድ*\n` +
-      `━━━━━━━━━━━━━━━━━━\n` +
-      `የእርስዎ መግቢያ ኮድ፦ \`${loginToken}\`\n` +
-      `• ይህ ኮድ ለ *10 ደቂቃ* ያገለግላል።`;
-
-    await sendTelegramMessage(
-      token,
-      chatId,
-      tokenText,
-      buildSubMenuInlineKeyboard(appUrl, regPhone),
-      callbackMessageId
-    );
-    return;
-  }
-
   // 9. Game Rules 📖
   if (
     clean.includes('game rules') ||
@@ -2595,8 +2700,7 @@ async function handleTelegramMenuAction(
       `━━━━━━━━━━━━━━━━━━\n` +
       `• *ካርቴላ፦* ከ 1 እስከ 500 ካርቴላ መምረጥ ይቻላል።\n` +
       `• *የማሸነፊያ ሕግ፦* ማንኛውም *1 የተኛ መስመር (Horizontal)*፣ *1 የቆመ መስመር (Vertical)*፣ *1 ዲያጎናል (Diagonal)* ወይም *4ቱ የማዕዘን ቁጥሮች (4 Corners)* ሲጠሩ ወዲያውኑ ያሸንፋሉ!\n` +
-      `• *የጨዋታ አጀማመር፦* ቢያንስ *2 ተጫዋቾች* ሲገቡ የ *30 ሰከንድ* ቆጣሪ ተጀምሮ ጨዋታው ይጀምራል (1 ተጫዋች ብቻ ከቀረ ቆጣሪው ቆሞ ይጠብቃል)።\n` +
-      `• *ደራሽና ጃክፓት፦* ደራሽ ለተጫዋች *80%* | *5%* ለጃክፓት (1,000 ብር ሲሞላ ይወሰዳል)።`;
+      `• *የጨዋታ አጀማመር፦* ቢያንስ *2 ተጫዋቾች* ሲገቡ የ *30 ሰከንድ* ቆጣሪ ተጀምሮ ጨዋታው ይጀምራል (1 ተጫዋች ብቻ ከቀረ ቆጣሪው ቆሞ ይጠብቃል)።`;
 
     await sendTelegramMessage(
       token,
@@ -2677,92 +2781,6 @@ async function handleTelegramMenuAction(
       },
       callbackMessageId
     );
-    return;
-  }
-
-  // 10.5. Android App 📲 (/android or menu_android)
-  if (
-    clean.includes('android') ||
-    clean === '/android' ||
-    clean === '/app' ||
-    clean === 'menu_android'
-  ) {
-    const androidInstallUrl = buildWebAppUrl(appUrl, 'fast', regPhone);
-    const apkDownloadUrl = `${appUrl.replace(/\/$/, '')}/Ezi-Bingo.apk`;
-    const androidText =
-      `📲 *Ezi Bingo ለ Android ስልክ*\n` +
-      `━━━━━━━━━━━━━━━━━━\n` +
-      `* ቦቱ ወዲያውኑ \`Ezi-Bingo.apk\` ፋይሉን በtelegram በቻት ውስጥ ይልክልዎታል — ፋይሉን ነክተው በቀጥታ Install ማድረግ ይችላሉ!`;
-
-    // Immediately send the Ezi-Bingo.apk file directly into the Telegram chat first so the user can tap and Install right away!
-    let sentApkDocument = false;
-    try {
-      const apkFilePath = path.join(__dirname, 'public', 'Ezi-Bingo.apk');
-      if (fs.existsSync(apkFilePath)) {
-        const apkBuffer = fs.readFileSync(apkFilePath);
-        const form = new FormData();
-        form.append('chat_id', String(chatId));
-        form.append(
-          'caption',
-          '📲 Ezi-Bingo.apk\n* ቦቱ ወዲያውኑ Ezi-Bingo.apk ፋይሉን በtelegram በቻት ውስጥ ይልክልዎታል — ፋይሉን ነክተው በቀጥታ Install ማድረግ ይችላሉ'
-        );
-        form.append(
-          'reply_markup',
-          JSON.stringify({
-            inline_keyboard: [
-              [
-                {
-                  text: '🎮 Play Live Bingo',
-                  web_app: { url: androidInstallUrl },
-                },
-              ],
-              [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
-            ],
-          })
-        );
-        form.append(
-          'document',
-          new Blob([apkBuffer], { type: 'application/vnd.android.package-archive' }),
-          'Ezi-Bingo.apk'
-        );
-        const docRes = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
-          method: 'POST',
-          body: form,
-        });
-        const docJson = await docRes.json().catch(() => null);
-        if (docJson?.ok) {
-          sentApkDocument = true;
-        }
-      }
-    } catch {
-      // fallback below if document upload fails
-    }
-
-    if (!sentApkDocument) {
-      await sendTelegramMessage(
-        token,
-        chatId,
-        androidText,
-        {
-          inline_keyboard: [
-            [
-              {
-                text: '📥 Ezi-Bingo.apk አውርድ (Direct Install)',
-                url: apkDownloadUrl,
-              },
-            ],
-            [
-              {
-                text: '🎮 Play Live Bingo',
-                web_app: { url: androidInstallUrl },
-              },
-            ],
-            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
-          ],
-        },
-        callbackMessageId
-      );
-    }
     return;
   }
 
@@ -2884,7 +2902,7 @@ async function handleTelegramMenuAction(
     }
   }
 
-  // 10B. Handle Active Withdrawal Flow (when user types amount or account number in chat after tapping Withdraw 💸)
+  // 10B. Handle Active Withdrawal Flow (Step 1 Amount -> Step 2 Bank -> Step 3 Account)
   if (
     activeFlow &&
     (activeFlow.mode === 'withdraw_account' || activeFlow.mode === 'withdraw_amount') &&
@@ -2912,29 +2930,24 @@ async function handleTelegramMenuAction(
       }
     } else {
       const singleNum = parseFloat(rawAction.trim());
-      if (singleNum >= 50 && singleNum <= 75000 && rawAction.trim().length <= 6) {
-        chatFlowByChatId.set(chatId, { mode: 'withdraw_account', method, amount: singleNum });
-        await sendTelegramMessage(
-          token,
-          chatId,
-          `Withdraw *${singleNum.toFixed(2)} ETB* via *${method}* 💸\n━━━━━━━━━━━━━━━━━━\n🔢 እባክዎ የእርስዎን *${method} ሂሳብ / ስልክ ቁጥር* ይጻፉ፦`,
-          {
-            inline_keyboard: [
-              [
-                {
-                  text: `✅ ወደ ${regPhone} (${singleNum} ETB) ላክ`,
-                  callback_data: `with_confirm_${method}_${singleNum}_${regPhone}`,
-                },
-              ],
-              [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
-            ],
-          }
-        );
+      if (Number.isFinite(singleNum) && singleNum >= 50 && singleNum <= 75000 && rawAction.trim().length <= 6) {
+        if (singleNum > currentPlayer.balance) {
+          await sendTelegramMessage(
+            token,
+            chatId,
+            `❌ *በቂ ቀሪ ሂሳብ የለዎትም!*\nየጠየቁት፦ *${singleNum.toFixed(2)} ETB*\nያለዎት ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`,
+            { inline_keyboard: [[{ text: '← ተመለስ', callback_data: 'menu_withdraw' }], [{ text: '🏠 Main Menu', callback_data: 'menu_main' }]] },
+            undefined,
+            true
+          );
+          return;
+        }
+        await sendWithdrawStep2Banks(singleNum);
         return;
       }
     }
 
-    if (amt >= 50 && amt <= globalWalletBalance) {
+    if (amt >= 50 && amt <= currentPlayer.balance) {
       chatFlowByChatId.delete(chatId);
       const newTx: ServerTransactionRecord = {
         id: `srv-tx-${Date.now()}`,
@@ -2962,13 +2975,13 @@ async function handleTelegramMenuAction(
       const confirmWithdrawMsg = adminPinConfig.requireDepositApproval
         ? `⏳ *የወጪ ጥያቄዎ ተልኳል (በመጠባበቅ ላይ)*\n` +
           `━━━━━━━━━━━━━━━━━━\n` +
-          `🏦 መንገድ፦ *${method}*\n` +
+          `🏦 መንገድ፦ *${escapeTelegramMarkdown(method)}*\n` +
           `💰 የብር መጠን፦ *${amt.toFixed(2)} ETB*\n` +
           `🔢 ሂሳብ / ስልክ፦ \`${targetAccount}\`\n\n` +
           `ጥያቄዎ ደርሶናል! ልክ ተጣርቶ ሲጸድቅ (*Approved*) ወዲያውኑ ወደ ሂሳብዎ ይላካል።`
         : `✅ *የወጪ ጥያቄዎ ተፈጽሟል!*\n` +
-          `💰 *${amt.toFixed(2)} ETB* ወደ *${method}* (\`${targetAccount}\`) ተልኳል!\n` +
-          `አዲስ ቀሪ ሂሳብ፦ *${globalWalletBalance.toFixed(2)} ETB*`;
+          `💰 *${amt.toFixed(2)} ETB* ወደ *${escapeTelegramMarkdown(method)}* (\`${targetAccount}\`) ተልኳል!\n` +
+          `አዲስ ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`;
 
       await sendTelegramMessage(token, chatId, confirmWithdrawMsg, buildSubMenuInlineKeyboard(appUrl, regPhone));
       return;
@@ -3207,6 +3220,34 @@ async function handleTelegramMenuAction(
       return;
     }
 
+    // Check against chosen amount in activeFlow when user pasted a full SMS containing a different amount
+    if (
+      activeFlow?.mode === 'deposit_sms' &&
+      activeFlow.amount &&
+      parsedSms.amount !== null &&
+      Math.abs(parsedSms.amount - activeFlow.amount) > 0.01
+    ) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `⚠️ *የገንዘብ መጠን ልዩነት (Amount Mismatch)!*\n` +
+          `━━━━━━━━━━━━━━━━━━\n` +
+          `• የመረጡት መጠን፦ *${activeFlow.amount.toFixed(2)} ETB*\n` +
+          `• በደረሰኙ (SMS) ላይ የተገኘው፦ *${parsedSms.amount.toFixed(2)} ETB*\n\n` +
+          `እባክዎ ከመረጡት መጠን ጋር ተመሳሳይ የሆነውን ደረሰኝ ያስገቡ ወይም ተመልሰው መጠኑን ይቀይሩ።`,
+        {
+          inline_keyboard: [
+            [{ text: `🔁 በ ${parsedSms.amount} ETB ቀጥል`, callback_data: `dep_amt_${parsedSms.amount}` }],
+            [{ text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_deposit' }],
+            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
+          ],
+        },
+        undefined,
+        true
+      );
+      return;
+    }
+
     // If user ONLY sent a reference number (like "FT26108XYZ") without an amount in the SMS and without a prior amount in activeFlow, ask them how much ETB they sent instead of assuming 200!
     if (!parsedAmount || parsedAmount <= 0) {
       chatFlowByChatId.set(chatId, {
@@ -3221,7 +3262,7 @@ async function handleTelegramMenuAction(
           `💰 እባክዎ የላኩትን *የብር መጠን (ETB)* ወይም *ሙሉ የባንክ SMS ደረሰኙን* ይላኩ (ለምሳሌ፦ \`110 ${refNo}\`)፦`,
         {
           inline_keyboard: [
-            [{ text: '💵 Open Deposit in App', web_app: { url: buildWebAppUrl(appUrl, 'fast', userPhone, 'deposit') } }],
+            [{ text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_deposit' }],
             [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         }
@@ -3558,7 +3599,8 @@ app.post('/api/telegram/webhook/:token?', async (req, res) => {
 // Check whether the specific Telegram chatId or phone has registered its phone number (NEVER leak another user's phone to a different device!)
 app.get('/api/telegram/user-status', (req, res) => {
   const chatIdParam = Number(req.query.chatId || 0);
-  const phoneParam = String(req.query.phone || '').trim();
+  const rawPhoneParam = String(req.query.phone || '').trim();
+  const phoneParam = normalizeEthiopianPhone(rawPhoneParam) || rawPhoneParam;
 
   if (chatIdParam && registeredChatPhones.has(chatIdParam)) {
     const ph = registeredChatPhones.get(chatIdParam)!;
@@ -3571,6 +3613,7 @@ app.get('/api/telegram/user-status', (req, res) => {
       bonusClaimed: chatWelcomeBonusClaimed.has(chatIdParam),
       balance: player.balance,
       bonusBalance: player.bonusBalance,
+      accountToken: createSignedPlayerToken(player),
     });
     return;
   }
@@ -3585,6 +3628,7 @@ app.get('/api/telegram/user-status', (req, res) => {
       bonusClaimed: true,
       balance: player.balance,
       bonusBalance: player.bonusBalance,
+      accountToken: createSignedPlayerToken(player),
     });
     return;
   }
@@ -3601,21 +3645,23 @@ app.get('/api/telegram/user-status', (req, res) => {
 
 // Per-Player Wallet Sync endpoint (Hardened: Clients can never arbitrarily increase their own balance!)
 app.post('/api/wallet/sync', (req, res) => {
-  const { phone, name, balance, bonusBalance } = req.body as {
+  const { phone, name, balance, bonusBalance, accountToken } = req.body as {
     phone?: string;
     name?: string;
     balance?: number;
     bonusBalance?: number;
     isBlocked?: boolean;
+    accountToken?: string;
   };
-  const cleanPhone = String(phone || '').trim();
+  if (accountToken) {
+    restorePlayerFromSignedTokenIfMissing(accountToken);
+  }
+  const cleanPhone = normalizeEthiopianPhone(String(phone || '')) || String(phone || '').trim();
   if (cleanPhone) {
     const player = ensurePlayerRecord(cleanPhone, name || `Player_${cleanPhone.slice(-4)}`);
     if (name && name.trim() && !name.trim().startsWith('Player_')) {
       player.name = name.trim();
     }
-    // SECURITY LOCK: Never allow client-side /api/wallet/sync to increase balance above server balance!
-    // Balance increases ONLY happen on the server via Admin Approval, Admin Upsert, or Verified Bingo Win!
     if (typeof balance === 'number' && Number.isFinite(balance) && balance >= 0) {
       if (balance < player.balance) {
         player.balance = Number(balance.toFixed(2));
@@ -3635,6 +3681,7 @@ app.post('/api/wallet/sync', (req, res) => {
       balance: player.balance,
       bonusBalance: player.bonusBalance,
       isBlocked: player.isBlocked,
+      accountToken: createSignedPlayerToken(player),
       players: Array.from(playersByPhone.values()),
     });
     return;
@@ -3662,11 +3709,7 @@ app.post('/api/admin/users/upsert', (req, res) => {
     res.status(400).json({ ok: false, error: 'እባክዎ የተጫዋች ስልክ ቁጥር ያስገቡ።' });
     return;
   }
-  const normalizedPhone = cleanPhone.startsWith('251')
-    ? `0${cleanPhone.slice(3)}`
-    : cleanPhone.length === 9 && /^[79]/.test(cleanPhone)
-    ? `0${cleanPhone}`
-    : cleanPhone;
+  const normalizedPhone = normalizeEthiopianPhone(cleanPhone) || cleanPhone;
 
   const player = ensurePlayerRecord(
     normalizedPhone,
@@ -3697,7 +3740,7 @@ app.post('/api/admin/users/upsert', (req, res) => {
 // Admin endpoint to remove a user account from User Management System
 app.post('/api/admin/users/delete', (req, res) => {
   const { phone } = req.body as { phone?: string };
-  const cleanPhone = String(phone || '').trim();
+  const cleanPhone = normalizeEthiopianPhone(String(phone || '')) || String(phone || '').trim();
   if (cleanPhone && playersByPhone.has(cleanPhone)) {
     playersByPhone.delete(cleanPhone);
     saveBotsToDisk();
@@ -3711,20 +3754,21 @@ app.post('/api/admin/users/delete', (req, res) => {
 
 // Sync phone registration from WebApp to backend for this specific user/device
 app.post('/api/telegram/register-phone', (req, res) => {
-  const { chatId, phone, name, password } = req.body as {
+  const { chatId, phone, name, password, accountToken } = req.body as {
     chatId?: number;
     phone?: string;
     name?: string;
     password?: string;
+    accountToken?: string;
   };
+  if (accountToken) {
+    restorePlayerFromSignedTokenIfMissing(accountToken);
+  }
   const cleanPhone = String(phone || '')
     .trim()
     .replace(/[\s\-+()]/g, '');
-  const normalizedPhone = cleanPhone.startsWith('251')
-    ? `0${cleanPhone.slice(3)}`
-    : cleanPhone.length === 9 && /^[79]/.test(cleanPhone)
-    ? `0${cleanPhone}`
-    : cleanPhone || `0911${Math.floor(100000 + Math.random() * 900000)}`;
+  const normalizedPhone =
+    normalizeEthiopianPhone(cleanPhone) || `0911${Math.floor(100000 + Math.random() * 900000)}`;
   const player = ensurePlayerRecord(
     normalizedPhone,
     name || `Player_${normalizedPhone.slice(-4)}`,
@@ -3749,14 +3793,90 @@ app.post('/api/telegram/register-phone', (req, res) => {
     registered: true,
     phone: normalizedPhone,
     player,
+    accountToken: createSignedPlayerToken(player),
   });
 });
 
 // ============================================================================
-// PLAYER AUTHENTICATION SYSTEM (Login, Register with OTP + Password, Forgot Password with OTP, Logout)
+// PLAYER AUTHENTICATION SYSTEM (Telegram-Only OTP, Password Login, Durable Session Restore, Profile Update)
 // ============================================================================
 
-// 1. Send OTP for New Registration ('register') or Forgot Password ('forgot')
+// 0. Restore Verified Account Snapshot after Server Restart (HMAC-verified)
+app.post('/api/auth/restore-session', (req, res) => {
+  const { accountToken } = req.body as { accountToken?: string };
+  const snap = verifySignedPlayerToken(accountToken);
+  if (!snap) {
+    res.status(401).json({ ok: false, error: 'Invalid or expired session token' });
+    return;
+  }
+  const cleanPhone = normalizeEthiopianPhone(snap.phone) || snap.phone;
+  const existing = playersByPhone.get(cleanPhone);
+  let player: ServerPlayerRecord;
+  if (!existing) {
+    player = restorePlayerFromSignedTokenIfMissing(accountToken)!;
+  } else {
+    player = existing;
+    if (snap.name && (!player.name || player.name.startsWith('Player_'))) {
+      player.name = snap.name;
+    }
+    if (snap.passwordHash && (!player.passwordHash || player.passwordHash === '****')) {
+      player.passwordHash = snap.passwordHash;
+    }
+    if (snap.chatId && !player.chatId) {
+      player.chatId = snap.chatId;
+      registeredChatPhones.set(snap.chatId, cleanPhone);
+    }
+    saveBotsToDisk();
+  }
+  broadcastRealtimeSync();
+  res.json({
+    ok: true,
+    player,
+    accountToken: createSignedPlayerToken(player),
+    players: Array.from(playersByPhone.values()),
+  });
+});
+
+// 0.5 Update Player Username/Profile across Server & Active Locked Cartelas
+app.post('/api/player/update-profile', (req, res) => {
+  const { phone, name } = req.body as { phone?: string; name?: string };
+  const normalizedPhone = normalizeEthiopianPhone(String(phone || ''));
+  const cleanName = String(name || '').trim();
+  if (!normalizedPhone || cleanName.length < 2) {
+    res.status(400).json({ ok: false, error: 'እባክዎ ትክክለኛ ስም (ቢያንስ 2 ፊደላት) ያስገቡ።' });
+    return;
+  }
+  const player = ensurePlayerRecord(normalizedPhone, cleanName);
+  player.name = cleanName.slice(0, 32);
+  player.updatedAt = new Date().toLocaleString();
+
+  for (const stk of FAST_STAKE_TIERS) {
+    const lMap = fastLockedCartelasByStake[stk];
+    if (lMap) {
+      for (const item of lMap.values()) {
+        if (normalizeEthiopianPhone(item.ownerPhone) === normalizedPhone) {
+          item.ownerName = player.name;
+        }
+      }
+    }
+  }
+  for (const item of regularRoomLockedCartelas.values()) {
+    if (normalizeEthiopianPhone(item.ownerPhone) === normalizedPhone) {
+      item.ownerName = player.name;
+    }
+  }
+
+  saveBotsToDisk();
+  broadcastRealtimeSync('both');
+  res.json({
+    ok: true,
+    player,
+    accountToken: createSignedPlayerToken(player),
+    players: Array.from(playersByPhone.values()),
+  });
+});
+
+// 1. Send OTP Strictly via Telegram ONLY (NEVER return otpCode in HTTP response!)
 app.post('/api/auth/send-otp', (req, res) => {
   const { phone, name, purpose } = req.body as {
     phone?: string;
@@ -3785,7 +3905,7 @@ app.post('/api/auth/send-otp', (req, res) => {
     expiresAt: Date.now() + 10 * 60 * 1000,
   });
 
-  // Also deliver OTP via Telegram if this phone is linked to a Telegram chatId
+  // Deliver OTP ONLY via Telegram bot
   const playerRec = playersByPhone.get(normalizedPhone);
   const linkedChatId =
     playerRec?.chatId ||
@@ -3793,32 +3913,38 @@ app.post('/api/auth/send-otp', (req, res) => {
       ([, ph]) => normalizeEthiopianPhone(ph) === normalizedPhone
     )?.[0];
   const firstActiveBot = Array.from(activeBots.entries())[0];
+  let sentToTelegram = false;
   if (linkedChatId && firstActiveBot) {
     const [botToken] = firstActiveBot;
     const otpMsg =
-      `🔐 *የ Ezi Bingo ማረጋገጫ ኮድ (OTP Verification)*\n` +
+      `🔐 *የ Sun Bingo ማረጋገጫ ኮድ (OTP Verification)*\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
       `📱 ስልክ፦ \`${normalizedPhone}\`\n` +
       `🔑 የእርስዎ ባለ 6-አሃዝ OTP ኮድ፦ *\`${otpCode}\`*\n` +
-      `⏳ ይህ ኮድ ለ 10 ደቂቃ ያገለግላል።`;
-    sendTelegramMessage(botToken, linkedChatId, otpMsg).catch(() => {});
+      `⏳ ይህ ኮድ ለ 10 ደቂቃ ያገለግላል።\n` +
+      `⚠️ ይህንን ኮድ ወደ ማረጋገጫ ሳጥኑ ይጻፉ (በስክሪኑ ላይ አይታይም)።`;
+    sendTelegramMessage(botToken, linkedChatId, otpMsg, undefined, undefined, true).catch(() => {});
+    sentToTelegram = true;
   }
 
   const firstBotInfo = Array.from(activeBots.values())[0];
-  const botUsername = firstBotInfo?.botUsername || 'Kidamegamesbot';
+  const botUsername = firstBotInfo?.botUsername || 'Sungamsbot';
   const telegramOtpUrl = `https://t.me/${botUsername}?start=otp_${normalizedPhone}`;
 
   res.json({
     ok: true,
     phone: normalizedPhone,
-    otpCode, // Returned for instant in-app SMS banner display as well
+    sentToTelegram,
+    needsBotLink: !sentToTelegram,
     telegramOtpUrl,
     botUsername,
-    message: `የማረጋገጫ ኮድ (OTP) ወደ ${normalizedPhone} ተልኳል! እንዲሁም በቴሌግራም መውሰድ ይችላሉ።`,
+    message: sentToTelegram
+      ? `✅ ባለ 6-አሃዝ የማረጋገጫ ኮድ (OTP) በቀጥታ ወደ Telegram ቦት (@${botUsername}) ተልኳል! Telegram ዎን ይክፈቱ።`
+      : `📱 ኮዱን በ Telegram ለመቀበል ከታች ያለውን «በ Telegram OTP ውሰድ (@${botUsername})» የሚለውን ቁልፍ ይጫኑ!`,
   });
 });
 
-// 2. Verify OTP & Complete Registration (or Set New Password)
+// 2. Verify Telegram OTP & Complete Registration
 app.post('/api/auth/register', (req, res) => {
   const { phone, name, otpCode, password, referrerCode } = req.body as {
     phone?: string;
@@ -3835,10 +3961,10 @@ app.post('/api/auth/register', (req, res) => {
 
   const cleanOtp = String(otpCode || '').trim();
   const pending = pendingOtpByPhone.get(normalizedPhone);
-  if (!cleanOtp || (pending && pending.code !== cleanOtp && cleanOtp !== '123456')) {
+  if (!cleanOtp || !pending || pending.expiresAt < Date.now() || pending.code !== cleanOtp) {
     res.status(400).json({
       ok: false,
-      error: 'የተሳሳተ የማረጋገጫ ኮድ (OTP)! እባክዎ የተላከውን ባለ 6-አሃዝ ኮድ በትክክል ያስገቡ።',
+      error: 'የተሳሳተ ወይም ጊዜው ያለፈበት የማረጋገጫ ኮድ (OTP)! እባክዎ በ Telegram የተላከውን ባለ 6-አሃዝ ኮድ በትክክል ያስገቡ።',
     });
     return;
   }
@@ -3897,8 +4023,9 @@ app.post('/api/auth/register', (req, res) => {
   res.json({
     ok: true,
     player,
+    accountToken: createSignedPlayerToken(player),
     players: Array.from(playersByPhone.values()),
-    message: `እንኳን ደህና መጡ ${player.name}! አካውንትዎ በ OTP ተረጋግጦ ተከፍቷል።`,
+    message: `እንኳን ደህና መጡ ${player.name}! አካውንትዎ በ Telegram OTP ተረጋግጦ ተከፍቷል።`,
   });
 });
 
@@ -3941,18 +4068,23 @@ app.post('/api/player/invite', (req, res) => {
     ok: true,
     message: `ጓደኛዎ (${normFriend}) ተጋብዟል! +${bonus}.00 ETB ወደ ዋሌትዎ ገብቷል።`,
     player: referrer,
+    accountToken: createSignedPlayerToken(referrer),
     balance: referrer.balance,
   });
 });
 
 
-// 3. Player Login with Phone + Password
+// 3. Player Login with Phone + Password (supports signed accountToken restore across server restarts)
 app.post('/api/auth/login', (req, res) => {
-  const { phone, password, name } = req.body as {
+  const { phone, password, name, accountToken } = req.body as {
     phone?: string;
     password?: string;
     name?: string;
+    accountToken?: string;
   };
+  if (accountToken) {
+    restorePlayerFromSignedTokenIfMissing(accountToken);
+  }
   const normalizedPhone = normalizeEthiopianPhone(String(phone || ''));
   if (!normalizedPhone || normalizedPhone.length < 9) {
     res.status(400).json({
@@ -3973,7 +4105,6 @@ app.post('/api/auth/login', (req, res) => {
 
   let player = playersByPhone.get(normalizedPhone);
   if (!player) {
-    // Automatically provision player account on first login so no user is ever blocked
     player = ensurePlayerRecord(
       normalizedPhone,
       (name || '').trim() || `Player_${normalizedPhone.slice(-4)}`
@@ -4013,12 +4144,13 @@ app.post('/api/auth/login', (req, res) => {
   res.json({
     ok: true,
     player,
+    accountToken: createSignedPlayerToken(player),
     players: Array.from(playersByPhone.values()),
     message: `እንኳን ደህና መጡ ${player.name}!`,
   });
 });
 
-// 4. Forgot Password -> Verify OTP & Set New Password
+// 4. Forgot Password -> Verify Telegram OTP & Set New Password
 app.post('/api/auth/reset-password', (req, res) => {
   const { phone, otpCode, newPassword } = req.body as {
     phone?: string;
@@ -4033,10 +4165,10 @@ app.post('/api/auth/reset-password', (req, res) => {
 
   const cleanOtp = String(otpCode || '').trim();
   const pending = pendingOtpByPhone.get(normalizedPhone);
-  if (!cleanOtp || (pending && pending.code !== cleanOtp && cleanOtp !== '123456')) {
+  if (!cleanOtp || !pending || pending.expiresAt < Date.now() || pending.code !== cleanOtp) {
     res.status(400).json({
       ok: false,
-      error: 'የተሳሳተ የማረጋገጫ ኮድ (OTP)! እባክዎ የተላከውን ባለ 6-አሃዝ ኮድ ያስገቡ።',
+      error: 'የተሳሳተ ወይም ጊዜው ያለፈበት የማረጋገጫ ኮድ (OTP)! እባክዎ በ Telegram የተላከውን ባለ 6-አሃዝ ኮድ ያስገቡ።',
     });
     return;
   }
@@ -4061,6 +4193,7 @@ app.post('/api/auth/reset-password', (req, res) => {
   res.json({
     ok: true,
     player,
+    accountToken: createSignedPlayerToken(player),
     players: Array.from(playersByPhone.values()),
     message: 'አዲሱ የይለፍ ቃልዎ (Password) በተሳካ ሁኔታ ተቀይሯል!',
   });
@@ -4789,10 +4922,16 @@ const activeHttpClients = new Map<string, number>();
 
 app.get('/api/live-room/state', (req, res) => {
   const clientIdParam = String(req.query.clientId || '').trim();
-  const phoneParam = String(req.query.phone || '').trim();
+  const rawPhoneParam = String(req.query.phone || '').trim();
+  const phoneParam = normalizeEthiopianPhone(rawPhoneParam) || rawPhoneParam;
   const nameParam = String(req.query.name || '').trim();
+  const accountTokenParam = String(req.headers['x-account-token'] || req.query.accountToken || '').trim();
   const modeParam = String(req.query.mode || 'fast') === 'regular' ? 'regular' : 'fast';
   const stakeParam = normalizeFastStakeTier(req.query.stake);
+
+  if (accountTokenParam) {
+    restorePlayerFromSignedTokenIfMissing(accountTokenParam);
+  }
 
   if (clientIdParam) {
     activeHttpClients.set(clientIdParam, Date.now());
@@ -4867,11 +5006,14 @@ app.get('/api/live-room/state', (req, res) => {
     lockedByOthers,
     onlinePlayersCount: room.onlinePlayersCount,
     player,
+    accountToken: playersByPhone.has(player.phone) ? createSignedPlayerToken(player) : undefined,
     players: Array.from(playersByPhone.values()),
+    bankAccounts: persistedBankAccounts,
     transactions: serverTransactions,
     pendingCount: serverTransactions.filter((t) => t.status === 'pending').length,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
     smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+    autoNotifyGames: adminPinConfig.autoNotifyGames,
   });
 });
 
@@ -4947,6 +5089,7 @@ app.post('/api/live-room/action', (req, res) => {
     room.preGameCountdown = null;
     broadcastRealtimeSync(mode);
   } else if (action === 'play') {
+    const wasFreshStart = !room.isPlaying && room.calledBalls.length === 0;
     room.preGameCountdown = null;
     room.isPlaying = true;
     room.isPaused = false;
@@ -4956,11 +5099,20 @@ app.post('/api/live-room/action', (req, res) => {
     } else {
       broadcastRealtimeSync(mode);
     }
+    if (wasFreshStart) {
+      emitGameNotification({
+        game: mode,
+        title: mode === 'fast' ? `⚡ Fast Bingo (${room.stakeAmount} ETB) ተጀምሯል!` : `👑 ልዩ ቢንጎ (${room.stakeAmount} ETB) ተጀምሯል!`,
+        message: `ዙር #${room.gameMatchId} አሁን ተጀምሯል!`,
+        throttleMs: 30000,
+      });
+    }
   } else if (action === 'pause') {
     room.isPaused = true;
     broadcastRealtimeSync(mode);
   } else if (action === 'toggle_pause') {
     if (!room.isPlaying) {
+      const wasFreshStart = room.calledBalls.length === 0;
       room.preGameCountdown = null;
       room.isPlaying = true;
       room.isPaused = false;
@@ -4969,6 +5121,14 @@ app.post('/api/live-room/action', (req, res) => {
         drawNextServerBallForRoom(room);
       } else {
         broadcastRealtimeSync(mode);
+      }
+      if (wasFreshStart) {
+        emitGameNotification({
+          game: mode,
+          title: mode === 'fast' ? `⚡ Fast Bingo (${room.stakeAmount} ETB) ተጀምሯል!` : `👑 ልዩ ቢንጎ (${room.stakeAmount} ETB) ተጀምሯል!`,
+          message: `ዙር #${room.gameMatchId} አሁን ተጀምሯል!`,
+          throttleMs: 30000,
+        });
       }
     } else {
       room.isPaused = !room.isPaused;
@@ -5303,6 +5463,7 @@ app.post('/api/live-room/action', (req, res) => {
         accountNumber: String(b?.accountNumber || '').trim(),
         accountHolder: String(b?.accountHolder || 'Ezana Gebremedhin').trim(),
         badgeBg: String(b?.badgeBg || 'bg-emerald-600 text-white').trim(),
+        isActive: b?.isActive !== false,
       }));
       persistedBankAccounts = sanitizedBanks;
       for (const stk of FAST_STAKE_TIERS) {
@@ -5343,6 +5504,7 @@ app.post('/api/bank-accounts', (req, res) => {
       accountNumber: String(b?.accountNumber || '').trim(),
       accountHolder: String(b?.accountHolder || 'Ezana Gebremedhin').trim(),
       badgeBg: String(b?.badgeBg || 'bg-emerald-600 text-white').trim(),
+      isActive: b?.isActive !== false,
     }));
     persistedBankAccounts = sanitized;
     for (const stk of FAST_STAKE_TIERS) {
@@ -6725,6 +6887,7 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
     depositBonusPercent,
     minDepositAmount,
     minWithdrawAmount,
+    autoNotifyGames,
   } = req.body as {
     newPassword?: string;
     newPin?: string;
@@ -6735,6 +6898,7 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
     depositBonusPercent?: number;
     minDepositAmount?: number;
     minWithdrawAmount?: number;
+    autoNotifyGames?: Partial<{ fast: boolean; regular: boolean; keno: boolean; ramino: boolean }>;
   };
   if (newPassword && newPassword.trim().length >= 4) {
     adminPinConfig.passwordHash = newPassword.trim();
@@ -6763,6 +6927,14 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
   if (typeof minWithdrawAmount === 'number' && Number.isFinite(minWithdrawAmount)) {
     adminPinConfig.minWithdrawAmount = Math.max(1, minWithdrawAmount);
   }
+  if (autoNotifyGames && typeof autoNotifyGames === 'object') {
+    adminPinConfig.autoNotifyGames = {
+      fast: typeof autoNotifyGames.fast === 'boolean' ? autoNotifyGames.fast : adminPinConfig.autoNotifyGames.fast,
+      regular: typeof autoNotifyGames.regular === 'boolean' ? autoNotifyGames.regular : adminPinConfig.autoNotifyGames.regular,
+      keno: typeof autoNotifyGames.keno === 'boolean' ? autoNotifyGames.keno : adminPinConfig.autoNotifyGames.keno,
+      ramino: typeof autoNotifyGames.ramino === 'boolean' ? autoNotifyGames.ramino : adminPinConfig.autoNotifyGames.ramino,
+    };
+  }
   saveBotsToDisk();
   broadcastRealtimeSync();
   res.json({
@@ -6777,6 +6949,7 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
       depositBonusPercent: adminPinConfig.depositBonusPercent,
       minDepositAmount: adminPinConfig.minDepositAmount,
       minWithdrawAmount: adminPinConfig.minWithdrawAmount,
+      autoNotifyGames: adminPinConfig.autoNotifyGames,
     },
   });
 };
@@ -6797,18 +6970,21 @@ app.get('/api/admin/settings', (req, res) => {
       depositBonusPercent: adminPinConfig.depositBonusPercent,
       minDepositAmount: adminPinConfig.minDepositAmount,
       minWithdrawAmount: adminPinConfig.minWithdrawAmount,
+      autoNotifyGames: adminPinConfig.autoNotifyGames,
     },
   });
 });
 
-// Admin Broadcast Message to Telegram Users
+// Admin Broadcast Message to In-App Banner/Toast AND Telegram Users
 app.post('/api/admin/broadcast', async (req, res) => {
-  const { targetType, specificUser, message } = req.body as {
+  const { targetType, specificUser, message, title } = req.body as {
     targetType?: 'all' | 'specific';
     specificUser?: string;
     message?: string;
+    title?: string;
   };
   const cleanMsg = (message || '').trim();
+  const cleanTitle = (title || '📢 የአድሚን ማስታወቂያ').trim();
   if (!cleanMsg) {
     res.status(400).json({ ok: false, error: 'እባክዎ የሚላከውን መልዕክት ይጻፉ።' });
     return;
@@ -6850,7 +7026,10 @@ app.post('/api/admin/broadcast', async (req, res) => {
         await sendTelegramMessage(
           firstActiveBot,
           cid,
-          `📢 *ማስታወቂያ (Ezi Bingo Broadcast)*\n━━━━━━━━━━━━━━━━━━\n${cleanMsg}`
+          `📢 *${escapeTelegramMarkdown(cleanTitle)}*\n━━━━━━━━━━━━━━━━━━\n${cleanMsg}`,
+          undefined,
+          undefined,
+          true
         );
         sentCount++;
       } catch {
@@ -6867,6 +7046,12 @@ app.post('/api/admin/broadcast', async (req, res) => {
   regularLiveRoomState.adminRoomMessage = cleanMsg;
   regularLiveRoomState.adminRoomMessageAt = nowTime;
   broadcastRealtimeSync('both');
+  emitGameNotification({
+    game: 'admin',
+    title: cleanTitle,
+    message: cleanMsg,
+    sendTelegram: false,
+  });
 
   res.json({
     ok: true,
@@ -6875,8 +7060,8 @@ app.post('/api/admin/broadcast', async (req, res) => {
     adminRoomMessage: cleanMsg,
     message:
       sentCount > 0
-        ? `✅ መልዕክቱ በጨዋታ ቦርዱ ላይ ወጥቷል እንዲሁም ለ ${sentCount} የቴሌግራም ተጠቃሚዎች ተልኳል!`
-        : `✅ መልዕክቱ በጨዋታ ቦርዱ ላይ ለሁሉም ተጫዋቾች ወጥቷል!`,
+        ? `✅ መልዕክቱ በጨዋታ ቦርዱ/አፑ ላይ ወጥቷል እንዲሁም ለ ${sentCount} የቴሌግራም ተጠቃሚዎች ተልኳል!`
+        : `✅ መልዕክቱ በመተግበሪያው ውስጥ ለሁሉም ተጫዋቾች ወጥቷል!`,
   });
 });
 
@@ -6923,7 +7108,7 @@ app.post('/api/telegram/connect', async (req, res) => {
       }),
     });
 
-    // 4. Register all Bot Commands in Telegram (including /start)
+    // 4. Register Bot Commands in Telegram (including /start)
     await fetch(`https://api.telegram.org/bot${cleanToken}/setMyCommands`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -6935,20 +7120,30 @@ app.post('/api/telegram/connect', async (req, res) => {
           { command: 'deposit', description: 'Deposit 💵' },
           { command: 'withdraw', description: 'Withdraw 💸' },
           { command: 'balance', description: 'Check Balance 💰' },
-          { command: 'jackpot', description: 'Jackpot 🎰' },
           { command: 'transfer', description: 'Transfer 🔄' },
-          { command: 'leaderboard', description: 'Leaderboard 🏆' },
-          { command: 'token', description: '🔐 Get Login Token / ኮድ' },
           { command: 'rules', description: 'Game Rules 📖' },
           { command: 'support', description: 'Support 📞' },
-          { command: 'android', description: '📲 Download Android App' },
         ],
       }),
     });
 
-    // 5. Start or update SINGLE background polling loop
+    // 5. Disconnect any different previously active bot so replacing a bot never keeps the old one alive
+    for (const [oldTok, oldBot] of Array.from(activeBots.entries())) {
+      if (oldTok !== cleanToken) {
+        oldBot.isRunning = false;
+        activeBots.delete(oldTok);
+        try {
+          await fetch(`https://api.telegram.org/bot${oldTok}/deleteWebhook`);
+        } catch {}
+      }
+    }
+    persistedBotTokensCache = persistedBotTokensCache.filter((b) => b.token === cleanToken);
+
+    // 6. Start or update SINGLE background polling loop
     const existing = activeBots.get(cleanToken);
     if (existing) {
+      existing.botUsername = botUsername;
+      existing.botFirstName = botFirstName;
       existing.appUrl = targetUrl;
       existing.lastError = undefined;
       if (!existing.isRunning) {
@@ -7189,6 +7384,12 @@ function startKenoServerLoop() {
         kenoLiveState.currentRevealedIndex = -1;
         kenoLiveState.roundHash = makeKenoRoundHash(kenoLiveState.roundNumber, balls);
         broadcastKenoLiveState();
+        emitGameNotification({
+          game: 'keno',
+          title: `🎱 ፈጣን ኬኖ (Fast Keno) ዙር #${kenoLiveState.roundNumber} ተጀምሯል!`,
+          message: `20 ኳሶች መውጣት ጀምረዋል! ቀጣዩን ዙር ይቀላቀሉ።`,
+          throttleMs: 90000,
+        });
       }
       return;
     }
@@ -7639,7 +7840,11 @@ function srvPartitionValidMelds(cards: RaminoCard[]) {
               if (natChosen.length < 2) continue;
               for (const jks of jokerCombos(missing)) {
                 const all = [...natChosen, ...jks];
-                addCandidate('run', all.map((i) => cards[i]), all);
+                const orderedRun = srvNormalizeRunCardsOrder(
+                  all.map((i) => cards[i]),
+                  false
+                );
+                addCandidate('run', orderedRun, all);
               }
             }
           }
@@ -7700,17 +7905,18 @@ function srvCanFormFivePairs(rem10: RaminoCard[], allowSameRankPairs = false): b
   return jokers >= odds && (jokers - odds) % 2 === 0;
 }
 
-function srvIsExact13CardDopey(cards13: RaminoCard[], allowSameRankPairs = false): boolean {
+function srvIsExact13CardDopey(cards13: RaminoCard[], _allowSameRankPairs = false): boolean {
   if (cards13.length !== 13) return false;
   for (let i = 0; i < 11; i++) {
     for (let j = i + 1; j < 12; j++) {
       for (let k = j + 1; k < 13; k++) {
         const triple = [cards13[i], cards13[j], cards13[k]];
-        // Strictly 5 pairs + 1 Tris (Set only, never a Run)
-        if (!srvIsValidSet(triple)) continue;
+        const natCount = triple.filter((c) => !c.isJoker && c.rank !== 'JOKER').length;
+        // Strictly 5 identical pairs + 1 Tris (Set only, min 2 naturals, never a Run)
+        if (natCount < 2 || !srvIsValidSet(triple)) continue;
         const rem10: RaminoCard[] = [];
         for (let m = 0; m < 13; m++) if (m !== i && m !== j && m !== k) rem10.push(cards13[m]);
-        if (srvCanFormFivePairs(rem10, allowSameRankPairs)) return true;
+        if (srvCanFormFivePairs(rem10, false)) return true;
       }
     }
   }
@@ -7760,6 +7966,57 @@ function srvGetRunOrderForMeld(cards: RaminoCard[]): string[] {
   return ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 }
 
+function srvGetOrderedRunSequence(cards: RaminoCard[], order: string[]): RaminoCard[] | null {
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  const jokers = cards.filter((c) => c.isJoker);
+  if (nonJokers.length === 0) return null;
+  const sortedNaturals = [...nonJokers].sort((a, b) => order.indexOf(a.rank) - order.indexOf(b.rank));
+  for (let i = 0; i < sortedNaturals.length; i++) {
+    const idx = order.indexOf(sortedNaturals[i].rank);
+    if (idx === -1) return null;
+    if (i > 0 && idx === order.indexOf(sortedNaturals[i - 1].rank)) return null;
+  }
+  let gaps = 0;
+  for (let i = 1; i < sortedNaturals.length; i++) {
+    gaps += order.indexOf(sortedNaturals[i].rank) - order.indexOf(sortedNaturals[i - 1].rank) - 1;
+  }
+  if (jokers.length < gaps) return null;
+  const arranged: RaminoCard[] = [sortedNaturals[0]];
+  let jCursor = 0;
+  for (let i = 1; i < sortedNaturals.length; i++) {
+    const gapCount = order.indexOf(sortedNaturals[i].rank) - order.indexOf(sortedNaturals[i - 1].rank) - 1;
+    for (let g = 0; g < gapCount && jCursor < jokers.length; g++) arranged.push(jokers[jCursor++]);
+    arranged.push(sortedNaturals[i]);
+  }
+  let highIdx = order.indexOf(sortedNaturals[sortedNaturals.length - 1].rank);
+  let lowIdx = order.indexOf(sortedNaturals[0].rank);
+  while (jCursor < jokers.length) {
+    if (highIdx < order.length - 1) { arranged.push(jokers[jCursor++]); highIdx++; }
+    else if (lowIdx > 0) { arranged.unshift(jokers[jCursor++]); lowIdx--; }
+    else break;
+  }
+  return arranged;
+}
+
+function srvNormalizeRunCardsOrder(cards: RaminoCard[], preserveDescending = true): RaminoCard[] {
+  const order = srvGetRunOrderForMeld(cards);
+  const arranged = srvGetOrderedRunSequence(cards, order);
+  if (!arranged) return cards;
+  if (preserveDescending) {
+    const origNatIndices = cards.filter((c) => !c.isJoker).map((c) => order.indexOf(c.rank));
+    const isDescNaturals =
+      origNatIndices.length >= 2 &&
+      origNatIndices.every((v, i) => i === 0 || origNatIndices[i - 1] > v);
+    if (isDescNaturals) return [...arranged].reverse();
+  }
+  return arranged;
+}
+
+function srvIsDescendingRunCards(cards: RaminoCard[], order: string[]): boolean {
+  const natIndices = cards.filter((c) => !c.isJoker).map((c) => order.indexOf(c.rank));
+  return natIndices.length >= 2 && natIndices[0] > natIndices[1];
+}
+
 function srvGetTableMeldJokerInfo(meld: RaminoMeldGroup, cardIdx: number): { rank: string; suit: RaminoSuitSymbol | null } | null {
   if (meld.type === 'set') {
     const nonJokers = meld.cards.filter((c) => !c.isJoker);
@@ -7770,54 +8027,64 @@ function srvGetTableMeldJokerInfo(meld: RaminoMeldGroup, cardIdx: number): { ran
     return { rank, suit: missingSuit };
   }
   const order = srvGetRunOrderForMeld(meld.cards);
-  const firstNatPos = meld.cards.findIndex((c) => !c.isJoker);
+  const isDesc = srvIsDescendingRunCards(meld.cards, order);
+  const seq = isDesc ? [...meld.cards].reverse() : meld.cards;
+  const targetIdx = isDesc ? meld.cards.length - 1 - cardIdx : cardIdx;
+  const firstNatPos = seq.findIndex((c) => !c.isJoker);
   if (firstNatPos === -1) return null;
-  const firstNatOrderIdx = order.indexOf(meld.cards[firstNatPos].rank);
+  const firstNatOrderIdx = order.indexOf(seq[firstNatPos].rank);
   if (firstNatOrderIdx === -1) return null;
-  const targetRank = order[firstNatOrderIdx - firstNatPos + cardIdx];
-  const suit = meld.suit || meld.cards[firstNatPos].suit;
+  const targetRank = order[firstNatOrderIdx - firstNatPos + targetIdx];
+  const suit = meld.suit || seq[firstNatPos].suit;
   return targetRank ? { rank: targetRank, suit } : null;
 }
 
 function srvInsertCardIntoRunMeld(cards: RaminoCard[], newCard: RaminoCard, clickedIdx: number): RaminoCard[] | null {
   if (cards.length >= 13) return null;
+  const order = srvGetRunOrderForMeld(cards);
+  const isDesc = srvIsDescendingRunCards(cards, order);
+  const ascCards = isDesc ? [...cards].reverse() : cards;
+  const ascClickedIdx = isDesc ? cards.length - 1 - clickedIdx : clickedIdx;
   if (newCard.isJoker) {
-    const order = srvGetRunOrderForMeld(cards);
-    const firstNatPos = cards.findIndex((c) => !c.isJoker);
-    if (firstNatPos === -1) return [...cards, newCard];
-    const firstNatOrderIdx = order.indexOf(cards[firstNatPos].rank);
-    if (firstNatOrderIdx === -1) return [...cards, newCard];
+    const firstNatPos = ascCards.findIndex((c) => !c.isJoker);
+    if (firstNatPos === -1) return isDesc ? [...ascCards, newCard].reverse() : [...ascCards, newCard];
+    const firstNatOrderIdx = order.indexOf(ascCards[firstNatPos].rank);
+    if (firstNatOrderIdx === -1) return isDesc ? [...ascCards, newCard].reverse() : [...ascCards, newCard];
     const startOrderIdx = firstNatOrderIdx - firstNatPos;
-    const endOrderIdx = startOrderIdx + cards.length - 1;
+    const endOrderIdx = startOrderIdx + ascCards.length - 1;
     const canPrepend = startOrderIdx > 0;
     const canAppend = endOrderIdx < order.length - 1;
     if (!canPrepend && !canAppend) return null;
-    if (clickedIdx === 0 && canPrepend) return [newCard, ...cards];
-    if (canAppend) return [...cards, newCard];
-    return [newCard, ...cards];
+    const nextAsc =
+      ascClickedIdx === 0 && canPrepend
+        ? [newCard, ...ascCards]
+        : canAppend
+        ? [...ascCards, newCard]
+        : [newCard, ...ascCards];
+    return isDesc ? nextAsc.reverse() : nextAsc;
   }
-  const candidate = [...cards, newCard];
+  const candidate = [...ascCards, newCard];
   if (!srvIsValidRun(candidate)) return null;
-  const order = srvGetRunOrderForMeld(candidate);
-  const nonJokers = candidate.filter((c) => !c.isJoker).sort((a, b) => order.indexOf(a.rank) - order.indexOf(b.rank));
+  const candOrder = srvGetRunOrderForMeld(candidate);
+  const nonJokers = candidate.filter((c) => !c.isJoker).sort((a, b) => candOrder.indexOf(a.rank) - candOrder.indexOf(b.rank));
   const jokers = candidate.filter((c) => c.isJoker);
   if (nonJokers.length === 0) return candidate;
   const arranged: RaminoCard[] = [nonJokers[0]];
   let jokerCursor = 0;
   for (let i = 1; i < nonJokers.length; i++) {
-    const gap = order.indexOf(nonJokers[i].rank) - order.indexOf(nonJokers[i - 1].rank) - 1;
+    const gap = candOrder.indexOf(nonJokers[i].rank) - candOrder.indexOf(nonJokers[i - 1].rank) - 1;
     for (let g = 0; g < gap && jokerCursor < jokers.length; g++) arranged.push(jokers[jokerCursor++]);
     arranged.push(nonJokers[i]);
   }
-  let highIdx = order.indexOf(nonJokers[nonJokers.length - 1].rank);
-  let lowIdx = order.indexOf(nonJokers[0].rank);
+  let highIdx = candOrder.indexOf(nonJokers[nonJokers.length - 1].rank);
+  let lowIdx = candOrder.indexOf(nonJokers[0].rank);
   while (jokerCursor < jokers.length) {
-    if (clickedIdx === 0 && lowIdx > 0) { arranged.unshift(jokers[jokerCursor++]); lowIdx--; }
-    else if (highIdx < order.length - 1) { arranged.push(jokers[jokerCursor++]); highIdx++; }
+    if (ascClickedIdx === 0 && lowIdx > 0) { arranged.unshift(jokers[jokerCursor++]); lowIdx--; }
+    else if (highIdx < candOrder.length - 1) { arranged.push(jokers[jokerCursor++]); highIdx++; }
     else if (lowIdx > 0) { arranged.unshift(jokers[jokerCursor++]); lowIdx--; }
     else break;
   }
-  return arranged;
+  return isDesc ? arranged.reverse() : arranged;
 }
 
 function srvPartitionCollapsedFourSuitSets(melds: RaminoMeldGroup[], currentSeq: number) {
@@ -8209,6 +8476,12 @@ function startServerRaminoCeremony(session: RaminoTableSession) {
     broadcastPrivateRoomSnapshot(privRoom);
   }
   broadcastRaminoTableState(session);
+  emitGameNotification({
+    game: 'ramino',
+    title: `♠️ ኮንከር ራሚኖ (${session.stake} ETB) ጨዋታ ተጀምሯል!`,
+    message: `የራሚኖ ክፍል ${session.roomCode} (${session.players.length} ተጫዋቾች) አሁን ጨዋታ ጀምሯል!`,
+    throttleMs: 30000,
+  });
 
   const count = parts.length;
   const stepReveal = (revealed: number) => {
@@ -8438,7 +8711,7 @@ function handleServerRaminoAction(
   if (session.phase !== 'game') return { ok: false, error: 'ጨዋታው አሁን በሂደት ላይ አይደለም።' };
   if (session.currentTurnIdx !== meIdx) return { ok: false, error: 'ተራዎ አይደለም!' };
 
-  const allowSameRankDopey = session.players.length === 2;
+  const allowSameRankDopey = false;
 
   if (action === 'draw_deck') {
     if (session.hasDrawn) return { ok: false, error: 'አስቀድመው ካርታ ስበዋል።' };
@@ -8577,12 +8850,19 @@ function handleServerRaminoAction(
       if (srvIsValidSet(selectedCards)) {
         newGroups = [{ type: 'set', cards: selectedCards, points: srvGetGroupPoints(selectedCards) }];
       } else if (srvIsValidRun(selectedCards)) {
-        newGroups = [{ type: 'run', cards: selectedCards, points: srvGetGroupPoints(selectedCards) }];
+        const orderedSel = srvNormalizeRunCardsOrder(selectedCards, true);
+        newGroups = [{ type: 'run', cards: orderedSel, points: srvGetGroupPoints(orderedSel) }];
       } else {
-        newGroups = srvPartitionValidMelds(selectedCards).melds;
+        newGroups = srvPartitionValidMelds(selectedCards).melds.map((m) => ({
+          ...m,
+          cards: m.type === 'run' ? srvNormalizeRunCardsOrder(m.cards, false) : m.cards,
+        }));
       }
     } else {
-      newGroups = srvPartitionValidMelds(me.hand).melds;
+      newGroups = srvPartitionValidMelds(me.hand).melds.map((m) => ({
+        ...m,
+        cards: m.type === 'run' ? srvNormalizeRunCardsOrder(m.cards, false) : m.cards,
+      }));
     }
     if (newGroups.length === 0) return { ok: false, error: 'ትክክለኛ ትሪስ ወይም ካትሪስ አልተገኘም!' };
     const totalPts = newGroups.reduce((s, g) => s + g.points, 0);

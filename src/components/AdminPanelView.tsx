@@ -60,6 +60,7 @@ import {
 } from '../utils/realtimeRoomClient';
 import { PAYMENT_ACCOUNTS } from '../utils/translations';
 import {
+  AutoNotifyGamesConfig,
   BankPaymentAccount,
   CallSpeed,
   GameHistoryRecord,
@@ -576,11 +577,19 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [withdrawStatusFilter, setWithdrawStatusFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
   const [txSearch, setTxSearch] = useState('');
 
-  // Broadcast Tab State (IMG_3561)
+  // Broadcast & Auto Game Notification Controls State
   const [broadcastTarget, setBroadcastTarget] = useState<'all' | 'specific'>('all');
   const [broadcastSpecificUser, setBroadcastSpecificUser] = useState('');
+  const [broadcastTitle, setBroadcastTitle] = useState('');
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
+  const [autoNotifyGames, setAutoNotifyGames] = useState<AutoNotifyGamesConfig>({
+    fast: true,
+    regular: true,
+    keno: true,
+    ramino: true,
+  });
+  const [isSavingAutoNotify, setIsSavingAutoNotify] = useState(false);
 
   // Direct Cash Deposit State (በቀጥታ በጥሬ ገንዘብ / ካሽ ገቢ)
   const [cashDepositUser, setCashDepositUser] = useState<string>('');
@@ -1198,12 +1207,14 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         body: JSON.stringify({
           targetType: broadcastTarget,
           specificUser: broadcastSpecificUser,
+          title: broadcastTitle.trim() || undefined,
           message: broadcastMessage,
         }),
       });
       const data = await res.json();
       if (data?.ok) {
-        showToast(data.message || '✅ መልዕክቱ በተሳካ ሁኔታ ተልኳል!');
+        showToast(data.message || '✅ መልዕክቱ ወደ App እና Telegram በተሳካ ሁኔታ ተልኳል!');
+        setBroadcastTitle('');
         setBroadcastMessage('');
       } else {
         showToast(`❌ ${data?.error || 'መልዕክት መላክ አልተቻለም'}`);
@@ -1212,6 +1223,34 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       showToast('❌ ከሰርቨር ጋር መገናኘት አልተቻለም።');
     } finally {
       setIsSendingBroadcast(false);
+    }
+  };
+
+  const handleToggleAutoNotifyGame = async (gameKey: keyof AutoNotifyGamesConfig) => {
+    const nextCfg: AutoNotifyGamesConfig = {
+      ...autoNotifyGames,
+      [gameKey]: !autoNotifyGames[gameKey],
+    };
+    setAutoNotifyGames(nextCfg);
+    setIsSavingAutoNotify(true);
+    try {
+      const res = await fetch(buildApiUrl('/api/admin/settings'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoNotifyGames: nextCfg }),
+      });
+      const data = await res.json();
+      if (data?.ok) {
+        showToast(
+          nextCfg[gameKey]
+            ? `🔔 የ "${gameKey}" ራስ-ሰር ማሳወቂያ ተከፍቷል (ON)!`
+            : `🔕 የ "${gameKey}" ራስ-ሰር ማሳወቂያ ቆሟል (OFF)!`
+        );
+      }
+    } catch {
+      showToast('❌ ማስቀመጥ አልተቻለም');
+    } finally {
+      setIsSavingAutoNotify(false);
     }
   };
 
@@ -1258,6 +1297,14 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           if (data.config.depositBonusPercent !== undefined) setDepositBonusPct(String(data.config.depositBonusPercent));
           if (data.config.minDepositAmount !== undefined) setMinDepositAmt(String(data.config.minDepositAmount));
           if (data.config.minWithdrawAmount !== undefined) setMinWithdrawAmt(String(data.config.minWithdrawAmount));
+          if (data.config.autoNotifyGames) {
+            setAutoNotifyGames({
+              fast: data.config.autoNotifyGames.fast !== false,
+              regular: data.config.autoNotifyGames.regular !== false,
+              keno: data.config.autoNotifyGames.keno !== false,
+              ramino: data.config.autoNotifyGames.ramino !== false,
+            });
+          }
         }
       })
       .catch(() => {});
@@ -3226,6 +3273,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 showToast('❌ እባክዎ የባንኩን ስም እና የሂሳብ/ስልክ ቁጥር ያስገቡ!');
                 return;
               }
+              const existingEditingBank = editingBankId
+                ? bankAccounts.find((b) => b.id === editingBankId)
+                : undefined;
               const bankItem: BankPaymentAccount = {
                 id: editingBankId || bankShortNameInput.trim().replace(/\s+/g, '_'),
                 shortName: bankShortNameInput.trim(),
@@ -3233,6 +3283,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 accountNumber: bankAccountNumInput.trim(),
                 accountHolder: bankHolderNameInput.trim() || 'Sun Bingo',
                 badgeBg: bankBadgeColorInput,
+                isActive: existingEditingBank ? existingEditingBank.isActive !== false : true,
               };
 
               if (editingBankId) {
@@ -3430,17 +3481,23 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             }`}
           >
             <h4 className="text-sm sm:text-base font-black">
-              Active Deposit & Withdrawal Banks ({bankAccounts.length})
+              Active & Hidden Payment Banks ({bankAccounts.filter((b) => b.isActive !== false).length} Active / {bankAccounts.length} Total)
             </h4>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {bankAccounts.map((b) => (
+              {bankAccounts.map((b) => {
+                const bankEnabled = b.isActive !== false;
+                return (
                 <div
                   key={b.id}
                   className={`rounded-2xl border p-4 flex flex-col justify-between gap-3 ${
-                    isDark
-                      ? 'bg-[#14141d] border-slate-800'
-                      : 'bg-slate-50 border-slate-200'
+                    bankEnabled
+                      ? isDark
+                        ? 'bg-[#14141d] border-slate-800'
+                        : 'bg-slate-50 border-slate-200'
+                      : isDark
+                      ? 'bg-rose-950/20 border-rose-500/35 opacity-80'
+                      : 'bg-rose-50 border-rose-200 opacity-80'
                   }`}
                 >
                   <div className="space-y-1">
@@ -3448,9 +3505,18 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       <span className={`px-2.5 py-0.5 rounded-md text-xs font-black ${b.badgeBg}`}>
                         {b.shortName}
                       </span>
-                      <span className="text-xs font-bold text-slate-400 truncate">
-                        {b.bankName}
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                          bankEnabled
+                            ? 'bg-emerald-500/20 text-emerald-400'
+                            : 'bg-rose-500/20 text-rose-400'
+                        }`}
+                      >
+                        {bankEnabled ? '🟢 ይታያል (Active)' : '🔴 ተደብቋል (Hidden)'}
                       </span>
+                    </div>
+                    <div className="text-xs font-bold text-slate-400 truncate">
+                      {b.bankName}
                     </div>
                     <div className="text-lg font-black font-mono-tabular text-emerald-400">
                       {b.accountNumber}
@@ -3460,7 +3526,41 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 pt-2 border-t border-slate-800/60">
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/60">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updatedBank: BankPaymentAccount = {
+                          ...b,
+                          isActive: !bankEnabled,
+                        };
+                        const nextList = bankAccounts.map((item) =>
+                          item.id === b.id ? updatedBank : item
+                        );
+                        if (onUpdateBankAccount) {
+                          onUpdateBankAccount(updatedBank);
+                        } else {
+                          dispatchServerRoomAction({
+                            mode: isFastMode ? 'fast' : 'regular',
+                            stakeAmount: activeStakeTier,
+                            action: 'set_bank_accounts',
+                            bankAccounts: nextList,
+                          } as unknown as Parameters<typeof dispatchServerRoomAction>[0]);
+                        }
+                        showToast(
+                          !bankEnabled
+                            ? `👁️ "${b.shortName}" በ Wallet እና Telegram ላይ እንዲታይ ተደርጓል!`
+                            : `🙈 "${b.shortName}" ከ Wallet እና Telegram ላይ ተደብቋል!`
+                        );
+                      }}
+                      className={`px-3 py-2 rounded-xl text-xs font-black cursor-pointer transition-colors border ${
+                        bankEnabled
+                          ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500 hover:text-slate-950'
+                          : 'bg-emerald-500 border-emerald-400 text-slate-950 hover:bg-emerald-400'
+                      }`}
+                    >
+                      {bankEnabled ? '🙈 ደብቅ (Hide)' : '👁️ አሳይ (Show)'}
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -3474,7 +3574,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       className="flex-1 py-2 rounded-xl bg-indigo-600/20 border border-indigo-500/40 text-indigo-300 hover:bg-indigo-600 hover:text-white text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
-                      <span>Edit (አስተካክል)</span>
+                      <span>Edit</span>
                     </button>
                     {bankAccounts.length > 1 && (
                       <button
@@ -3501,7 +3601,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                     )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -5131,50 +5232,138 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       )}
 
       {/* =====================================================================
-          TAB 7: BROADCAST (Matches IMG_3561.jpeg - Broadcast Message to Telegram)
+          TAB 7: BROADCAST & AUTO GAME-START NOTIFICATIONS
          ===================================================================== */}
       {activeSubTab === 'broadcast' && (
-        <form
-          onSubmit={handleSendBroadcast}
-          className={`rounded-2xl border p-5 space-y-4 ${
-            isDark
-              ? 'bg-[#1c1c28] border-slate-800/80 text-white'
-              : 'bg-white border-slate-200 text-slate-900'
-          }`}
-        >
-          <h3 className="text-base sm:text-lg font-black">
-            Broadcast Message
-          </h3>
-
-          <div className="space-y-4">
+        <div className="space-y-4">
+          {/* Auto Game-Start Notification Controls per Game */}
+          <div
+            className={`rounded-2xl border p-5 space-y-3 ${
+              isDark
+                ? 'bg-[#1c1c28] border-amber-500/35 text-white'
+                : 'bg-white border-amber-300 text-slate-900'
+            }`}
+          >
             <div>
-              <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1.5">
-                Target Users
-              </label>
-              <select
-                value={broadcastTarget}
-                onChange={(e) => setBroadcastTarget(e.target.value as 'all' | 'specific')}
-                className={`w-full px-4 py-3 rounded-xl text-sm font-bold border focus:outline-none ${
-                  isDark
-                    ? 'bg-[#14141d] border-slate-800 text-white'
-                    : 'bg-slate-50 border-slate-300 text-slate-900'
-                }`}
-              >
-                <option value="all">All Users</option>
-                <option value="specific">Specific User (by Phone or Telegram ID)</option>
-              </select>
+              <h3 className="text-base font-black text-amber-400 flex items-center gap-2">
+                <Megaphone className="w-4 h-4" />
+                <span>🔔 ራስ-ሰር የጨዋታ መጀመሪያ ማሳወቂያ መቆጣጠሪያ (Auto Notifications)</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                አዲስ ጨዋታ ሲጀመር በመተግበሪያው እና በ Telegram ለተጫዋቾች በራሱ መልዕክት ይልካል። የፈለጉትን ጨዋታ ማቆም (OFF) ወይም መክፈት (ON) ይችላሉ።
+              </p>
             </div>
 
-            {broadcastTarget === 'specific' && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {(
+                [
+                  { key: 'fast', label: '⚡ Fast Bingo', sub: 'ፈጣን ቢንጎ' },
+                  { key: 'regular', label: '👑 ልዩ ቢንጎ', sub: 'Regular Bingo' },
+                  { key: 'keno', label: '🎱 Keno', sub: 'ፈጣን ኬኖ' },
+                  { key: 'ramino', label: '♠️ Ramino', sub: 'ራሚኖ' },
+                ] as const
+              ).map((item) => {
+                const isOn = autoNotifyGames[item.key] !== false;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    disabled={isSavingAutoNotify}
+                    onClick={() => handleToggleAutoNotifyGame(item.key)}
+                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                      isOn
+                        ? isDark
+                          ? 'bg-emerald-950/30 border-emerald-500/50 text-white'
+                          : 'bg-emerald-50 border-emerald-400 text-slate-900'
+                        : isDark
+                        ? 'bg-rose-950/25 border-rose-500/40 text-slate-300'
+                        : 'bg-rose-50 border-rose-300 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="text-xs font-black">{item.label}</span>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                          isOn
+                            ? 'bg-emerald-500 text-slate-950'
+                            : 'bg-rose-500 text-white'
+                        }`}
+                      >
+                        {isOn ? 'ON (ይላካል)' : 'OFF (ቆሟል)'}
+                      </span>
+                    </div>
+                    <div className="text-[11px] opacity-70 mt-1">{item.sub}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Instant Custom Broadcast Form (In-App + Telegram) */}
+          <form
+            onSubmit={handleSendBroadcast}
+            className={`rounded-2xl border p-5 space-y-4 ${
+              isDark
+                ? 'bg-[#1c1c28] border-slate-800/80 text-white'
+                : 'bg-white border-slate-200 text-slate-900'
+            }`}
+          >
+            <div>
+              <h3 className="text-base sm:text-lg font-black">
+                📢 አስቸኳይ መልዕክት መላኪያ (App + Telegram Broadcast)
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                እዚህ የሚልኩት መልዕክት በተጫዋቾች መተግበሪያ (In-App) እና በ Telegram ቦት ላይ ወዲያውኑ ይደርሳል።
+              </p>
+            </div>
+
+            <div className="space-y-4">
               <div>
                 <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1.5">
-                  User Phone or Telegram Chat ID
+                  Target Users
+                </label>
+                <select
+                  value={broadcastTarget}
+                  onChange={(e) => setBroadcastTarget(e.target.value as 'all' | 'specific')}
+                  className={`w-full px-4 py-3 rounded-xl text-sm font-bold border focus:outline-none ${
+                    isDark
+                      ? 'bg-[#14141d] border-slate-800 text-white'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                >
+                  <option value="all">All Users (ለሁሉም ተጫዋቾች)</option>
+                  <option value="specific">Specific User (by Phone or Telegram ID)</option>
+                </select>
+              </div>
+
+              {broadcastTarget === 'specific' && (
+                <div>
+                  <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1.5">
+                    User Phone or Telegram Chat ID
+                  </label>
+                  <input
+                    type="text"
+                    value={broadcastSpecificUser}
+                    onChange={(e) => setBroadcastSpecificUser(e.target.value)}
+                    placeholder="ለምሳሌ: 0911223344 ወይም Telegram ID..."
+                    className={`w-full px-4 py-3 rounded-xl text-sm border focus:outline-none ${
+                      isDark
+                        ? 'bg-[#14141d] border-slate-800 text-white'
+                        : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1.5">
+                  Title / ርዕስ (Optional)
                 </label>
                 <input
                   type="text"
-                  value={broadcastSpecificUser}
-                  onChange={(e) => setBroadcastSpecificUser(e.target.value)}
-                  placeholder="ለምሳሌ: 0911223344 ወይም Telegram ID..."
+                  value={broadcastTitle}
+                  onChange={(e) => setBroadcastTitle(e.target.value)}
+                  placeholder="ምሳሌ: ☀️ የ Sun Games ልዩ ማስታወቂያ"
                   className={`w-full px-4 py-3 rounded-xl text-sm border focus:outline-none ${
                     isDark
                       ? 'bg-[#14141d] border-slate-800 text-white'
@@ -5182,34 +5371,34 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   }`}
                 />
               </div>
-            )}
 
-            <div>
-              <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1.5">
-                Message (Markdown supported)
-              </label>
-              <textarea
-                rows={5}
-                value={broadcastMessage}
-                onChange={(e) => setBroadcastMessage(e.target.value)}
-                placeholder="Type your message here..."
-                className={`w-full px-4 py-3 rounded-xl text-sm border focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                  isDark
-                    ? 'bg-[#14141d] border-slate-800 text-white placeholder-slate-500'
-                    : 'bg-slate-50 border-slate-300 text-slate-900'
-                }`}
-              />
+              <div>
+                <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1.5">
+                  Message (በ App እና Telegram የሚታይ መልዕክት)
+                </label>
+                <textarea
+                  rows={5}
+                  value={broadcastMessage}
+                  onChange={(e) => setBroadcastMessage(e.target.value)}
+                  placeholder="የሚያስተላልፉትን መልዕክት እዚህ ይጻፉ..."
+                  className={`w-full px-4 py-3 rounded-xl text-sm border focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                    isDark
+                      ? 'bg-[#14141d] border-slate-800 text-white placeholder-slate-500'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
             </div>
-          </div>
 
-          <button
-            type="submit"
-            disabled={isSendingBroadcast}
-            className="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-sm cursor-pointer shadow-lg shadow-indigo-600/25 transition-colors disabled:opacity-50"
-          >
-            {isSendingBroadcast ? 'Sending...' : 'Send Message'}
-          </button>
-        </form>
+            <button
+              type="submit"
+              disabled={isSendingBroadcast}
+              className="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-sm cursor-pointer shadow-lg shadow-indigo-600/25 transition-colors disabled:opacity-50"
+            >
+              {isSendingBroadcast ? 'Sending...' : '📢 በ App እና Telegram ላክ (Send Broadcast)'}
+            </button>
+          </form>
+        </div>
       )}
 
       {/* =====================================================================

@@ -26,7 +26,11 @@ import {
   Sparkles,
 } from 'lucide-react';
 import QRCode from 'qrcode';
-import { buildApiUrl } from '../utils/realtimeRoomClient';
+import {
+  buildApiUrl,
+  saveDevicePlayerIdentity,
+  saveSignedAccountToken,
+} from '../utils/realtimeRoomClient';
 import {
   AppAccentColor,
   DaubColor,
@@ -113,19 +117,19 @@ export const ProfileAndSettingsView: React.FC<ProfileAndSettingsViewProps> = ({
   const t = TRANSLATIONS[language];
   const [activeSection, setActiveSection] = useState<ProfileSectionModal>(null);
 
-  // Phone / OTP Registration & Username state
+  // Phone / Telegram-OTP Registration & Username state
   const [regName, setRegName] = useState(currentUser.name);
   const [regPhone, setRegPhone] = useState(currentUser.phone);
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState('');
-  const [generatedOtp, setGeneratedOtp] = useState('4829');
+  const [regTelegramOtpUrl, setRegTelegramOtpUrl] = useState<string | null>(null);
   const [regNewPassword, setRegNewPassword] = useState('');
 
-  // Password Change / Forgot Password with OTP
+  // Password Change / Forgot Password with Telegram OTP
   const [newPassword, setNewPassword] = useState('');
   const [forgotOtpSent, setForgotOtpSent] = useState(false);
   const [forgotOtpCode, setForgotOtpCode] = useState('');
-  const [forgotGeneratedOtp, setForgotGeneratedOtp] = useState('');
+  const [forgotTelegramOtpUrl, setForgotTelegramOtpUrl] = useState<string | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
 
   // Friend Invite
@@ -134,47 +138,80 @@ export const ProfileAndSettingsView: React.FC<ProfileAndSettingsViewProps> = ({
 
   const handleSendOtp = async () => {
     try {
-      const res = await fetch('/api/auth/send-otp', {
+      const res = await fetch(buildApiUrl('/api/auth/send-otp'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: regPhone, name: regName, purpose: 'register' }),
       });
       const data = await res.json();
-      const code = String(data?.otpCode || Math.floor(100000 + Math.random() * 900000));
-      setGeneratedOtp(code);
-      setOtpCode(code);
+      if (!res.ok || !data?.ok) {
+        setStatusBanner(data?.error || '❌ OTP መላክ አልተቻለም። እባክዎ ትክክለኛ ስልክ ያስገቡ።');
+        return;
+      }
+      setOtpCode('');
+      setRegTelegramOtpUrl(
+        data?.telegramOtpUrl ||
+          `https://t.me/${data?.botUsername || 'Sungamsbot'}?start=otp_${encodeURIComponent(regPhone)}`
+      );
       setOtpSent(true);
-      setStatusBanner(`የማረጋገጫ ኮድ (OTP) ወደ ${regPhone} ተልኳል፦ [ ${code} ]`);
+      setStatusBanner(
+        data?.message ||
+          `📲 የማረጋገጫ ኮድ (OTP) በ Telegram (@Sungamsbot) ብቻ ተልኳል! ከቴሌግራም አይተው ያስገቡ።`
+      );
     } catch {
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      setGeneratedOtp(code);
-      setOtpCode(code);
-      setOtpSent(true);
-      setStatusBanner(`የማረጋገጫ ኮድ (OTP) ወደ ${regPhone} ተልኳል፦ [ ${code} ]`);
+      setStatusBanner('❌ ከሰርቨር ጋር መገናኘት አልተቻለም። እባክዎ እንደገና ይሞክሩ።');
     }
   };
 
   const handleVerifyOtpAndSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (otpSent && otpCode.trim() && otpCode.trim() !== generatedOtp && otpCode.trim() !== '123456') {
-      setStatusBanner('የተሳሳተ የ SMS OTP ኮድ! እባክዎ የተላከውን ኮድ ያስገቡ።');
-      return;
-    }
     const cleanPhone = regPhone.trim() || currentUser.phone;
     const cleanName = regName.trim() || `Player_${cleanPhone.slice(-4)}`;
     if (regNewPassword.trim().length >= 4) {
-      onUpdatePassword(regNewPassword.trim());
-      fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: cleanPhone,
-          name: cleanName,
-          otpCode: otpCode.trim() || generatedOtp,
-          password: regNewPassword.trim(),
-        }),
-      }).catch(() => {});
+      if (!otpCode.trim() || otpCode.trim().length < 4) {
+        setStatusBanner('❌ የይለፍ ቃል ለመቀየር በ Telegram የተላከውን ባለ 6-አሃዝ OTP ኮድ ያስገቡ።');
+        return;
+      }
+      try {
+        const res = await fetch(buildApiUrl('/api/auth/register'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phone: cleanPhone,
+            name: cleanName,
+            otpCode: otpCode.trim(),
+            password: regNewPassword.trim(),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data?.ok) {
+          setStatusBanner(data?.error || '❌ የ OTP ኮድ የተሳሳተ ነው!');
+          return;
+        }
+        if (data.accountToken) {
+          saveSignedAccountToken(cleanPhone, data.accountToken);
+        }
+        onUpdatePassword(regNewPassword.trim());
+      } catch {
+        setStatusBanner('❌ ከሰርቨር ጋር መገናኘት አልተቻለም።');
+        return;
+      }
+    } else {
+      try {
+        const res = await fetch(buildApiUrl('/api/player/update-profile'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: cleanPhone, name: cleanName }),
+        });
+        const data = await res.json();
+        if (data?.ok && data.accountToken) {
+          saveSignedAccountToken(cleanPhone, data.accountToken);
+        }
+      } catch {
+        // fallback to local identity update below
+      }
     }
+    saveDevicePlayerIdentity(cleanName, cleanPhone);
     if (onRegisterOrLoginUser) {
       onRegisterOrLoginUser(cleanName, cleanPhone);
     }
@@ -182,32 +219,37 @@ export const ProfileAndSettingsView: React.FC<ProfileAndSettingsViewProps> = ({
     setOtpCode('');
     setRegNewPassword('');
     setActiveSection(null);
-    setStatusBanner(`✓ የእርስዎ ስም (${cleanName}) እና ስልክ ቁጥር (${cleanPhone}) በተሳካ ሁኔታ ተመዝግቧል!`);
+    setStatusBanner(`✓ የእርስዎ ስም (${cleanName}) በሁሉም ጨዋታዎች ላይ ተስተካክሏል!`);
   };
 
   const handleSendForgotPasswordOtp = async () => {
     try {
-      const res = await fetch('/api/auth/send-otp', {
+      const res = await fetch(buildApiUrl('/api/auth/send-otp'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: currentUser.phone, purpose: 'forgot' }),
       });
       const data = await res.json();
-      const code = String(data?.otpCode || Math.floor(100000 + Math.random() * 900000));
-      setForgotGeneratedOtp(code);
-      setForgotOtpCode(code);
+      if (!res.ok || !data?.ok) {
+        setStatusBanner(data?.error || '❌ OTP መላክ አልተቻለም።');
+        return;
+      }
+      setForgotOtpCode('');
+      setForgotTelegramOtpUrl(
+        data?.telegramOtpUrl ||
+          `https://t.me/${data?.botUsername || 'Sungamsbot'}?start=otp_${encodeURIComponent(currentUser.phone)}`
+      );
       setForgotOtpSent(true);
-      setStatusBanner(`የይለፍ ቃል መቀየሪያ OTP ወደ ${currentUser.phone} ተልኳል፦ [ ${code} ]`);
+      setStatusBanner(
+        data?.message ||
+          `📲 የይለፍ ቃል መቀየሪያ OTP በ Telegram (@Sungamsbot) ብቻ ተልኳል! ከቴሌግራም አይተው ያስገቡ።`
+      );
     } catch {
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      setForgotGeneratedOtp(code);
-      setForgotOtpCode(code);
-      setForgotOtpSent(true);
-      setStatusBanner(`የይለፍ ቃል መቀየሪያ OTP ወደ ${currentUser.phone} ተልኳል፦ [ ${code} ]`);
+      setStatusBanner('❌ ከሰርቨር ጋር መገናኘት አልተቻለም።');
     }
   };
 
-  const handlePasswordSubmit = (e: React.FormEvent) => {
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = newPassword.trim();
     if (trimmed.toLowerCase() === 'admin' || trimmed.toLowerCase() === 'admin123') {
@@ -220,30 +262,38 @@ export const ProfileAndSettingsView: React.FC<ProfileAndSettingsViewProps> = ({
       setStatusBanner('የይለፍ ቃል ቢያንስ 4 ፊደላት/ቁጥሮች መሆን አለበት።');
       return;
     }
-    if (
-      forgotOtpSent &&
-      forgotOtpCode.trim() &&
-      forgotOtpCode.trim() !== forgotGeneratedOtp &&
-      forgotOtpCode.trim() !== '123456'
-    ) {
-      setStatusBanner('የተሳሳተ የ OTP ኮድ! እባክዎ ትክክለኛውን ኮድ ያስገቡ።');
+    if (!forgotOtpCode.trim() || forgotOtpCode.trim().length < 4) {
+      setStatusBanner('❌ መጀመሪያ «📲 የማረጋገጫ OTP ኮድ ላክ» የሚለውን ይጫኑ እና ከ Telegram የተላከውን ኮድ ያስገቡ!');
       return;
     }
-    fetch('/api/auth/reset-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        phone: currentUser.phone,
-        otpCode: forgotOtpCode.trim() || forgotGeneratedOtp || '123456',
-        newPassword: trimmed,
-      }),
-    }).catch(() => {});
+    try {
+      const res = await fetch(buildApiUrl('/api/auth/reset-password'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: currentUser.phone,
+          otpCode: forgotOtpCode.trim(),
+          newPassword: trimmed,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        setStatusBanner(data?.error || '❌ የተሳሳተ የ OTP ኮድ! እባክዎ ከ Telegram የተላከውን ትክክለኛ ኮድ ያስገቡ።');
+        return;
+      }
+      if (data.accountToken) {
+        saveSignedAccountToken(currentUser.phone, data.accountToken);
+      }
+    } catch {
+      setStatusBanner('❌ ከሰርቨር ጋር መገናኘት አልተቻለም።');
+      return;
+    }
     onUpdatePassword(trimmed);
     setNewPassword('');
     setForgotOtpSent(false);
     setForgotOtpCode('');
     setActiveSection(null);
-    setStatusBanner('የይለፍ ቃልዎ (Password) በተሳካ ሁኔታ ተቀይሯል!');
+    setStatusBanner('✓ የይለፍ ቃልዎ (Password) በተሳካ ሁኔታ ተቀይሯል!');
   };
 
   const handleInviteFriend = async (e: React.FormEvent) => {
@@ -519,25 +569,39 @@ export const ProfileAndSettingsView: React.FC<ProfileAndSettingsViewProps> = ({
               </div>
             </div>
             {otpSent && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <input
-                  type="text"
-                  value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value)}
-                  placeholder={`OTP ኮድ (${generatedOtp})`}
-                  className={`px-3 py-2 rounded-xl text-xs font-mono-tabular border ${
-                    isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'
-                  }`}
-                />
-                <input
-                  type="password"
-                  value={regNewPassword}
-                  onChange={(e) => setRegNewPassword(e.target.value)}
-                  placeholder="አዲስ Password (ካስፈለገ)"
-                  className={`px-3 py-2 rounded-xl text-xs border ${
-                    isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'
-                  }`}
-                />
+              <div className="space-y-2">
+                <a
+                  href={
+                    regTelegramOtpUrl ||
+                    `https://t.me/Sungamsbot?start=otp_${encodeURIComponent(regPhone)}`
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2 px-3 rounded-xl bg-sky-500/20 border border-sky-400/40 text-sky-400 font-extrabold text-xs flex items-center justify-center gap-1.5"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>📲 በቴሌግራም OTP ተቀበል (@Sungamsbot)</span>
+                </a>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value)}
+                    placeholder="ከ Telegram የተላከ 6-አሃዝ OTP ኮድ"
+                    className={`px-3 py-2 rounded-xl text-xs font-mono-tabular border ${
+                      isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'
+                    }`}
+                  />
+                  <input
+                    type="password"
+                    value={regNewPassword}
+                    onChange={(e) => setRegNewPassword(e.target.value)}
+                    placeholder="አዲስ Password (ካስፈለገ)"
+                    className={`px-3 py-2 rounded-xl text-xs border ${
+                      isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300'
+                    }`}
+                  />
+                </div>
               </div>
             )}
             <button
@@ -987,15 +1051,29 @@ export const ProfileAndSettingsView: React.FC<ProfileAndSettingsViewProps> = ({
                 </button>
               </div>
               {forgotOtpSent && (
-                <input
-                  type="text"
-                  value={forgotOtpCode}
-                  onChange={(e) => setForgotOtpCode(e.target.value)}
-                  placeholder={`OTP ኮድ (${forgotGeneratedOtp})`}
-                  className={`w-full px-3 py-2 rounded-xl text-sm font-mono-tabular border ${
-                    isDark ? 'bg-slate-800 border-slate-700 text-amber-300' : 'bg-slate-50 border-slate-300'
-                  }`}
-                />
+                <div className="space-y-2">
+                  <a
+                    href={
+                      forgotTelegramOtpUrl ||
+                      `https://t.me/Sungamsbot?start=otp_${encodeURIComponent(currentUser.phone)}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2 px-3 rounded-xl bg-sky-500/20 border border-sky-400/40 text-sky-400 font-extrabold text-xs flex items-center justify-center gap-1.5"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>📲 በቴሌግራም OTP ተቀበል (@Sungamsbot)</span>
+                  </a>
+                  <input
+                    type="text"
+                    value={forgotOtpCode}
+                    onChange={(e) => setForgotOtpCode(e.target.value)}
+                    placeholder="ከ Telegram የተላከውን 6-አሃዝ OTP ኮድ ያስገቡ"
+                    className={`w-full px-3 py-2 rounded-xl text-sm font-mono-tabular border ${
+                      isDark ? 'bg-slate-800 border-slate-700 text-amber-300' : 'bg-slate-50 border-slate-300'
+                    }`}
+                  />
+                </div>
               )}
               <div className="flex flex-col sm:flex-row gap-2">
                 <input

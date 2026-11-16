@@ -2,12 +2,13 @@
 <html lang="am">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#0b1838" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Sun Bingo" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
     <meta name="keywords" content="Sun Bingo, sunbingo, sunbingo.onrender.com, Kidame Games, Fast Bingo, Keno Ethiopia, Conker Ramino, Ludo Ethiopia, ሳን ቢንጎ, ቅዳሜ ጌምስ, ቢንጎ ኢትዮጵያ" />
     <link rel="canonical" href="https://sunbingo.onrender.com/" />
@@ -53,6 +54,21 @@
     <script>
       (function () {
         try {
+          var tg = window.Telegram && window.Telegram.WebApp;
+          if (tg) {
+            if (typeof tg.ready === 'function') tg.ready();
+            if (typeof tg.expand === 'function') tg.expand();
+            if (typeof tg.disableVerticalSwipes === 'function') tg.disableVerticalSwipes();
+          }
+          if (window.TelegramWebviewProxy && typeof window.TelegramWebviewProxy.postEvent === 'function') {
+            window.TelegramWebviewProxy.postEvent('web_app_expand', '');
+            window.TelegramWebviewProxy.postEvent(
+              'web_app_setup_swipe_behavior',
+              JSON.stringify({ allow_vertical_swipe: false })
+            );
+          }
+        } catch (e) {}
+        try {
           if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(function (regs) {
               for (var i = 0; i < regs.length; i++) {
@@ -84,4 +100,3 @@
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

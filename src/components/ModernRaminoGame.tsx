@@ -551,7 +551,11 @@ function partitionValidMelds(cards: PlayingCard[]): {
               if (natChosen.length < 2) continue;
               for (const jks of jokerCombos(missing)) {
                 const allIdx = [...natChosen, ...jks];
-                addCandidate('run', allIdx.map((i) => cards[i]), allIdx);
+                const orderedRun = normalizeRunCardsOrder(
+                  allIdx.map((i) => cards[i]),
+                  false
+                );
+                addCandidate('run', orderedRun, allIdx);
               }
             }
           }
@@ -651,7 +655,7 @@ function detectContiguousGroupsInHand(hand: PlayingCard[]): {
         matchedType = 'set';
         break;
       }
-      if (isValidRun(slice)) {
+      if (isStrictlyOrderedRun(slice)) {
         matchedLen = len;
         matchedType = 'run';
         break;
@@ -708,21 +712,22 @@ function canFormFivePairs(rem10: PlayingCard[], allowSameRankPairs = false): boo
   return jokers >= odds && (jokers - odds) % 2 === 0;
 }
 
-// Check exact 13-card Dopey: strictly 5 pairs (10 cards) + 1 valid Tris (3-card Set of same rank, NEVER a Run)
-function isExact13CardDopey(cards13: PlayingCard[], allowSameRankPairs = false): boolean {
+// Check exact 13-card Dopey: strictly 5 identical pairs (10 cards) + 1 valid Tris (3-card Set, min 2 naturals, NEVER a Run)
+function isExact13CardDopey(cards13: PlayingCard[], _allowSameRankPairs = false): boolean {
   if (cards13.length !== 13) return false;
 
   for (let i = 0; i < 11; i++) {
     for (let j = i + 1; j < 12; j++) {
       for (let k = j + 1; k < 13; k++) {
         const triple = [cards13[i], cards13[j], cards13[k]];
-        if (!isValidSet(triple)) continue;
+        const natCount = triple.filter((c) => !c.isJoker && c.rank !== 'JOKER').length;
+        if (natCount < 2 || !isValidSet(triple)) continue;
 
         const rem10: PlayingCard[] = [];
         for (let m = 0; m < 13; m++) {
           if (m !== i && m !== j && m !== k) rem10.push(cards13[m]);
         }
-        if (canFormFivePairs(rem10, allowSameRankPairs)) {
+        if (canFormFivePairs(rem10, false)) {
           return true;
         }
       }
@@ -793,6 +798,87 @@ function getRunOrderForMeld(cards: PlayingCard[]): string[] {
   return ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 }
 
+function getOrderedRunSequence(cards: PlayingCard[], order: string[]): PlayingCard[] | null {
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  const jokers = cards.filter((c) => c.isJoker);
+  if (nonJokers.length === 0) return null;
+
+  const sortedNaturals = [...nonJokers].sort(
+    (a, b) => order.indexOf(a.rank) - order.indexOf(b.rank)
+  );
+  for (let i = 0; i < sortedNaturals.length; i++) {
+    const idx = order.indexOf(sortedNaturals[i].rank);
+    if (idx === -1) return null;
+    if (i > 0 && idx === order.indexOf(sortedNaturals[i - 1].rank)) return null;
+  }
+
+  let gaps = 0;
+  for (let i = 1; i < sortedNaturals.length; i++) {
+    gaps += order.indexOf(sortedNaturals[i].rank) - order.indexOf(sortedNaturals[i - 1].rank) - 1;
+  }
+  if (jokers.length < gaps) return null;
+
+  const arranged: PlayingCard[] = [sortedNaturals[0]];
+  let jCursor = 0;
+  for (let i = 1; i < sortedNaturals.length; i++) {
+    const gapCount =
+      order.indexOf(sortedNaturals[i].rank) - order.indexOf(sortedNaturals[i - 1].rank) - 1;
+    for (let g = 0; g < gapCount && jCursor < jokers.length; g++) {
+      arranged.push(jokers[jCursor++]);
+    }
+    arranged.push(sortedNaturals[i]);
+  }
+
+  let highIdx = order.indexOf(sortedNaturals[sortedNaturals.length - 1].rank);
+  let lowIdx = order.indexOf(sortedNaturals[0].rank);
+  while (jCursor < jokers.length) {
+    if (highIdx < order.length - 1) {
+      arranged.push(jokers[jCursor++]);
+      highIdx++;
+    } else if (lowIdx > 0) {
+      arranged.unshift(jokers[jCursor++]);
+      lowIdx--;
+    } else {
+      break;
+    }
+  }
+  return arranged;
+}
+
+function isStrictlyOrderedRun(cards: PlayingCard[]): boolean {
+  if (!isValidRun(cards)) return false;
+  const order = getRunOrderForMeld(cards);
+  const arranged = getOrderedRunSequence(cards, order);
+  if (!arranged) return false;
+  const idsAsc = arranged.map((c) => c.id).join('|');
+  const idsDesc = [...arranged].reverse().map((c) => c.id).join('|');
+  const idsInput = cards.map((c) => c.id).join('|');
+  return idsInput === idsAsc || idsInput === idsDesc;
+}
+
+function normalizeRunCardsOrder(cards: PlayingCard[], preserveDescending = true): PlayingCard[] {
+  const order = getRunOrderForMeld(cards);
+  const arranged = getOrderedRunSequence(cards, order);
+  if (!arranged) return cards;
+  if (preserveDescending) {
+    const origNatIndices = cards
+      .filter((c) => !c.isJoker)
+      .map((c) => order.indexOf(c.rank));
+    const isDescNaturals =
+      origNatIndices.length >= 2 &&
+      origNatIndices.every((v, i) => i === 0 || origNatIndices[i - 1] > v);
+    if (isDescNaturals) {
+      return [...arranged].reverse();
+    }
+  }
+  return arranged;
+}
+
+function isDescendingRunCards(cards: PlayingCard[], order: string[]): boolean {
+  const natIndices = cards.filter((c) => !c.isJoker).map((c) => order.indexOf(c.rank));
+  return natIndices.length >= 2 && natIndices[0] > natIndices[1];
+}
+
 function getTableMeldJokerInfo(
   meld: MeldGroup,
   cardIdx: number
@@ -807,13 +893,17 @@ function getTableMeldJokerInfo(
   }
 
   const order = getRunOrderForMeld(meld.cards);
-  const firstNatPos = meld.cards.findIndex((c) => !c.isJoker);
+  const isDesc = isDescendingRunCards(meld.cards, order);
+  const seq = isDesc ? [...meld.cards].reverse() : meld.cards;
+  const targetIdx = isDesc ? meld.cards.length - 1 - cardIdx : cardIdx;
+
+  const firstNatPos = seq.findIndex((c) => !c.isJoker);
   if (firstNatPos === -1) return null;
-  const firstNatOrderIdx = order.indexOf(meld.cards[firstNatPos].rank);
+  const firstNatOrderIdx = order.indexOf(seq[firstNatPos].rank);
   if (firstNatOrderIdx === -1) return null;
   const startOrderIdx = firstNatOrderIdx - firstNatPos;
-  const targetRank = order[startOrderIdx + cardIdx];
-  const suit = meld.suit || meld.cards[firstNatPos].suit;
+  const targetRank = order[startOrderIdx + targetIdx];
+  const suit = meld.suit || seq[firstNatPos].suit;
   return targetRank ? { rank: targetRank, suit } : null;
 }
 
@@ -824,29 +914,41 @@ function insertCardIntoRunMeld(
 ): PlayingCard[] | null {
   if (cards.length >= 13) return null;
 
+  const order = getRunOrderForMeld(cards);
+  const isDesc = isDescendingRunCards(cards, order);
+  const ascCards = isDesc ? [...cards].reverse() : cards;
+  const ascClickedIdx = isDesc ? cards.length - 1 - clickedIdx : clickedIdx;
+
   if (newCard.isJoker) {
-    const order = getRunOrderForMeld(cards);
-    const firstNatPos = cards.findIndex((c) => !c.isJoker);
-    if (firstNatPos === -1) return [...cards, newCard];
-    const firstNatOrderIdx = order.indexOf(cards[firstNatPos].rank);
-    if (firstNatOrderIdx === -1) return [...cards, newCard];
+    const firstNatPos = ascCards.findIndex((c) => !c.isJoker);
+    if (firstNatPos === -1) {
+      const next = [...ascCards, newCard];
+      return isDesc ? next.reverse() : next;
+    }
+    const firstNatOrderIdx = order.indexOf(ascCards[firstNatPos].rank);
+    if (firstNatOrderIdx === -1) {
+      const next = [...ascCards, newCard];
+      return isDesc ? next.reverse() : next;
+    }
     const startOrderIdx = firstNatOrderIdx - firstNatPos;
-    const endOrderIdx = startOrderIdx + cards.length - 1;
+    const endOrderIdx = startOrderIdx + ascCards.length - 1;
     const canPrepend = startOrderIdx > 0;
     const canAppend = endOrderIdx < order.length - 1;
     if (!canPrepend && !canAppend) return null;
-    if (clickedIdx === 0 && canPrepend) return [newCard, ...cards];
-    if (canAppend) return [...cards, newCard];
-    return [newCard, ...cards];
+    let nextAsc: PlayingCard[];
+    if (ascClickedIdx === 0 && canPrepend) nextAsc = [newCard, ...ascCards];
+    else if (canAppend) nextAsc = [...ascCards, newCard];
+    else nextAsc = [newCard, ...ascCards];
+    return isDesc ? nextAsc.reverse() : nextAsc;
   }
 
-  const candidate = [...cards, newCard];
+  const candidate = [...ascCards, newCard];
   if (!isValidRun(candidate)) return null;
 
-  const order = getRunOrderForMeld(candidate);
+  const candOrder = getRunOrderForMeld(candidate);
   const nonJokers = candidate
     .filter((c) => !c.isJoker)
-    .sort((a, b) => order.indexOf(a.rank) - order.indexOf(b.rank));
+    .sort((a, b) => candOrder.indexOf(a.rank) - candOrder.indexOf(b.rank));
   const jokers = candidate.filter((c) => c.isJoker);
 
   if (nonJokers.length === 0) return candidate;
@@ -855,8 +957,8 @@ function insertCardIntoRunMeld(
   const arranged: PlayingCard[] = [nonJokers[0]];
   let jokerCursor = 0;
   for (let i = 1; i < nonJokers.length; i++) {
-    const prevIdx = order.indexOf(nonJokers[i - 1].rank);
-    const currIdx = order.indexOf(nonJokers[i].rank);
+    const prevIdx = candOrder.indexOf(nonJokers[i - 1].rank);
+    const currIdx = candOrder.indexOf(nonJokers[i].rank);
     const gapCount = currIdx - prevIdx - 1;
     for (let g = 0; g < gapCount && jokerCursor < jokers.length; g++) {
       arranged.push(jokers[jokerCursor++]);
@@ -865,13 +967,13 @@ function insertCardIntoRunMeld(
   }
 
   // Place any leftover Jokers cleanly on the right end (or left end if already at top rank)
-  let highIdx = order.indexOf(nonJokers[nonJokers.length - 1].rank);
-  let lowIdx = order.indexOf(nonJokers[0].rank);
+  let highIdx = candOrder.indexOf(nonJokers[nonJokers.length - 1].rank);
+  let lowIdx = candOrder.indexOf(nonJokers[0].rank);
   while (jokerCursor < jokers.length) {
-    if (clickedIdx === 0 && lowIdx > 0) {
+    if (ascClickedIdx === 0 && lowIdx > 0) {
       arranged.unshift(jokers[jokerCursor++]);
       lowIdx--;
-    } else if (highIdx < order.length - 1) {
+    } else if (highIdx < candOrder.length - 1) {
       arranged.push(jokers[jokerCursor++]);
       highIdx++;
     } else if (lowIdx > 0) {
@@ -882,7 +984,7 @@ function insertCardIntoRunMeld(
     }
   }
 
-  return arranged;
+  return isDesc ? arranged.reverse() : arranged;
 }
 
 const RAMINO_T: Record<Language, any> = {
@@ -2768,7 +2870,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const [joinLookupError, setJoinLookupError] = useState<string | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
-  const [telegramBotUsername, setTelegramBotUsername] = useState<string>('Kidamegamesbot');
+  const [telegramBotUsername, setTelegramBotUsername] = useState<string>('Sungamsbot');
   const [notificationBanner, setNotificationBanner] = useState<string | null>(null);
   const [isBannedModalOpen, setIsBannedModalOpen] = useState<boolean>(false);
 
@@ -3825,9 +3927,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     };
   }, [playerHand, selectedCardIds, hasMelded, hasDrawn, drawnFromDiscardCard]);
 
-  // Bottom Card Finisher (10♣ or bottomCard): Glows ONLY when unmelded player is on their turn before drawing,
-  // cannot already finish without bottomCard, and bottomCard strictly completes ALL cards to finish!
-  const allowSameRankDopey = playerSeatCount === 2;
+  // Strict Dopey / Monte rule: ALWAYS strictly 5 identical pairs + 1 Tris (never mixed suits)
+  const allowSameRankDopey = false;
 
   const isBottomCardFinisherReady = useMemo(() => {
     if (hasMelded || currentTurn !== 0 || hasDrawn || playerHand.length === 0) return false;
@@ -4248,14 +4349,20 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       if (isValidSet(selectedCards)) {
         newMeldGroups = [{ type: 'set', cards: selectedCards }];
       } else if (isValidRun(selectedCards)) {
-        newMeldGroups = [{ type: 'run', cards: selectedCards }];
+        newMeldGroups = [{ type: 'run', cards: normalizeRunCardsOrder(selectedCards, true) }];
       } else {
         const part = partitionValidMelds(selectedCards);
-        newMeldGroups = part.melds.map((m) => ({ type: m.type, cards: m.cards }));
+        newMeldGroups = part.melds.map((m) => ({
+          type: m.type,
+          cards: m.type === 'run' ? normalizeRunCardsOrder(m.cards, false) : m.cards,
+        }));
       }
     } else {
       const part = partitionValidMelds(playerHand);
-      newMeldGroups = part.melds.map((m) => ({ type: m.type, cards: m.cards }));
+      newMeldGroups = part.melds.map((m) => ({
+        type: m.type,
+        cards: m.type === 'run' ? normalizeRunCardsOrder(m.cards, false) : m.cards,
+      }));
     }
 
     if (newMeldGroups.length === 0) return;
@@ -4740,17 +4847,22 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     });
   };
 
-  // Smart Auto-Sort: Groups Tris (Sets) AND Catris (Runs) together at front!
+  // Smart Auto-Sort: Groups Tris (Sets) AND strictly ordered Catris (Runs) together at front,
+  // then sorts remaining cards cleanly by rank order (2..10, J, Q, K, A) and suit!
   const handleAutoSort = () => {
     raminoAudio.playDraw();
     setPlayerHand((prev) => {
       const part = partitionValidMelds(prev);
-      const groupedCards = part.melds.flatMap((m) => m.cards);
+      const groupedCards = part.melds.flatMap((m) =>
+        m.type === 'run' ? normalizeRunCardsOrder(m.cards, false) : m.cards
+      );
       const ungroupedNaturals = part.remaining.filter((c) => !c.isJoker);
       const ungroupedJokers = part.remaining.filter((c) => c.isJoker);
 
       ungroupedNaturals.sort((a, b) => {
-        if (a.value !== b.value) return a.value - b.value;
+        const rA = RANKS.indexOf(a.rank);
+        const rB = RANKS.indexOf(b.rank);
+        if (rA !== rB) return rA - rB;
         return a.suit.localeCompare(b.suit);
       });
 
@@ -6611,6 +6723,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                         <div
                           key={card.id}
                           data-hand-index={idx}
+                          data-card-drag="true"
                           onPointerDown={(e) => handleCardPointerDown(idx, e)}
                           onClick={() => {
                             if (justDraggedRef.current) return;
