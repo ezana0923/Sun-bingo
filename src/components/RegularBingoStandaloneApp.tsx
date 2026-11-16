@@ -29,6 +29,7 @@ import {
   Phone,
   ArrowLeft,
 } from 'lucide-react';
+import { applyTelegramSwipeLock, scrollAppToTop } from '../utils/telegramViewport';
 import { EziBingoLogo } from './EziBingoLogo';
 import { RulesAndPatternsModal } from './RulesAndPatternsModal';
 import { GameSettingsModal } from './GameSettingsModal';
@@ -208,12 +209,8 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
   }, [sortMode]);
 
   useEffect(() => {
-    try {
-      window.scrollTo(0, 0);
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-      document.getElementById('root')?.scrollTo(0, 0);
-    } catch {}
+    applyTelegramSwipeLock();
+    scrollAppToTop();
   }, [activeTab]);
   const [registrationMinutes, setRegistrationMinutes] = useState<number | null>(null);
   const [isPatternExplicitlySelected, setIsPatternExplicitlySelected] = useState<boolean>(true);
@@ -292,6 +289,10 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
   // Modals
   const [isRulesModalOpen, setIsRulesModalOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
+  useEffect(() => {
+    applyTelegramSwipeLock();
+    scrollAppToTop();
+  }, [isSettingsModalOpen]);
   const [isSelectorModalOpen, setIsSelectorModalOpen] = useState<boolean>(false);
 
   const lastSettingsTriggerRef = useRef(openSettingsTrigger || 0);

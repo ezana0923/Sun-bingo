@@ -7959,11 +7959,22 @@ function srvDoesCardMatchTableMelds(card: RaminoCard, melds: RaminoMeldGroup[]):
 }
 
 function srvGetRunOrderForMeld(cards: RaminoCard[]): string[] {
+  const aceLowOrder = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  const aceHighOrder = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
   const nonJokers = cards.filter((c) => !c.isJoker);
-  const hasTwo = nonJokers.some((c) => c.rank === '2');
-  const hasKingOrQueen = nonJokers.some((c) => c.rank === 'K' || c.rank === 'Q');
-  if (hasTwo && !hasKingOrQueen) return ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-  return ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+  const hasA = nonJokers.some((c) => c.rank === 'A');
+  const hasHighRoyals = nonJokers.some((c) => ['K', 'Q', 'J', '10'].includes(c.rank));
+  const prefersAceLow =
+    !hasHighRoyals &&
+    (hasA || nonJokers.some((c) => c.rank === '2' || c.rank === '3')) &&
+    Boolean(srvGetOrderedRunSequence(cards, aceLowOrder));
+  if (
+    prefersAceLow ||
+    (!srvGetOrderedRunSequence(cards, aceHighOrder) && Boolean(srvGetOrderedRunSequence(cards, aceLowOrder)))
+  ) {
+    return aceLowOrder;
+  }
+  return aceHighOrder;
 }
 
 function srvGetOrderedRunSequence(cards: RaminoCard[], order: string[]): RaminoCard[] | null {
@@ -8853,10 +8864,17 @@ function handleServerRaminoAction(
         const orderedSel = srvNormalizeRunCardsOrder(selectedCards, true);
         newGroups = [{ type: 'run', cards: orderedSel, points: srvGetGroupPoints(orderedSel) }];
       } else {
-        newGroups = srvPartitionValidMelds(selectedCards).melds.map((m) => ({
-          ...m,
-          cards: m.type === 'run' ? srvNormalizeRunCardsOrder(m.cards, false) : m.cards,
-        }));
+        const handPos = new Map(me.hand.map((c, idx) => [c.id, idx]));
+        newGroups = srvPartitionValidMelds(selectedCards).melds.map((m) => {
+          if (m.type !== 'run') return m;
+          const inHandOrder = [...m.cards].sort(
+            (a, b) => (handPos.get(a.id) ?? 0) - (handPos.get(b.id) ?? 0)
+          );
+          return {
+            ...m,
+            cards: srvNormalizeRunCardsOrder(inHandOrder, true),
+          };
+        });
       }
     } else {
       newGroups = srvPartitionValidMelds(me.hand).melds.map((m) => ({

@@ -62,6 +62,7 @@ import {
 import { soundFX } from '../utils/soundAndVoice';
 import { FAST_BINGO_TERMS_BY_LANG, PAYMENT_ACCOUNTS, TRANSLATIONS } from '../utils/translations';
 import { connectTelegramBotEverywhere } from '../utils/telegramBotBridge';
+import { applyTelegramSwipeLock, scrollAppToTop } from '../utils/telegramViewport';
 import {
   AppAccentColor,
   BankPaymentAccount,
@@ -240,12 +241,8 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
   }, [isAdminAuthenticated]);
 
   useEffect(() => {
-    try {
-      window.scrollTo(0, 0);
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-      document.getElementById('root')?.scrollTo(0, 0);
-    } catch {}
+    applyTelegramSwipeLock();
+    scrollAppToTop();
   }, [activeTab]);
 
   // Listen for URL #admin hash change or Ctrl+Shift+A shortcut to open Admin Panel
@@ -517,6 +514,10 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
   // When selectedStakeRoom is null, the player sees the 4-Room Lobby (like IMG_3525.png)
   // When selectedStakeRoom is 10, 20, 50, or 100, the player enters that room's 1-500 cartela board & plays!
   const [selectedStakeRoom, setSelectedStakeRoom] = useState<10 | 20 | 50 | 100 | null>(null);
+  useEffect(() => {
+    applyTelegramSwipeLock();
+    scrollAppToTop();
+  }, [selectedStakeRoom, isSettingsModalOpen]);
   const [stakeAmount, setStakeAmount] = useState<number>(10);
   const activeStakeTier: 10 | 20 | 50 | 100 =
     selectedStakeRoom ??

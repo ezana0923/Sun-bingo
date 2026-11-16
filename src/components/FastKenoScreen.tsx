@@ -29,6 +29,7 @@ import {
   BarChart2,
 } from 'lucide-react';
 import { buildApiUrl, getDeviceClientId } from '../utils/realtimeRoomClient';
+import { applyTelegramSwipeLock, scrollAppToTop } from '../utils/telegramViewport';
 
 const fireConfetti = () => {
   try {
@@ -1442,6 +1443,10 @@ export const FastKenoScreen: React.FC<FastKenoScreenProps> = ({
 
   // Slide-out Menu
   const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false);
+  useEffect(() => {
+    applyTelegramSwipeLock();
+    scrollAppToTop();
+  }, [activeTab, isMenuOpen]);
 
   // Rules & Fairness Modal state
   const [showRulesModal, setShowRulesModal] = useState<boolean>(false);

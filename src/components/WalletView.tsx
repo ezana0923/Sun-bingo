@@ -17,6 +17,7 @@ import {
 import { PAYMENT_ACCOUNTS, TRANSLATIONS } from '../utils/translations';
 import { parseEthiopianPaymentSms, normalizeTransactionReference } from '../utils/smsParser';
 import { BankPaymentAccount, Language, TransactionRecord, UserAccount } from '../types/bingo';
+import { scrollAppToTop } from '../utils/telegramViewport';
 
 interface WalletViewProps {
   currentUser: UserAccount;
@@ -74,6 +75,10 @@ export const WalletView: React.FC<WalletViewProps> = ({
     setDepStep(1);
     setWithStep(1);
   }, [initialSubTab]);
+
+  useEffect(() => {
+    scrollAppToTop();
+  }, [activeSubTab, depStep, withStep]);
 
   useEffect(() => {
     if (activeBanksList.length > 0 && !activeBanksList.some((b) => b.id === selectedBank)) {

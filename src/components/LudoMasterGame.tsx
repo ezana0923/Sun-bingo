@@ -39,6 +39,7 @@ import {
 import { KidameGamesLogo } from './KidameGamesLogo';
 import { soundFX } from '../utils/soundAndVoice';
 import { TransactionRecord, UserAccount } from '../types/bingo';
+import { applyTelegramSwipeLock, scrollAppToTop } from '../utils/telegramViewport';
 import {
   buildApiUrl,
   saveDevicePlayerIdentity,
@@ -288,6 +289,10 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
   onUpdateSharedTransactions,
 }) => {
   const [subScreen, setSubScreen] = useState<LudoSubScreen>('home');
+  useEffect(() => {
+    applyTelegramSwipeLock();
+    scrollAppToTop();
+  }, [subScreen]);
 
   // Game Setup State (No Bots — Real Human Players Only!)
   const [playerCount, setPlayerCount] = useState<2 | 3 | 4>(2);

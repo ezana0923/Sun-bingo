@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { Language, UserAccount } from '../types/bingo';
 import { buildApiUrl, getDeviceClientId } from '../utils/realtimeRoomClient';
+import { applyTelegramSwipeLock, scrollAppToTop } from '../utils/telegramViewport';
 
 interface RaminoPrivateRoomSnapshot {
   code: string;
@@ -789,13 +790,22 @@ function doesCardMatchTableMelds(card: PlayingCard, melds: MeldGroup[]): boolean
 }
 
 function getRunOrderForMeld(cards: PlayingCard[]): string[] {
+  const aceLowOrder = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  const aceHighOrder = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
   const nonJokers = cards.filter((c) => !c.isJoker);
-  const hasTwo = nonJokers.some((c) => c.rank === '2');
-  const hasKingOrQueen = nonJokers.some((c) => c.rank === 'K' || c.rank === 'Q');
-  if (hasTwo && !hasKingOrQueen) {
-    return ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  const hasA = nonJokers.some((c) => c.rank === 'A');
+  const hasHighRoyals = nonJokers.some((c) => ['K', 'Q', 'J', '10'].includes(c.rank));
+  const prefersAceLow =
+    !hasHighRoyals &&
+    (hasA || nonJokers.some((c) => c.rank === '2' || c.rank === '3')) &&
+    Boolean(getOrderedRunSequence(cards, aceLowOrder));
+  if (
+    prefersAceLow ||
+    (!getOrderedRunSequence(cards, aceHighOrder) && Boolean(getOrderedRunSequence(cards, aceLowOrder)))
+  ) {
+    return aceLowOrder;
   }
-  return ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+  return aceHighOrder;
 }
 
 function getOrderedRunSequence(cards: PlayingCard[], order: string[]): PlayingCard[] | null {
@@ -2001,6 +2011,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const t = RAMINO_T[language] || RAMINO_T.am;
   // Navigation Flow: 1. Lobby -> (Optional Waiting) -> 2. Dealer Cut Ceremony -> 3. Game
   const [view, setView] = useState<'lobby' | 'waiting' | 'ceremony' | 'game'>('lobby');
+  useEffect(() => {
+    applyTelegramSwipeLock();
+    scrollAppToTop();
+  }, [view]);
   const [tableTheme, setTableTheme] = useState<TableTheme>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('sun_ramino_table_theme');
@@ -4351,11 +4365,15 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       } else if (isValidRun(selectedCards)) {
         newMeldGroups = [{ type: 'run', cards: normalizeRunCardsOrder(selectedCards, true) }];
       } else {
+        const handPos = new Map(playerHand.map((c, idx) => [c.id, idx]));
         const part = partitionValidMelds(selectedCards);
-        newMeldGroups = part.melds.map((m) => ({
-          type: m.type,
-          cards: m.type === 'run' ? normalizeRunCardsOrder(m.cards, false) : m.cards,
-        }));
+        newMeldGroups = part.melds.map((m) => {
+          if (m.type !== 'run') return { type: m.type, cards: m.cards };
+          const inHandOrder = [...m.cards].sort(
+            (a, b) => (handPos.get(a.id) ?? 0) - (handPos.get(b.id) ?? 0)
+          );
+          return { type: m.type, cards: normalizeRunCardsOrder(inHandOrder, true) };
+        });
       }
     } else {
       const part = partitionValidMelds(playerHand);

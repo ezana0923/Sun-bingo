@@ -2408,7 +2408,7 @@ export default function App() {
       {/* Unified Global Wallet Modal (Accessible from Home Hub, Fast Keno, and Conker Ramino) */}
       {isLoggedIn && isGlobalWalletOpen && sharedUsers[0] && (
         <div
-          className="fixed inset-0 z-[200000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-hidden"
+          className="fixed inset-0 z-[200000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-hidden overscroll-none"
           onClick={() => setIsGlobalWalletOpen(false)}
         >
           <div
@@ -2449,7 +2449,7 @@ export default function App() {
               </div>
             )}
 
-            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 sm:p-4">
+            <div data-app-scroll="true" className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 sm:p-4">
               <WalletView
                 currentUser={sharedUsers[0]}
                 transactions={sharedTransactions.filter((tx) => tx.userPhone === sharedUsers[0].phone)}
