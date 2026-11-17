@@ -3723,6 +3723,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             } else if (msg?.type === 'ramino:action:error' && msg.error) {
               raminoAudio.playBuzzer();
               triggerNotification(String(msg.error));
+            } else if (msg?.type === 'game:notify' && msg.notification) {
+              const notifTxt = msg.notification.message || msg.notification.title;
+              if (notifTxt) triggerNotification(String(notifTxt));
             } else if (typeof msg?.type === 'string' && (msg.type.startsWith('ramino:voice:') || msg.type.startsWith('ramino:postday:') || msg.type === 'ramino:admin:control')) {
               void handleVoiceWsMessageRef.current(msg);
             }
@@ -4295,47 +4298,48 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     [playerHand]
   );
 
-  // Strict 41 Points & Valid Meld Stats (Shows when player drew / picked up from discard OR can finish)
+  // Strict 41 Points & Valid Meld Stats — Meld (ውረድ) ONLY appears when clicking/selecting a completed valid meld (3+ cards, zero ungrouped stray discard cards)
   const calculatedMeldStats = useMemo(() => {
     const selectedCards = playerHand.filter((c) => selectedCardIds.has(c.id));
 
-    if (selectedCards.length >= 3) {
-      if (isValidSet(selectedCards) || isValidRun(selectedCards)) {
-        const pts = getGroupPoints(selectedCards);
-        const isFinishing = selectedCards.length >= playerHand.length - 1;
-        return {
-          points: pts,
-          canMeld: (hasMelded ? true : pts >= 41) && (hasDrawn || drawnFromDiscardCard !== null || isFinishing),
-          hasTrisOrCatris: true,
-          formedGroupsCount: 1,
-        };
-      }
-      // Multiple groups selected together (e.g. 8-8-8 + J-J-J = 54 pts)
-      const part = partitionValidMelds(selectedCards);
-      const isFinishing = part.remaining.length === 0 && selectedCards.length >= playerHand.length - 1;
+    if (selectedCards.length < 3) {
       return {
-        points: part.totalPoints,
-        canMeld:
-          (hasMelded ? part.melds.length > 0 : part.totalPoints >= 41 && part.melds.length > 0) &&
-          (hasDrawn || drawnFromDiscardCard !== null || isFinishing),
-        hasTrisOrCatris: part.melds.length > 0,
-        formedGroupsCount: part.melds.length,
+        points: 0,
+        canMeld: false,
+        hasTrisOrCatris: false,
+        formedGroupsCount: 0,
       };
     }
 
-    // Otherwise inspect full hand formed melds
-    const handPart = partitionValidMelds(playerHand);
-    const isFinishing = handPart.remaining.length <= 1 && handPart.melds.length > 0;
+    if (isValidSet(selectedCards) || isValidRun(selectedCards)) {
+      const pts = getGroupPoints(selectedCards);
+      const isFinishing = selectedCards.length >= playerHand.length - 1;
+      return {
+        points: pts,
+        canMeld:
+          currentTurn === 0 &&
+          (hasMelded ? true : pts >= 41) &&
+          (hasDrawn || drawnFromDiscardCard !== null || isFinishing),
+        hasTrisOrCatris: true,
+        formedGroupsCount: 1,
+      };
+    }
+
+    // Multiple formed groups selected together (e.g. 8-8-8 + J-J-J = 54 pts); require ALL selected cards to belong to valid melds
+    const part = partitionValidMelds(selectedCards);
+    const allSelectedAreValidMelds = part.melds.length > 0 && part.remaining.length === 0;
+    const isFinishing = allSelectedAreValidMelds && selectedCards.length >= playerHand.length - 1;
     return {
-      points: handPart.totalPoints,
+      points: allSelectedAreValidMelds ? part.totalPoints : 0,
       canMeld:
-        handPart.melds.length > 0 &&
-        (hasMelded || handPart.totalPoints >= 41) &&
+        currentTurn === 0 &&
+        allSelectedAreValidMelds &&
+        (hasMelded ? true : part.totalPoints >= 41) &&
         (hasDrawn || drawnFromDiscardCard !== null || isFinishing),
-      hasTrisOrCatris: handPart.melds.length > 0,
-      formedGroupsCount: handPart.melds.length,
+      hasTrisOrCatris: allSelectedAreValidMelds,
+      formedGroupsCount: allSelectedAreValidMelds ? part.melds.length : 0,
     };
-  }, [playerHand, selectedCardIds, hasMelded, hasDrawn, drawnFromDiscardCard]);
+  }, [playerHand, selectedCardIds, currentTurn, hasMelded, hasDrawn, drawnFromDiscardCard]);
 
   // Strict Dopey / Monte rule: ALWAYS strictly 5 identical pairs + 1 Tris (never mixed suits)
   const allowSameRankDopey = false;
@@ -5327,7 +5331,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     triggerNotification(t.notifyAutoSorted);
   };
 
-  // Tap Card: If card is inside a formed group, elevate the ENTIRE group together!
+  // Tap Card: If card is inside a formed group, elevate ONLY formed groups; if tapping a single discard card, select cleanly for discard unless forming a manual set/run
   const toggleSelectCard = (id: string) => {
     if (dragMovedRef.current) {
       dragMovedRef.current = false;
@@ -5339,7 +5343,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     if (grp) {
       const allSelected = grp.cardIds.every((cid) => selectedCardIds.has(cid));
       setSelectedCardIds((prev) => {
-        const next = new Set(prev);
+        const next = new Set<string>();
+        // Keep other already-selected formed groups so players can combine 2+ groups for 41+ points, while dropping stray single discard selections
+        prev.forEach((pid) => {
+          if (cardToGroupMap.has(pid)) next.add(pid);
+        });
         if (allSelected) {
           grp.cardIds.forEach((cid) => next.delete(cid));
         } else {
@@ -5351,9 +5359,25 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }
 
     setSelectedCardIds((prev) => {
+      if (prev.has(id)) {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      }
+      const hadFormedGroupSelected = Array.from(prev).some((pid) => cardToGroupMap.has(pid));
+      if (hadFormedGroupSelected) {
+        // Check if this card completes/extends the selected group cleanly; if not, switch directly to selecting this 1 card for discard!
+        const candidateIds = new Set(prev);
+        candidateIds.add(id);
+        const candidateCards = playerHand.filter((c) => candidateIds.has(c.id));
+        const part = partitionValidMelds(candidateCards);
+        if (part.melds.length > 0 && part.remaining.length === 0) {
+          return candidateIds;
+        }
+        return new Set([id]);
+      }
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.add(id);
       return next;
     });
   };

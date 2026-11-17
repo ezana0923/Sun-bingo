@@ -8296,15 +8296,97 @@ function broadcastRaminoLobbySync() {
 }
 
 function broadcastPrivateRoomSnapshot(room: RaminoPrivateRoomRecord) {
+  const { voiceAccessKey: _hiddenVoiceKey, ...publicRoomSnap } = room;
+  void _hiddenVoiceKey;
   const payload = JSON.stringify({
     type: 'ramino:private-room:sync',
-    room,
+    room: publicRoomSnap,
   });
   for (const client of wsClients) {
     if (client.readyState === WebSocket.OPEN) {
       try {
         client.send(payload);
       } catch {}
+    }
+  }
+}
+
+function emitPrivateRaminoRoomNotification(
+  session: RaminoTableSession,
+  title: string,
+  message: string,
+  throttleMs = 15000
+) {
+  const cfg = adminPinConfig.autoNotifyGames || { fast: true, regular: true, keno: true, ramino: true };
+  if (cfg.ramino === false) return;
+
+  const throttleKey = `ramino_priv_${session.roomCode}`;
+  const prevTs = lastGameNotifySentAt.get(throttleKey) || 0;
+  if (Date.now() - prevTs < throttleMs) return;
+  lastGameNotifySentAt.set(throttleKey, Date.now());
+
+  const privRoom = raminoPrivateRooms.get(session.roomCode);
+  const memberIds = new Set<string>();
+  const memberPhones = new Set<string>();
+  for (const p of session.players) {
+    if (p.id) memberIds.add(p.id);
+    const norm = normalizeEthiopianPhone(p.phone || '');
+    if (norm) memberPhones.add(norm);
+  }
+  if (privRoom) {
+    for (const p of privRoom.players) {
+      if (p.id) memberIds.add(p.id);
+      const norm = normalizeEthiopianPhone(p.phone || '');
+      if (norm) memberPhones.add(norm);
+    }
+  }
+
+  const eventObj = {
+    id: `gntf-priv-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    game: 'ramino' as const,
+    title,
+    message,
+    roomCode: session.roomCode,
+    isPrivate: true,
+    timestamp: Date.now(),
+  };
+
+  const payload = JSON.stringify({
+    type: 'game:notify',
+    notification: eventObj,
+  });
+
+  // Deliver ONLY to sockets belonging to players in this private room
+  for (const [sock, meta] of raminoTableSockets.entries()) {
+    if (
+      (meta.roomCode === session.roomCode || memberIds.has(meta.playerId)) &&
+      sock.readyState === WebSocket.OPEN
+    ) {
+      try {
+        sock.send(payload);
+      } catch {}
+    }
+  }
+
+  // Deliver Telegram notification ONLY to registered Telegram accounts of players in this private room
+  const firstActiveBot = Array.from(activeBots.keys())[0];
+  if (firstActiveBot && memberPhones.size > 0) {
+    const targetChatIds = new Set<number>();
+    for (const ph of memberPhones) {
+      const pRec = playersByPhone.get(ph);
+      if (pRec?.chatId) targetChatIds.add(pRec.chatId);
+    }
+    for (const [cid, regPh] of registeredChatPhones.entries()) {
+      const normReg = normalizeEthiopianPhone(regPh || '');
+      if (normReg && memberPhones.has(normReg)) {
+        targetChatIds.add(cid);
+      }
+    }
+    if (targetChatIds.size > 0) {
+      const tgText = `🔒 *${escapeTelegramMarkdown(title)}*\n━━━━━━━━━━━━━━━━━━\n${message}`;
+      for (const cid of targetChatIds) {
+        sendTelegramMessage(firstActiveBot, cid, tgText, undefined, undefined, true).catch(() => {});
+      }
     }
   }
 }
@@ -8627,12 +8709,20 @@ function startServerRaminoCeremony(session: RaminoTableSession) {
     broadcastPrivateRoomSnapshot(privRoom);
   }
   broadcastRaminoTableState(session);
-  emitGameNotification({
-    game: 'ramino',
-    title: `♠️ ኮንከር ራሚኖ (${session.stake} ETB) ጨዋታ ተጀምሯል!`,
-    message: `የራሚኖ ክፍል ${session.roomCode} (${session.players.length} ተጫዋቾች) አሁን ጨዋታ ጀምሯል!`,
-    throttleMs: 30000,
-  });
+  if (session.isPrivate || privRoom) {
+    emitPrivateRaminoRoomNotification(
+      session,
+      `🔒 የግል ራሚኖ ክፍል ${session.roomCode} (${session.stake} ETB) ተጀምሯል!`,
+      `የእርስዎ የግል ራሚኖ ክፍል ${session.roomCode} (${session.players.length} ተጫዋቾች) አሁን ጨዋታ ጀምሯል!`
+    );
+  } else {
+    emitGameNotification({
+      game: 'ramino',
+      title: `♠️ ኮንከር ራሚኖ (${session.stake} ETB) ጨዋታ ተጀምሯል!`,
+      message: `የራሚኖ ክፍል ${session.roomCode} (${session.players.length} ተጫዋቾች) አሁን ጨዋታ ጀምሯል!`,
+      throttleMs: 30000,
+    });
+  }
 
   const count = parts.length;
   const stepReveal = (revealed: number) => {
