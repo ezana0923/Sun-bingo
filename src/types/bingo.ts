@@ -100,6 +100,7 @@ export interface UserAccount {
   phone: string;
   passwordHash: string;
   balance: number;
+  withdrawableBalance?: number;
   bonusBalance: number;
   referralCode: string;
   referredCount: number;

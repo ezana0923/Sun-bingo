@@ -544,10 +544,15 @@ export default function App() {
       fetch(buildApiUrl('/api/home-ads'))
         .then((r) => r.json())
         .then((data) => {
-          if (data?.ok && Array.isArray(data.heroBanners)) {
-            setHeroBanners(data.heroBanners);
+          const incomingAds = Array.isArray(data?.heroBanners)
+            ? data.heroBanners
+            : Array.isArray(data?.ads)
+            ? data.ads
+            : null;
+          if (data?.ok && incomingAds) {
+            setHeroBanners(incomingAds);
             try {
-              localStorage.setItem('sun_home_ads_v1', JSON.stringify(data.heroBanners));
+              localStorage.setItem('sun_home_ads_v1', JSON.stringify(incomingAds));
             } catch {}
           }
         })
@@ -993,9 +998,16 @@ export default function App() {
       const methodLabel = game === 'keno' ? 'Fast Keno' : 'Conker Ramino';
 
       setSharedUsers((prev) =>
-        prev.map((u, idx) =>
-          idx === 0 ? { ...u, balance: Math.max(0, Number((u.balance + delta).toFixed(2))) } : u
-        )
+        prev.map((u, idx) => {
+          if (idx !== 0) return u;
+          const nextBalance = Math.max(0, Number((u.balance + delta).toFixed(2)));
+          const prevWithdrawable = Math.max(0, Math.min(u.balance, Number(u.withdrawableBalance ?? 0)));
+          const isWinDelta = delta > 0 && !/refund|revert|cancel/i.test(reason || '');
+          const nextWithdrawable = isWinDelta
+            ? Math.min(nextBalance, Number((prevWithdrawable + delta).toFixed(2)))
+            : Math.min(nextBalance, prevWithdrawable);
+          return { ...u, balance: nextBalance, withdrawableBalance: nextWithdrawable };
+        })
       );
 
       if (curUser) {
@@ -1115,6 +1127,10 @@ export default function App() {
                       phone: res.player.phone || u.phone,
                       balance:
                         typeof res.player.balance === 'number' ? res.player.balance : u.balance,
+                      withdrawableBalance:
+                        typeof res.player.withdrawableBalance === 'number'
+                          ? res.player.withdrawableBalance
+                          : u.withdrawableBalance,
                       bonusBalance:
                         typeof res.player.bonusBalance === 'number'
                           ? res.player.bonusBalance
@@ -1185,6 +1201,8 @@ export default function App() {
                 phone: p.phone || `091100000${idx}`,
                 passwordHash: '****',
                 balance: typeof p.balance === 'number' ? p.balance : 0,
+                withdrawableBalance:
+                  typeof p.withdrawableBalance === 'number' ? p.withdrawableBalance : 0,
                 bonusBalance: typeof p.bonusBalance === 'number' ? p.bonusBalance : 0,
                 referralCode: `SUN${(p.phone || '0000').slice(-4)}`,
                 referredCount: 0,
@@ -1198,6 +1216,10 @@ export default function App() {
                   ...prev[0],
                   name: serverMe.name || prev[0].name,
                   balance: typeof serverMe.balance === 'number' ? serverMe.balance : prev[0].balance,
+                  withdrawableBalance:
+                    typeof serverMe.withdrawableBalance === 'number'
+                      ? serverMe.withdrawableBalance
+                      : prev[0].withdrawableBalance,
                   bonusBalance:
                     typeof serverMe.bonusBalance === 'number' ? serverMe.bonusBalance : prev[0].bonusBalance,
                   isBlocked: !!serverMe.isBlocked,
@@ -1212,6 +1234,12 @@ export default function App() {
     const unsubscribe = subscribeRealtimeRoomSync((msg) => {
       if (typeof msg?.requireDepositApproval === 'boolean') {
         setRequireDepositApproval(msg.requireDepositApproval);
+      }
+      if (Array.isArray(msg?.homeHeroAds)) {
+        setHeroBanners(msg.homeHeroAds);
+        try {
+          localStorage.setItem('sun_home_ads_v1', JSON.stringify(msg.homeHeroAds));
+        } catch {}
       }
       const msgBanks =
         (Array.isArray(msg?.fastRoom?.bankAccounts) &&
@@ -1247,6 +1275,8 @@ export default function App() {
               phone: p.phone || `091100000${idx}`,
               passwordHash: '****',
               balance: typeof p.balance === 'number' ? p.balance : 0,
+              withdrawableBalance:
+                typeof p.withdrawableBalance === 'number' ? p.withdrawableBalance : 0,
               bonusBalance: typeof p.bonusBalance === 'number' ? p.bonusBalance : 0,
               referralCode: `SUN${(p.phone || '0000').slice(-4)}`,
               referredCount: 0,
@@ -1260,6 +1290,10 @@ export default function App() {
                 ...prev[0],
                 name: serverMe.name || prev[0].name,
                 balance: typeof serverMe.balance === 'number' ? serverMe.balance : prev[0].balance,
+                withdrawableBalance:
+                  typeof serverMe.withdrawableBalance === 'number'
+                    ? serverMe.withdrawableBalance
+                    : prev[0].withdrawableBalance,
                 bonusBalance:
                   typeof serverMe.bonusBalance === 'number' ? serverMe.bonusBalance : prev[0].bonusBalance,
                 isBlocked: !!serverMe.isBlocked,
@@ -1365,6 +1399,10 @@ export default function App() {
         phone: player.phone,
         passwordHash: player.passwordHash || me?.passwordHash || '****',
         balance: typeof player.balance === 'number' ? player.balance : me?.balance ?? 0,
+        withdrawableBalance:
+          typeof player.withdrawableBalance === 'number'
+            ? player.withdrawableBalance
+            : me?.withdrawableBalance ?? 0,
         bonusBalance:
           typeof player.bonusBalance === 'number' ? player.bonusBalance : me?.bonusBalance ?? 15,
       };
@@ -1378,6 +1416,8 @@ export default function App() {
             phone: p.phone || `091100000${idx}`,
             passwordHash: '****',
             balance: typeof p.balance === 'number' ? p.balance : 0,
+            withdrawableBalance:
+              typeof p.withdrawableBalance === 'number' ? p.withdrawableBalance : 0,
             bonusBalance: typeof p.bonusBalance === 'number' ? p.bonusBalance : 0,
             referralCode: `SUN${(p.phone || '0000').slice(-4)}`,
             referredCount: 0,

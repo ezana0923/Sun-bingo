@@ -110,6 +110,7 @@ export interface ServerPlayerRecord {
   passwordHash?: string;
   chatId?: number;
   balance: number;
+  withdrawableBalance?: number;
   bonusBalance: number;
   referralEarnings: number;
   referredCount: number;
@@ -190,7 +191,8 @@ let adminPinConfig = {
   smsWebhookSecret: 'ezi_sms_secret_2026',
   welcomeBonusAmount: 15,
   referralBonusAmount: 10,
-  depositBonusPercent: 0,
+  depositBonusEnabled: true,
+  depositBonusPercent: 10,
   minDepositAmount: 10,
   minWithdrawAmount: 100,
   autoNotifyGames: {
@@ -533,7 +535,10 @@ function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
     transactions: serverTransactions,
     players: Array.from(playersByPhone.values()),
     bankAccounts: persistedBankAccounts,
+    homeHeroAds: persistedHomeHeroAds,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
+    depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
+    depositBonusPercent: adminPinConfig.depositBonusPercent,
     smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
     autoNotifyGames: adminPinConfig.autoNotifyGames,
     timestamp: now,
@@ -731,6 +736,7 @@ function deductLockedStakesOnGameStart(
     const totalCost = Number((paidCount * room.stakeAmount).toFixed(2));
     if (totalCost > 0) {
       player.balance = Math.max(0, Number((player.balance - totalCost).toFixed(2)));
+      player.withdrawableBalance = Math.min(player.balance, getWithdrawableBalance(player));
       player.updatedAt = new Date().toLocaleString();
       if (ph === globalRegisteredPhone || ph === '0942742684') {
         globalWalletBalance = player.balance;
@@ -887,11 +893,48 @@ function normalizeEthiopianPhone(rawPhone: string): string {
   return digits;
 }
 
+function getActiveDepositBonusPct(): number {
+  if (adminPinConfig.depositBonusEnabled === false) return 0;
+  return Math.max(0, Math.min(100, Number(adminPinConfig.depositBonusPercent ?? 10)));
+}
+
+function getWithdrawableBalance(player?: ServerPlayerRecord | null): number {
+  if (!player) return 0;
+  const bal = Math.max(0, Number(player.balance ?? 0));
+  const raw = Number(player.withdrawableBalance ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(bal, Number(raw.toFixed(2)));
+}
+
+function getPendingWithdrawTotal(phone?: string): number {
+  const clean = normalizeEthiopianPhone(phone || '') || String(phone || '').trim();
+  if (!clean) return 0;
+  let total = 0;
+  for (const tx of serverTransactions) {
+    if (
+      tx.type === 'withdraw' &&
+      tx.status === 'pending' &&
+      (normalizeEthiopianPhone(tx.userPhone) || tx.userPhone) === clean
+    ) {
+      total += Number(tx.amount || 0);
+    }
+  }
+  return Number(total.toFixed(2));
+}
+
+function getAvailableWithdrawableAfterPending(player?: ServerPlayerRecord | null): number {
+  if (!player) return 0;
+  const base = getWithdrawableBalance(player);
+  const pending = getPendingWithdrawTotal(player.phone);
+  return Math.max(0, Number((base - pending).toFixed(2)));
+}
+
 interface SignedAccountSnapshotPayload {
   phone: string;
   name: string;
   passwordHash?: string;
   balance: number;
+  withdrawableBalance?: number;
   bonusBalance: number;
   referralEarnings: number;
   referredCount: number;
@@ -905,6 +948,7 @@ function createSignedPlayerToken(player: ServerPlayerRecord): string {
     name: player.name,
     passwordHash: player.passwordHash,
     balance: Number((player.balance ?? 0).toFixed(2)),
+    withdrawableBalance: getWithdrawableBalance(player),
     bonusBalance: Number((player.bonusBalance ?? 0).toFixed(2)),
     referralEarnings: Number((player.referralEarnings ?? 0).toFixed(2)),
     referredCount: Number(player.referredCount ?? 0),
@@ -943,13 +987,18 @@ function restorePlayerFromSignedTokenIfMissing(token?: string | null): ServerPla
   const cleanPhone = normalizeEthiopianPhone(snap.phone) || snap.phone;
   const existing = playersByPhone.get(cleanPhone);
   if (!existing) {
+    const restoredBal = Number(snap.balance.toFixed(2));
     const restored: ServerPlayerRecord = {
       id: `usr-${cleanPhone.slice(-4)}-${Date.now().toString().slice(-3)}`,
       phone: cleanPhone,
       name: snap.name || `Player_${cleanPhone.slice(-4)}`,
       passwordHash: snap.passwordHash,
       chatId: snap.chatId,
-      balance: Number(snap.balance.toFixed(2)),
+      balance: restoredBal,
+      withdrawableBalance: Math.max(
+        0,
+        Math.min(restoredBal, Number((snap.withdrawableBalance ?? 0).toFixed(2)))
+      ),
       bonusBalance: Number((snap.bonusBalance ?? 15).toFixed(2)),
       referralEarnings: Number((snap.referralEarnings ?? 0).toFixed(2)),
       referredCount: Number(snap.referredCount ?? 0),
@@ -974,6 +1023,9 @@ function ensurePlayerRecord(phone: string, name = 'Player', chatId?: number): Se
     if (name && name !== 'Player' && name !== 'King' && name !== 'Ezana_Player') {
       existing.name = name;
     }
+    if (typeof existing.withdrawableBalance !== 'number' || Number.isNaN(existing.withdrawableBalance)) {
+      existing.withdrawableBalance = 0;
+    }
     return existing;
   }
   const resolvedName =
@@ -988,6 +1040,7 @@ function ensurePlayerRecord(phone: string, name = 'Player', chatId?: number): Se
     name: resolvedName,
     chatId,
     balance: clean === '0942742684' ? 1250.0 : 15.0,
+    withdrawableBalance: 0,
     bonusBalance: 15.0,
     referralEarnings: 0,
     referredCount: 0,
@@ -1217,20 +1270,33 @@ function loadBotsFromDisk() {
     if (typeof parsed.globalBonusBalance === 'number' && Number.isFinite(parsed.globalBonusBalance)) {
       globalBonusBalance = parsed.globalBonusBalance;
     }
+    if (Array.isArray(parsed.transactions) && parsed.transactions.length > 0) {
+      serverTransactions = parsed.transactions.filter(
+        (tx) => tx.id !== 'srv-tx-101' && tx.id !== 'srv-tx-102' && tx.userName !== 'Yonas_Fast' && tx.userName !== 'Meron_Hailu'
+      );
+    }
     if (Array.isArray(parsed.players)) {
       for (const p of parsed.players) {
         if (p && p.phone && p.name !== 'Yonas_Fast' && p.name !== 'Meron_Hailu' && p.name !== 'Dawit_Bingo') {
           if (p.balance > 1000000) {
             p.balance = p.phone === '0942742684' ? 1250 : 15;
           }
+          if (typeof p.withdrawableBalance !== 'number' || Number.isNaN(p.withdrawableBalance)) {
+            const pPhone = normalizeEthiopianPhone(p.phone) || p.phone;
+            let netWon = 0;
+            for (const tx of serverTransactions) {
+              const txPh = normalizeEthiopianPhone(tx.userPhone) || tx.userPhone;
+              if (txPh !== pPhone || tx.status !== 'approved') continue;
+              if (tx.type === 'win') netWon += Number(tx.amount || 0);
+              else if (tx.type === 'withdraw') netWon -= Number(tx.amount || 0);
+            }
+            p.withdrawableBalance = Math.max(0, Math.min(Number(p.balance || 0), Number(netWon.toFixed(2))));
+          } else {
+            p.withdrawableBalance = Math.max(0, Math.min(Number(p.balance || 0), Number(p.withdrawableBalance)));
+          }
           playersByPhone.set(p.phone, p);
         }
       }
-    }
-    if (Array.isArray(parsed.transactions) && parsed.transactions.length > 0) {
-      serverTransactions = parsed.transactions.filter(
-        (tx) => tx.id !== 'srv-tx-101' && tx.id !== 'srv-tx-102' && tx.userName !== 'Yonas_Fast' && tx.userName !== 'Meron_Hailu'
-      );
     }
     if (parsed.fastRoomState) {
       fastRoomsByStake[10] = {
@@ -1314,9 +1380,17 @@ function loadBotsFromDisk() {
       }
     }
     if (parsed.adminPinConfig) {
+      const hasExplicitToggle = typeof (parsed.adminPinConfig as any).depositBonusEnabled === 'boolean';
       adminPinConfig = {
         ...adminPinConfig,
         ...parsed.adminPinConfig,
+        depositBonusEnabled: hasExplicitToggle
+          ? Boolean((parsed.adminPinConfig as any).depositBonusEnabled)
+          : true,
+        depositBonusPercent:
+          !hasExplicitToggle && Number(parsed.adminPinConfig.depositBonusPercent || 0) === 0
+            ? 10
+            : Number(parsed.adminPinConfig.depositBonusPercent ?? 10),
         smsWebhookEnabled:
           typeof parsed.adminPinConfig.smsWebhookEnabled === 'boolean'
             ? parsed.adminPinConfig.smsWebhookEnabled
@@ -1648,31 +1722,34 @@ function escapeTelegramMarkdown(val: string): string {
   return String(val || '').replace(/([_*`\[\]])/g, '\\$1');
 }
 
-function buildWelcomeMessageText(firstName = 'King', registeredPhone?: string, has15Bonus = false) {
+function buildWelcomeMessageText(firstName = 'Player', registeredPhone?: string, has15Bonus = false) {
   const player = registeredPhone ? playersByPhone.get(registeredPhone) : undefined;
   const cashBal = player ? player.balance : 15.0;
+  const withdrawableBal = player ? getWithdrawableBalance(player) : 0;
   const bonusBal = player ? player.bonusBalance : 15.0;
-  const safeName = escapeTelegramMarkdown(firstName || 'King');
+  const safeName = escapeTelegramMarkdown(firstName || 'Player');
   const safePhone = registeredPhone ? escapeTelegramMarkdown(registeredPhone) : '';
 
   const phoneNotice = registeredPhone
-    ? `✅ Registered Phone: *${safePhone}*\n`
-    : `📱 *ለመመዝገብ ስልክ ቁጥርዎን ያስገቡ (09********)*\n`;
+    ? `✅ የተመዘገበ ስልክ፦ *${safePhone}*\n`
+    : `📱 *ለመመዝገብ ስልክ ቁጥርዎን ያጋሩ (09********)*\n`;
 
   const bonusTotal = has15Bonus
     ? `${bonusBal.toFixed(2)} ETB (+15 ETB Welcome Bonus!)`
     : `${bonusBal.toFixed(2)} ETB`;
+  const depBonusPct = getActiveDepositBonusPct();
 
   return (
-    `🎉 *Welcome to EziBinGo Live Bingo Ethiopia!*\n` +
-    `*(እንኳን ወደ ኢዚቢንጎ በደህና መጡ!)*\n\n` +
-    `👋 Selam, *${safeName}*!\n` +
+    `☀️ *እንኳን ወደ SUN GAMES በደህና መጡ!*\n` +
+    `*(Welcome to SUN GAMES — Live Bingo, Keno & Ramino)*\n\n` +
+    `👋 ሰላም *${safeName}*!\n` +
     phoneNotice +
-    `\n💰 Cash Balance: *${cashBal.toFixed(2)} ETB*\n` +
-    `🎁 Bonus Balance: *${bonusTotal}*\n` +
-    `🎰 Jackpot Pool: *${fastLiveRoomState.jackpotPool.toFixed(2)} ETB*\n\n` +
-    `⚡ Instant automated deposits & payouts via Telebirr and CBE Birr.\n` +
-    `Tap below to enter live games, make a deposit, or manage your account:`
+    `\n💰 ጠቅላላ ዋሌት፦ *${cashBal.toFixed(2)} ETB*\n` +
+    `💸 ወጪ ሊደረግ የሚችል (ከድል)፦ *${withdrawableBal.toFixed(2)} ETB*\n` +
+    `🎁 ቦነስ ሂሳብ፦ *${bonusTotal}*\n` +
+    (depBonusPct > 0 ? `🎉 *አሁን ሲያስገቡ +${depBonusPct}% ተጨማሪ ገቢ ቦነስ!*\n` : '') +
+    `\n⚡ ፈጣን ገቢ እና ወጪ በ Telebirr, CBE, Abyssinia እና M-Pesa\n` +
+    `👇 ጨዋታ ለመጀመር ወይም ገቢ/ወጪ ለማድረግ ከታች ያሉትን ቁልፎች ይጠቀሙ፦`
   );
 }
 
@@ -1966,7 +2043,7 @@ async function handleTelegramMenuAction(
 
       const otpCode = pending.code;
       const otpMsg =
-        `🔐 *የ Ezi Bingo ምዝገባ ማረጋገጫ ኮድ (OTP Code)*\n` +
+        `🔐 *የ SUN GAMES ምዝገባ ማረጋገጫ ኮድ (OTP Code)*\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
         `📱 ስልክ ቁጥር፦ \`${targetPhone}\`\n` +
         `🔑 የእርስዎ ባለ 6-አሃዝ OTP ኮድ፦ *\`${otpCode}\`*\n\n` +
@@ -1980,7 +2057,7 @@ async function handleTelegramMenuAction(
           inline_keyboard: [
             [
               {
-                text: '🎮 ወደ Ezi Bingo ተመለስ (Open App)',
+                text: '🎮 ወደ SUN GAMES ተመለስ (Open App)',
                 web_app: { url: buildWebAppUrl(appUrl, 'fast', targetPhone) },
               },
             ],
@@ -2126,7 +2203,7 @@ async function handleTelegramMenuAction(
     const adminFastUrl = `${baseApp}/?app=fast&tab=admin&admin=1#admin`;
     const adminRegularUrl = `${baseApp}/?app=regular&tab=admin&admin=1#regular-admin`;
     const adminText =
-      `🛡️ *EziBinGo Control Center (የቁጥጥር ማዕከል)*\n` +
+      `🛡️ *SUN GAMES Control Center (የቁጥጥር ማዕከል)*\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
       `🔐 *Username:* \`ezana\`\n` +
       `🔑 *Password / PIN:* \`1234\`\n\n` +
@@ -2172,7 +2249,7 @@ async function handleTelegramMenuAction(
     clean === 'menu_play'
   ) {
     const playText =
-      `🎮 *EziBinGo Live Bingo Ethiopia*\n\n` +
+      `🎮 *SUN GAMES Live Games*\n\n` +
       `Tap **🎮 Play Live Bingo** below to launch the live game directly inside Telegram:`;
 
     await sendTelegramMessage(
@@ -2436,12 +2513,15 @@ async function handleTelegramMenuAction(
   // 3. Withdraw 💸 (Step 1: Choose / Enter Amount 50 – 75,000 ETB or All)
   if (clean.includes('withdraw') || clean === '/withdraw' || clean === 'menu_withdraw') {
     chatFlowByChatId.set(chatId, { mode: 'withdraw_amount' });
-    const maxAvail = Math.min(75000, Math.floor(currentPlayer.balance));
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    const maxAvail = Math.min(75000, Math.floor(availWithdrawable));
     const withdrawText =
       `💸 *ወጪ (Withdraw) — ደረጃ 1/3*\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
-      `💰 ማውጣት የሚችሉት (Cash Balance): *${currentPlayer.balance.toFixed(2)} ETB*\n` +
-      `• ዝቅተኛ፦ *50 ETB* | ከፍተኛ፦ *75,000 ETB*\n\n` +
+      `💰 ጠቅላላ ዋሌት፦ *${currentPlayer.balance.toFixed(2)} ETB*\n` +
+      `✅ ወጪ ሊደረግ የሚችል (ከጨዋታ ድል የተገኘ)፦ *${availWithdrawable.toFixed(2)} ETB*\n` +
+      `• ዝቅተኛ፦ *50 ETB* | ከፍተኛ፦ *75,000 ETB*\n` +
+      `ℹ️ _(ገቢ ያደረጉት ብር ጨዋታ አሸንፈው ብቻ ወጪ ይደረጋል)_\n\n` +
       `👇 የሚያወጡትን የብር መጠን ከታች ይምረጡ ወይም እዚሁ ቻት ላይ ይጻፉ፦`;
 
     await sendTelegramMessage(
@@ -2491,11 +2571,12 @@ async function handleTelegramMenuAction(
       );
       return;
     }
-    if (amt > currentPlayer.balance) {
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    if (amt > availWithdrawable) {
       await sendTelegramMessage(
         token,
         chatId,
-        `❌ *በቂ ቀሪ ሂሳብ የለዎትም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\nያለዎት ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`,
+        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB*\n_(ገቢ ያደረጉት ብር ጨዋታ አሸንፈው ብቻ ወጪ ይደረጋል)_`,
         {
           inline_keyboard: [
             [{ text: 'Deposit 💵 (ገቢ አድርግ)', callback_data: 'menu_deposit' }],
@@ -2531,11 +2612,12 @@ async function handleTelegramMenuAction(
       method = rawAction.replace(/^with_bank_/i, '') || 'Telebirr';
     }
 
-    if (amt > currentPlayer.balance) {
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    if (amt > availWithdrawable) {
       await sendTelegramMessage(
         token,
         chatId,
-        `❌ *በቂ ቀሪ ሂሳብ የለዎትም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\nያለዎት ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`,
+        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB*`,
         {
           inline_keyboard: [
             [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
@@ -2594,11 +2676,12 @@ async function handleTelegramMenuAction(
 
     chatFlowByChatId.delete(chatId);
 
-    if (amt > currentPlayer.balance || amt < 50 || amt > 75000) {
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    if (amt > availWithdrawable || amt < 50 || amt > 75000) {
       await sendTelegramMessage(
         token,
         chatId,
-        `❌ *የወጪ ጥያቄው አልተሳካም!*\nከ 50 – 75,000 ETB መካከል መሆን አለበት። ያለዎት ቀሪ ሂሳብ *${currentPlayer.balance.toFixed(2)} ETB* ነው።`,
+        `❌ *የወጪ ጥያቄው አልተሳካም!*\nከ 50 – 75,000 ETB መካከል መሆን አለበት። ✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB* ነው።`,
         buildSubMenuInlineKeyboard(appUrl, regPhone)
       );
       return;
@@ -2622,6 +2705,10 @@ async function handleTelegramMenuAction(
 
     if (!adminPinConfig.requireDepositApproval) {
       currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - amt).toFixed(2)));
+      currentPlayer.withdrawableBalance = Math.max(
+        0,
+        Math.min(currentPlayer.balance, Number((getWithdrawableBalance(currentPlayer) - amt).toFixed(2)))
+      );
       globalWalletBalance = currentPlayer.balance;
     }
     saveBotsToDisk();
@@ -2653,10 +2740,11 @@ async function handleTelegramMenuAction(
     const balanceText =
       `Check Balance 💰 *(የሂሳብ መረጃ)*\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
-      `👋 Selam, *${escapeTelegramMarkdown(currentPlayer.name || firstName)}*!\n` +
-      (regPhone ? `📱 Phone: *${regPhone}*\n` : '') +
-      `💰 Cash Balance: *${currentPlayer.balance.toFixed(2)} ETB*\n` +
-      `🎁 Bonus Balance: *${currentPlayer.bonusBalance.toFixed(2)} ETB${has15Bonus ? ' (+15 ETB Welcome Bonus!)' : ''}*`;
+      `👋 ሰላም *${escapeTelegramMarkdown(currentPlayer.name || firstName)}*!\n` +
+      (regPhone ? `📱 ስልክ፦ *${regPhone}*\n` : '') +
+      `💰 ጠቅላላ ዋሌት፦ *${currentPlayer.balance.toFixed(2)} ETB*\n` +
+      `✅ ወጪ ሊደረግ የሚችል (ከጨዋታ ድል)፦ *${getWithdrawableBalance(currentPlayer).toFixed(2)} ETB*\n` +
+      `🎁 ቦነስ ሂሳብ፦ *${currentPlayer.bonusBalance.toFixed(2)} ETB${has15Bonus ? ' (+15 ETB Welcome Bonus!)' : ''}*`;
 
     await sendTelegramMessage(
       token,
@@ -2718,7 +2806,7 @@ async function handleTelegramMenuAction(
       `Support 📞 *(የደንበኞች ድጋፍ)*\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
       `📞 *ስልክ፦* \`0942742684\`\n` +
-      `💬 *ቴሌግራም፦* @EziBingoSupport\n` +
+      `💬 *ቴሌግራም፦* @SungamesSupport\n` +
       `⏰ *የስራ ሰዓት፦* 24 ሰዓት`;
 
     await sendTelegramMessage(
@@ -2835,6 +2923,13 @@ async function handleTelegramMenuAction(
 
       chatFlowByChatId.delete(chatId);
       currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - transferAmt).toFixed(2)));
+      currentPlayer.withdrawableBalance = Math.max(
+        0,
+        Math.min(
+          currentPlayer.balance,
+          Number((getWithdrawableBalance(currentPlayer) - transferAmt).toFixed(2))
+        )
+      );
       currentPlayer.updatedAt = new Date().toLocaleString();
       const recipient = ensurePlayerRecord(targetPhoneRaw, `Player_${targetPhoneRaw.slice(-4)}`);
       recipient.balance = Number((recipient.balance + transferAmt).toFixed(2));
@@ -2931,11 +3026,12 @@ async function handleTelegramMenuAction(
     } else {
       const singleNum = parseFloat(rawAction.trim());
       if (Number.isFinite(singleNum) && singleNum >= 50 && singleNum <= 75000 && rawAction.trim().length <= 6) {
-        if (singleNum > currentPlayer.balance) {
+        const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+        if (singleNum > availWithdrawable) {
           await sendTelegramMessage(
             token,
             chatId,
-            `❌ *በቂ ቀሪ ሂሳብ የለዎትም!*\nየጠየቁት፦ *${singleNum.toFixed(2)} ETB*\nያለዎት ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`,
+            `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${singleNum.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB*`,
             { inline_keyboard: [[{ text: '← ተመለስ', callback_data: 'menu_withdraw' }], [{ text: '🏠 Main Menu', callback_data: 'menu_main' }]] },
             undefined,
             true
@@ -2947,7 +3043,8 @@ async function handleTelegramMenuAction(
       }
     }
 
-    if (amt >= 50 && amt <= currentPlayer.balance) {
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    if (amt >= 50 && amt <= availWithdrawable) {
       chatFlowByChatId.delete(chatId);
       const newTx: ServerTransactionRecord = {
         id: `srv-tx-${Date.now()}`,
@@ -2967,6 +3064,10 @@ async function handleTelegramMenuAction(
 
       if (!adminPinConfig.requireDepositApproval) {
         currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - amt).toFixed(2)));
+        currentPlayer.withdrawableBalance = Math.max(
+          0,
+          Math.min(currentPlayer.balance, Number((getWithdrawableBalance(currentPlayer) - amt).toFixed(2)))
+        );
         globalWalletBalance = currentPlayer.balance;
       }
       saveBotsToDisk();
@@ -3013,12 +3114,13 @@ async function handleTelegramMenuAction(
       parsedSms.detectedBank || activeFlow?.method || 'Telebirr';
 
     if (!withAmt || withAmt < 50) {
+      const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
       chatFlowByChatId.set(chatId, { mode: 'withdraw_amount', method });
       await sendTelegramMessage(
         token,
         chatId,
         `💸 *የወጪ (Withdraw) ጥያቄ በራሱ ተለይቷል!*\n` +
-          `💰 የእርስዎ ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*\n\n` +
+          `✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB*\n\n` +
           `እባክዎ የሚያወጡትን የብር መጠን ይምረጡ (ዝቅተኛ 50 ETB)፦`,
         {
           inline_keyboard: [
@@ -3038,11 +3140,12 @@ async function handleTelegramMenuAction(
       return;
     }
 
-    if (withAmt > currentPlayer.balance) {
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    if (withAmt > availWithdrawable) {
       await sendTelegramMessage(
         token,
         chatId,
-        `❌ *በቂ ቀሪ ሂሳብ የለዎትም!*\nየጠየቁት ወጪ፦ *${withAmt.toFixed(2)} ETB*\nያለዎት ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`,
+        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት ወጪ፦ *${withAmt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB*`,
         buildSubMenuInlineKeyboard(appUrl, regPhone)
       );
       return;
@@ -3095,6 +3198,10 @@ async function handleTelegramMenuAction(
 
     if (!adminPinConfig.requireDepositApproval) {
       currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - withAmt).toFixed(2)));
+      currentPlayer.withdrawableBalance = Math.max(
+        0,
+        Math.min(currentPlayer.balance, Number((getWithdrawableBalance(currentPlayer) - withAmt).toFixed(2)))
+      );
       globalWalletBalance = currentPlayer.balance;
     }
     saveBotsToDisk();
@@ -3316,7 +3423,7 @@ async function handleTelegramMenuAction(
         matchingPreVerified.status === 'ready_for_claim'
     );
     const verifiedAmt = matchingPreVerified ? matchingPreVerified.amount : parsedAmount;
-    const bonusPct = Number(adminPinConfig.depositBonusPercent || 0);
+    const bonusPct = getActiveDepositBonusPct();
     const bonusAmt = isAutoApproved && bonusPct > 0 ? Number(((verifiedAmt * bonusPct) / 100).toFixed(2)) : 0;
 
     const newTx: ServerTransactionRecord = {
@@ -5012,6 +5119,8 @@ app.get('/api/live-room/state', (req, res) => {
     transactions: serverTransactions,
     pendingCount: serverTransactions.filter((t) => t.status === 'pending').length,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
+    depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
+    depositBonusPercent: adminPinConfig.depositBonusPercent,
     smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
     autoNotifyGames: adminPinConfig.autoNotifyGames,
   });
@@ -5281,6 +5390,10 @@ app.post('/api/live-room/action', (req, res) => {
           if (pPh && playersByPhone.has(pPh)) {
             const prevPlayer = playersByPhone.get(pPh)!;
             prevPlayer.balance = Math.max(0, Number((prevPlayer.balance - diffDeduct).toFixed(2)));
+            prevPlayer.withdrawableBalance = Math.max(
+              0,
+              Math.min(prevPlayer.balance, Number((getWithdrawableBalance(prevPlayer) - diffDeduct).toFixed(2)))
+            );
             prevPlayer.updatedAt = new Date().toLocaleString();
             if (pPh === globalRegisteredPhone || pPh === '0942742684') {
               globalWalletBalance = prevPlayer.balance;
@@ -5303,6 +5416,10 @@ app.post('/api/live-room/action', (req, res) => {
       if (winnerPhone) {
         const winnerPlayer = ensurePlayerRecord(winnerPhone, winner.userName);
         winnerPlayer.balance = Number((winnerPlayer.balance + equalShare).toFixed(2));
+        winnerPlayer.withdrawableBalance = Math.min(
+          winnerPlayer.balance,
+          Number((getWithdrawableBalance(winnerPlayer) + equalShare).toFixed(2))
+        );
         winnerPlayer.updatedAt = new Date().toLocaleString();
         if (winnerPhone === globalRegisteredPhone || winnerPhone === '0942742684') {
           globalWalletBalance = winnerPlayer.balance;
@@ -5889,8 +6006,12 @@ app.post('/api/transactions/submit', (req, res) => {
       return;
     }
   } else if (resolvedType === 'withdraw') {
-    if (player.balance < amt) {
-      res.status(400).json({ ok: false, error: 'በቂ ቀሪ ሂሳብ የለዎትም!' });
+    const availWithdrawable = getAvailableWithdrawableAfterPending(player);
+    if (amt > availWithdrawable) {
+      res.status(400).json({
+        ok: false,
+        error: `❌ ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም! (ወጪ ሊደረግ የሚችል: ${availWithdrawable.toFixed(2)} ETB — ገቢ ያደረጉት ብር ጨዋታ አሸንፈው ብቻ ወጪ ይደረጋል)`,
+      });
       return;
     }
     // Prevent duplicate rapid withdrawal click within 60 seconds
@@ -6034,7 +6155,7 @@ app.post('/api/transactions/submit', (req, res) => {
   // If webhook-verified deposit, instant-mode withdraw, or transfer -> update wallet immediately
   if (!isPending) {
     if (resolvedType === 'deposit') {
-      const bonusPct = Number(adminPinConfig.depositBonusPercent || 0);
+      const bonusPct = getActiveDepositBonusPct();
       const bonusAmt = bonusPct > 0 ? Number(((effectiveDepositAmount * bonusPct) / 100).toFixed(2)) : 0;
       player.balance = Number((player.balance + effectiveDepositAmount + bonusAmt).toFixed(2));
       if (bonusAmt > 0) {
@@ -6071,6 +6192,10 @@ app.post('/api/transactions/submit', (req, res) => {
       }
     } else if (resolvedType === 'withdraw' || resolvedType === 'transfer') {
       player.balance = Math.max(0, Number((player.balance - amt).toFixed(2)));
+      player.withdrawableBalance = Math.max(
+        0,
+        Math.min(player.balance, Number((getWithdrawableBalance(player) - amt).toFixed(2)))
+      );
       player.updatedAt = new Date().toLocaleString();
       if (resolvedType === 'transfer' && recipientRecord && cleanRecipientPhone) {
         recipientRecord.balance = Number((recipientRecord.balance + amt).toFixed(2));
@@ -6362,7 +6487,7 @@ function processIncomingBankSms(
     pendingTx.fullSmsText = text;
 
     const player = ensurePlayerRecord(pendingTx.userPhone, pendingTx.userName, pendingTx.chatId);
-    const bonusPct = Number(adminPinConfig.depositBonusPercent || 0);
+    const bonusPct = getActiveDepositBonusPct();
     const bonusAmt = bonusPct > 0 ? Number(((amt * bonusPct) / 100).toFixed(2)) : 0;
     player.balance = Number((player.balance + amt + bonusAmt).toFixed(2));
     if (bonusAmt > 0) {
@@ -6473,7 +6598,7 @@ function processIncomingBankSms(
 
   if (matchedPlayer) {
     const player = matchedPlayer;
-    const bonusPct = Number(adminPinConfig.depositBonusPercent || 0);
+    const bonusPct = getActiveDepositBonusPct();
     const bonusAmt = bonusPct > 0 ? Number(((amt * bonusPct) / 100).toFixed(2)) : 0;
     player.balance = Number((player.balance + amt + bonusAmt).toFixed(2));
     if (bonusAmt > 0) {
@@ -6777,15 +6902,20 @@ app.post('/api/transactions/approve', async (req, res) => {
   const player = ensurePlayerRecord(tx.userPhone, tx.userName, tx.chatId);
 
   if (previousStatus !== 'approved' && status === 'approved') {
+    let bonusAmt = 0;
     if (tx.type === 'deposit') {
-      const bonusPct = Number(adminPinConfig.depositBonusPercent || 0);
-      const bonusAmt = bonusPct > 0 ? Number(((tx.amount * bonusPct) / 100).toFixed(2)) : 0;
+      const bonusPct = getActiveDepositBonusPct();
+      bonusAmt = bonusPct > 0 ? Number(((tx.amount * bonusPct) / 100).toFixed(2)) : 0;
       player.balance = Number((player.balance + tx.amount + bonusAmt).toFixed(2));
       if (bonusAmt > 0) {
         player.bonusBalance = Number(((player.bonusBalance || 0) + bonusAmt).toFixed(2));
       }
     } else if (tx.type === 'withdraw') {
       player.balance = Math.max(0, Number((player.balance - tx.amount).toFixed(2)));
+      player.withdrawableBalance = Math.max(
+        0,
+        Math.min(player.balance, Number((getWithdrawableBalance(player) - tx.amount).toFixed(2)))
+      );
     }
     if (
       player.phone === globalRegisteredPhone ||
@@ -6808,7 +6938,7 @@ app.post('/api/transactions/approve', async (req, res) => {
           ? `✅ *የገቢ ጥያቄዎ ጸድቋል (Approved)!*\n` +
             `━━━━━━━━━━━━━━━━━━\n` +
             `💳 መንገድ፦ *${tx.method}*\n` +
-            `💰 የተጨመረ ብር፦ *+${tx.amount.toFixed(2)} ETB*\n` +
+            `💰 የተጨመረ ብር፦ *+${tx.amount.toFixed(2)} ETB*${bonusAmt > 0 ? ` (+${bonusAmt.toFixed(2)} ETB ቦነስ)` : ''}\n` +
             `🔖 Ref No፦ \`${tx.referenceNumber}\`\n` +
             `🏦 አዲስ ቀሪ ሂሳብ፦ *${player.balance.toFixed(2)} ETB*`
           : `✅ *የወጪ ጥያቄዎ (${tx.amount.toFixed(2)} ETB) ጸድቆ ወደ ሂሳብዎ ተልኳል!*`;
@@ -6884,6 +7014,7 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
     smsWebhookEnabled,
     welcomeBonusAmount,
     referralBonusAmount,
+    depositBonusEnabled,
     depositBonusPercent,
     minDepositAmount,
     minWithdrawAmount,
@@ -6895,6 +7026,7 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
     smsWebhookEnabled?: boolean;
     welcomeBonusAmount?: number;
     referralBonusAmount?: number;
+    depositBonusEnabled?: boolean;
     depositBonusPercent?: number;
     minDepositAmount?: number;
     minWithdrawAmount?: number;
@@ -6917,6 +7049,9 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
   }
   if (typeof referralBonusAmount === 'number' && Number.isFinite(referralBonusAmount)) {
     adminPinConfig.referralBonusAmount = Math.max(0, referralBonusAmount);
+  }
+  if (typeof depositBonusEnabled === 'boolean') {
+    adminPinConfig.depositBonusEnabled = depositBonusEnabled;
   }
   if (typeof depositBonusPercent === 'number' && Number.isFinite(depositBonusPercent)) {
     adminPinConfig.depositBonusPercent = Math.max(0, Math.min(100, depositBonusPercent));
@@ -6946,6 +7081,7 @@ const handleAdminConfigUpdate = (req: express.Request, res: express.Response) =>
       smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
       welcomeBonusAmount: adminPinConfig.welcomeBonusAmount,
       referralBonusAmount: adminPinConfig.referralBonusAmount,
+      depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
       depositBonusPercent: adminPinConfig.depositBonusPercent,
       minDepositAmount: adminPinConfig.minDepositAmount,
       minWithdrawAmount: adminPinConfig.minWithdrawAmount,
@@ -6967,6 +7103,7 @@ app.get('/api/admin/settings', (req, res) => {
       smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
       welcomeBonusAmount: adminPinConfig.welcomeBonusAmount,
       referralBonusAmount: adminPinConfig.referralBonusAmount,
+      depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
       depositBonusPercent: adminPinConfig.depositBonusPercent,
       minDepositAmount: adminPinConfig.minDepositAmount,
       minWithdrawAmount: adminPinConfig.minWithdrawAmount,
@@ -7574,6 +7711,8 @@ interface RaminoTableSession {
     titleKey:
       | 'dopey_joker'
       | 'dopey'
+      | 'joker_finish'
+      | 'streak_joker'
       | 'streak'
       | 'normal'
       | 'bottom_dopey_joker'
@@ -7583,6 +7722,7 @@ interface RaminoTableSession {
     winnerName: string;
     dopeyMultiplier: number;
     streakMultiplier: number;
+    totalMultiplier?: number;
     streakCount: number;
     pot: number;
     rakeAmount: number;
@@ -8521,6 +8661,8 @@ function finishServerRaminoRound(
   titleKey:
     | 'dopey_joker'
     | 'dopey'
+    | 'joker_finish'
+    | 'streak_joker'
     | 'streak'
     | 'normal'
     | 'bottom_dopey_joker'
@@ -8528,6 +8670,7 @@ function finishServerRaminoRound(
     | 'bottom_normal',
   bottomCardStr?: string
 ) {
+  const prevWinnerStreak = winner.winStreak;
   for (const p of session.players) {
     if (p.id === winner.id) {
       p.winStreak += 1;
@@ -8536,8 +8679,36 @@ function finishServerRaminoRound(
     }
   }
   const streakCount = winner.winStreak;
-  const streakMultiplier = streakCount >= 3 ? 2 : 1;
-  const totalMultiplier = dopeyMultiplier * streakMultiplier;
+
+  let effectiveDopeyMult = 1;
+  let effectiveStreakMult = 1;
+  let totalMultiplier = 1;
+  let resolvedTitleKey = titleKey;
+
+  if (titleKey === 'dopey_joker' || titleKey === 'bottom_dopey_joker') {
+    effectiveDopeyMult = 3;
+    totalMultiplier = 3;
+  } else if (titleKey === 'dopey' || titleKey === 'bottom_dopey') {
+    effectiveDopeyMult = 2;
+    totalMultiplier = 2;
+  } else if (titleKey === 'joker_finish' || titleKey === 'streak_joker') {
+    if (prevWinnerStreak >= 3) {
+      effectiveDopeyMult = 2;
+      effectiveStreakMult = 2;
+      totalMultiplier = 3;
+      resolvedTitleKey = 'streak_joker';
+    } else {
+      effectiveDopeyMult = 2;
+      effectiveStreakMult = 1;
+      totalMultiplier = 2;
+      resolvedTitleKey = 'joker_finish';
+    }
+  } else {
+    effectiveStreakMult = streakCount >= 3 ? 2 : 1;
+    totalMultiplier = effectiveStreakMult;
+    resolvedTitleKey = titleKey === 'normal' && streakCount >= 3 ? 'streak' : titleKey;
+  }
+
   const pot = session.stake * session.players.length;
   const rake = pot * 0.1;
   const winAmount = (pot - rake) * totalMultiplier;
@@ -8548,14 +8719,12 @@ function finishServerRaminoRound(
   session.winnerCelebration = {
     roundKey: `${session.roomCode}_r${session.roundIndex}_${Date.now()}`,
     show: true,
-    titleKey:
-      titleKey === 'normal' && streakCount >= 3 && dopeyMultiplier === 1
-        ? 'streak'
-        : titleKey,
+    titleKey: resolvedTitleKey,
     winnerId: winner.id,
     winnerName: winner.name,
-    dopeyMultiplier,
-    streakMultiplier,
+    dopeyMultiplier: effectiveDopeyMult,
+    streakMultiplier: effectiveStreakMult,
+    totalMultiplier,
     streakCount,
     pot,
     rakeAmount: rake,
@@ -9036,14 +9205,24 @@ function handleServerRaminoAction(
     session.drawnFromDiscardCardId = null;
 
     if (nextHand.length === 0 || closesDopey) {
-      const dopey = srvCheckDopey(nextHand, cardToDiscard, allowSameRankDopey);
-      const mult = dopey.isJokerFinished ? 3 : dopey.isDopey ? 2 : 1;
-      finishServerRaminoRound(
-        session,
-        me,
-        mult,
-        dopey.isJokerFinished ? 'dopey_joker' : dopey.isDopey ? 'dopey' : 'normal'
-      );
+      if (closesDopey) {
+        const dopey = srvCheckDopey(nextHand, cardToDiscard, allowSameRankDopey);
+        const mult = dopey.isJokerFinished ? 3 : 2;
+        finishServerRaminoRound(
+          session,
+          me,
+          mult,
+          dopey.isJokerFinished ? 'dopey_joker' : 'dopey'
+        );
+      } else {
+        const isJokerFinish = Boolean(cardToDiscard.isJoker || cardToDiscard.rank === 'JOKER');
+        finishServerRaminoRound(
+          session,
+          me,
+          isJokerFinish ? 2 : 1,
+          isJokerFinish ? 'joker_finish' : 'normal'
+        );
+      }
       return { ok: true };
     }
 
@@ -9247,6 +9426,14 @@ app.post('/api/wallet/game-tx', (req, res) => {
   }
   const player = ensurePlayerRecord(phone, name);
   player.balance = Math.max(0, Number((player.balance + delta).toFixed(2)));
+  if (delta > 0 && !/refund|revert|cancel/i.test(reason)) {
+    player.withdrawableBalance = Math.min(
+      player.balance,
+      Number((getWithdrawableBalance(player) + delta).toFixed(2))
+    );
+  } else {
+    player.withdrawableBalance = Math.min(player.balance, getWithdrawableBalance(player));
+  }
   player.updatedAt = new Date().toLocaleString();
   if (game === 'keno') {
     if (delta < 0) {
@@ -9290,7 +9477,14 @@ app.post('/api/wallet/game-tx', (req, res) => {
   }
   saveBotsToDisk();
   broadcastRealtimeSync();
-  res.json({ ok: true, balance: player.balance, phone: player.phone, transaction: createdTx });
+  res.json({
+    ok: true,
+    balance: player.balance,
+    withdrawableBalance: getWithdrawableBalance(player),
+    phone: player.phone,
+    accountToken: createSignedPlayerToken(player),
+    transaction: createdTx,
+  });
 });
 
 // Synchronized Fast Keno Live Endpoints
@@ -9838,6 +10032,23 @@ app.post('/api/ramino/private-rooms/:code/start', (req, res) => {
   });
 });
 
+app.get('/api/ramino/active-session', (req, res) => {
+  const playerId = String(req.query?.playerId || '').trim();
+  if (!playerId) {
+    return res.json({ ok: true, table: null });
+  }
+  for (const tbl of raminoTables.values()) {
+    if (
+      (tbl.phase === 'game' || tbl.phase === 'ceremony') &&
+      tbl.turnSeconds > 0 &&
+      tbl.players.some((p) => p.id === playerId)
+    ) {
+      return res.json({ ok: true, table: serializeRaminoTableForPlayer(tbl, playerId) });
+    }
+  }
+  res.json({ ok: true, table: null });
+});
+
 app.get('/api/ramino/tables/:code/state', (req, res) => {
   const code = String(req.params.code || '').trim().toUpperCase();
   const playerId = String(req.query?.playerId || '').trim();
@@ -9900,16 +10111,25 @@ app.post('/api/games/visibility', (req, res) => {
   res.json({ ok: true, visibility: persistedGameVisibility });
 });
 
-// Home Hub Ads & Banners (Admin Ad Creator)
+// Home Hub Ads & Banners (Admin Ad Creator - Synced Live Across All Connected Devices)
 app.get('/api/home-ads', (_req, res) => {
-  res.json({ ok: true, ads: persistedHomeHeroAds });
+  res.json({ ok: true, heroBanners: persistedHomeHeroAds, ads: persistedHomeHeroAds });
 });
 
 app.post('/api/home-ads', (req, res) => {
-  if (Array.isArray(req.body?.ads)) {
-    persistedHomeHeroAds = req.body.ads.slice(0, 25);
+  const incomingAds = Array.isArray(req.body?.heroBanners)
+    ? req.body.heroBanners
+    : Array.isArray(req.body?.ads)
+    ? req.body.ads
+    : null;
+  if (incomingAds) {
+    persistedHomeHeroAds = incomingAds.slice(0, 25);
     saveBotsToDisk();
-    const payload = JSON.stringify({ type: 'home:ads:sync', ads: persistedHomeHeroAds });
+    const payload = JSON.stringify({
+      type: 'home:ads:sync',
+      heroBanners: persistedHomeHeroAds,
+      ads: persistedHomeHeroAds,
+    });
     for (const wsClient of wsClients) {
       if (wsClient.readyState === WebSocket.OPEN) {
         try {
@@ -9917,8 +10137,16 @@ app.post('/api/home-ads', (req, res) => {
         } catch {}
       }
     }
+    for (const sseRes of sseClients) {
+      try {
+        sseRes.write(`data: ${payload}\n\n`);
+      } catch {
+        sseClients.delete(sseRes);
+      }
+    }
+    broadcastRealtimeSync();
   }
-  res.json({ ok: true, ads: persistedHomeHeroAds });
+  res.json({ ok: true, heroBanners: persistedHomeHeroAds, ads: persistedHomeHeroAds });
 });
 
 // Non-ZIP 2-Part Full Standalone Ramino Export (Part 1: Server & Setup, Part 2: Complete ModernRaminoGame.tsx)
@@ -10241,7 +10469,10 @@ async function startServer() {
           regularLockedCartelas: Array.from(regularRoomLockedCartelas.values()),
           transactions: serverTransactions,
           players: Array.from(playersByPhone.values()),
+          homeHeroAds: persistedHomeHeroAds,
           requireDepositApproval: adminPinConfig.requireDepositApproval,
+          depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
+          depositBonusPercent: adminPinConfig.depositBonusPercent,
           timestamp: Date.now(),
         })
       );
@@ -10345,7 +10576,11 @@ async function startServer() {
             playerName,
             isMuted,
           });
-          for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+          for (const [peerWs, meta] of Array.from(raminoVoicePeers.entries())) {
+            if (meta.roomCode === roomCode && playerId && meta.playerId === playerId && peerWs !== ws) {
+              raminoVoicePeers.delete(peerWs);
+              continue;
+            }
             if (meta.roomCode === roomCode && peerWs.readyState === WebSocket.OPEN) {
               existingPeers.push({ peerId: meta.peerId, playerName: meta.playerName, isMuted: meta.isMuted !== false });
               try {
@@ -10386,6 +10621,31 @@ async function startServer() {
               } catch {}
             }
           }
+        } else if (msg.type === 'ramino:voice:audio') {
+          const sender = raminoVoicePeers.get(ws);
+          if (!sender) return;
+          if (typeof msg.iv !== 'string' || typeof msg.data !== 'string' || msg.data.length === 0 || msg.data.length > 48000) {
+            return;
+          }
+          const audioFwd = JSON.stringify({
+            type: 'ramino:voice:audio',
+            roomCode: sender.roomCode,
+            fromPeerId: sender.peerId,
+            playerName: sender.playerName,
+            iv: msg.iv,
+            data: msg.data,
+          });
+          for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+            if (
+              peerWs !== ws &&
+              meta.roomCode === sender.roomCode &&
+              peerWs.readyState === WebSocket.OPEN
+            ) {
+              try {
+                peerWs.send(audioFwd);
+              } catch {}
+            }
+          }
         } else if (msg.type === 'ramino:voice:mic-state') {
           const sender = raminoVoicePeers.get(ws);
           if (!sender) return;
@@ -10416,7 +10676,7 @@ async function startServer() {
             roomCode: sender.roomCode,
             peerId: sender.peerId,
             playerName: sender.playerName,
-            isSpeaking: Boolean(msg.isSpeaking),
+            isSpeaking: Boolean(msg.isSpeaking ?? msg.speaking),
           });
           for (const [peerWs, meta] of raminoVoicePeers.entries()) {
             if (

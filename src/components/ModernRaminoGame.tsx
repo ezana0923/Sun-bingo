@@ -1115,14 +1115,20 @@ const RAMINO_T: Record<Language, any> = {
     potAmountLabel: 'የድስት መጠን:',
     rakeLabel: 'የኮንከር 10% ኮሚሽን:',
     dopeyMultLabel: 'ዶፔይ ብዜት:',
+    jokerFinishMultLabel: '🃏 በጆከር መጨረስ:',
     streakMultLabel: (n: number) => `🔥 ተከታታይ ድል (${n}ኛ):`,
     streakTimes: (m: number) => `${m}x እጥፍ`,
-    streakProgress: (n: number) => `🔥 ተከታታይ ድል: ${n}/3 (በ3ኛው ድል እጥፍ ይከፈላል!)`,
+    streakProgress: (n: number) => `🔥 ተከታታይ ድል: ${n}/3 (ከ3 ተከታታይ ድል በኋላ በጆከር መጨረስ 3x!)`,
     netWonLabel: 'የተጣራ ገቢ:',
     nextDealerLabel: '👑 ቀጣይ ካርታ የሚያከፋፍለው:',
     nextRoundBtn: (dealer: string, extra: string) => `🔄 ቀጣይ ዙር ጀምር (${dealer} ያከፋፍላል${extra})`,
     postDayWinnerBtn: '🪑 ፖስት ዴይ (ሁሉም ተቀብለው አዲስ ወንበር ይሰጣል)',
     backToLobbyResetBtn: 'ወደ ሎቢ ተመለስ',
+    resumeBannerTitle: 'ንቁ የራሚኖ ጨዋታ አለዎት!',
+    resumeBannerSub: (stake: number, secs: number) => `🪙 ${stake} ብር • ሰዓቱ ከማለቁ በፊት ተመልሰው መቀጠል ይችላሉ (⏳ ${secs}s)`,
+    resumeReturnBtn: '▶️ ወደ ጨዋታው ተመለስ',
+    resumeForfeitBtn: 'ጨዋታውን ውጣ',
+    notifySavedCanReturn: '⏳ ጨዋታዎ ክፍት ነው — ሰዓቱ እስካላለቀ ድረስ ተመልሰው መግባት ይችላሉ!',
     postDayModalTitle: 'ፖስት ዴይ — የወንበር መቀየሪያ ጥያቄ',
     postDayModalDesc: (name: string) => `${name} ሁሉም ተጫዋቾች አዲስ ወንበር እንዲያገኙ ፖስት ዴይ ጠይቋል`,
     acceptedBadge: '✓ ተቀብሏል',
@@ -1137,8 +1143,8 @@ const RAMINO_T: Record<Language, any> = {
     rule1Desc: 'ተቃራኒ ተጫዋች ካርታ ሲጥልልዎ 90 ሰከንድ የማሰቢያ ጊዜ ይጀምራል፤ ካለቀ በቀይ 30 ሰከንድ ማስጠንቀቂያ ይሰጣል። ካርታ ካልሳቡ ከጨዋታ ይታገዳሉ።',
     rule2Title: '2. መውረድ (41 ነጥብ) እና ከተጣለ ካርታ ማንሳት',
     rule2Desc: 'ለመውረድ ቢያንስ 41 ነጥብ በትክክለኛ ትሪስ ወይም ካትሪስ መሰራት አለበት። ለመጀመሪያ ሳትወርድ ከተጣለ ካርታ ከወሰድክ «ውረድ ወይም መልስ» ግዴታ ነው (ሳትወርድ ገቢ አይቻልም)፤ ከወረድክ በኋላ ግን እንደፈለግክ መጫወት ትችላለህ።',
-    rule3Title: '3. የታችኛው ካርድ እና ዶፔይ ማሸነፊያ',
-    rule3Desc: 'ያልወረደ ተጫዋች ሁሉንም ካርዶቹን በቡድን ከሰበሰበ እና ለመጨረስ የታችኛው ካርድ ብቻ የሚያስፈልገው ከሆነ በወርቃማ ብርሃን ይበራል፤ በመንካት በቅጽበት ያሸንፋል። 5 ጥንዶች + 1 ትሪስ (ዶፔይ) 2x ሲሆን በጆከር ከተዘጋ 3x እጥፍ ይሰጣል።',
+    rule3Title: '3. የታችኛው ካርድ፣ ጆከር መጨረሻ እና ዶፔይ ማሸነፊያ',
+    rule3Desc: 'ያልወረደ ተጫዋች ሁሉንም ካርዶቹን በቡድን ከሰበሰበ እና ለመጨረስ የታችኛው ካርድ ብቻ የሚያስፈልገው ከሆነ በወርቃማ ብርሃን ይበራል። በራሚኖ ጆከር ጥለው ከጨረሱ 2x (ከ3 ተከታታይ ድል በኋላ 3x)፤ በዶፔይ / ሞንቴ (5 ጥንድ + 1 ትሪስ) 2x ሲሆን ጆከር ጥለው ከዘጉ 3x እጥፍ ይሰጣል።',
     rule4Title: '4. አንድ ካርታ መጣል እና የሚገጥም ካርድ ክልከላ',
     rule4Desc: 'በአንድ ተራ ከአንድ በላይ ካርታ መጣል የተከለከለ ነው። በጠረጴዛው ላይ ካለ ቡድን ጋር የሚገጥም ካርድ መጣል አይቻልም።',
     rule5Title: '5. መደቡ ሲያልቅ',
@@ -1190,6 +1196,8 @@ const RAMINO_T: Record<Language, any> = {
     notifyNeedSwapNatural: (lbl: string) => `ይህን ጆከር ለመቀየር ትክክለኛው ${lbl} በእጅዎ ሊኖር ይገባል!`,
     winTitleDopeyJoker: '👑 ዶፔይ በጆከር አሸናፊ! (3x)',
     winTitleDopey: '🔥 ዶፔይ አሸናፊ! (2x)',
+    winTitleJokerFinish: '🃏 ጆከር ጥለው አሸናፊ! (2x)',
+    winTitleStreakJoker: (n: number) => `👑 ${n}ኛ ተከታታይ ድል በጆከር! (3x)`,
     winTitleStreak: (n: number) => `🔥 ${n}ኛ ተከታታይ ድል! (2x)`,
     winTitleNormal: '🎉 እንኳን ደስ አለዎት! አሸንፈዋል!',
     loseTitle: (w: string) => `😔 ${w} ይህን ዙር አሸንፏል!`,
@@ -1364,14 +1372,20 @@ const RAMINO_T: Record<Language, any> = {
     potAmountLabel: 'ጠቕላላ ድስቲ:',
     rakeLabel: 'ናይ ኮንከር 10% ኮሚሽን:',
     dopeyMultLabel: 'ዶፔይ ብዜት:',
+    jokerFinishMultLabel: '🃏 ብጆከር ምዝዛም:',
     streakMultLabel: (n: number) => `🔥 ተኸታታሊ ዓወት (${n}ይ):`,
     streakTimes: (m: number) => `${m}x ዕጽፊ`,
-    streakProgress: (n: number) => `🔥 ተኸታታሊ ዓወት: ${n}/3 (ኣብ 3ይ ዓወት ዕጽፊ ይኽፈል!)`,
+    streakProgress: (n: number) => `🔥 ተኸታታሊ ዓወት: ${n}/3 (ድሕሪ 3 ተኸታታሊ ዓወት ብጆከር 3x!)`,
     netWonLabel: 'ዝተጻረየ እቶት:',
     nextDealerLabel: '👑 ቀጻሊ ካርታ ዘከፋፍል:',
     nextRoundBtn: (dealer: string, extra: string) => `🔄 ቀጻሊ ዙር ጀምር (${dealer} የከፋፍል${extra})`,
     postDayWinnerBtn: '🪑 ፖስት ዴይ (ኩሎም ምስ ተቐበሉ ሓድሽ ወንበር)',
     backToLobbyResetBtn: 'ናብ ሎቢ ተመለስ',
+    resumeBannerTitle: 'ንቑ ጸወታ ራሚኖ ኣለኩም!',
+    resumeBannerSub: (stake: number, secs: number) => `🪙 ${stake} ብር • ሰዓት ከይተወድአ ተመሊስኩም ክትቅጽሉ ትኽእሉ (⏳ ${secs}s)`,
+    resumeReturnBtn: '▶️ ናብ ጸወታ ተመለስ',
+    resumeForfeitBtn: 'ጸወታ ግደፍ',
+    notifySavedCanReturn: '⏳ ጸወታኹም ክፉት እዩ — ሰዓቱ ከይተወድአ ክትምለሱ ትኽእሉ!',
     postDayModalTitle: 'ፖስት ዴይ — ሕቶ መቐየሪ ወንበር',
     postDayModalDesc: (name: string) => `${name} ኩሎም ተጻወትቲ ሓድሽ ወንበር ክረኽቡ ፖስት ዴይ ሓቲቱ`,
     acceptedBadge: '✓ ተቐቢሉ',
@@ -1386,8 +1400,8 @@ const RAMINO_T: Record<Language, any> = {
     rule1Desc: 'ተጻራሪ ተጻዋታይ ካርታ ምስ ደርበየልኩም 90 ሰከንድ መሕሰቢ ይጅምር፤ ምስ ተወድአ ብቐይሕ 30 ሰከንድ መጠንቀቕታ ይወሃብ። ካርታ እንተዘይስሒብኩም ትእገዱ።',
     rule2Title: '2. ምውራድ (41 ነጥቢ)ን ካብ ዝተደርበየ ምልዓልን',
     rule2Desc: 'ንምውራድ ብውሑዱ 41 ነጥቢ ብትሪስ ወይ ካትሪስ ክስራሕ ኣለዎ። ንመጀመርያ ከይወረድኩም ካብ ዝተደርበየ ካርታ እንተልዒልኩም ግድን ክትወርዱ ወይ ክትመልሱ ኣለኩም።',
-    rule3Title: '3. ናይ ታሕቲ ካርታን ዶፔይን ዓወት',
-    rule3Desc: 'ዘይወረደ ተጻዋታይ ካርታታቱ ብጉጅለ ኣኪቡ ናይ ታሕቲ ካርታ ጥራይ ዝተርፎ እንተኾይኑ ብወርቃዊ ብርሃን ይበርህ። 5 ጽምድታት + 1 ትሪስ 2x ብጆከር እንተተዓጽዩ 3x ዕጽፊ ይህብ።',
+    rule3Title: '3. ናይ ታሕቲ ካርታ፣ ጆከር ምዝዛምን ዶፔይን ዓወት',
+    rule3Desc: 'ዘይወረደ ተጻዋታይ ካርታታቱ ብጉጅለ ኣኪቡ ናይ ታሕቲ ካርታ ጥራይ ዝተርፎ እንተኾይኑ ብወርቃዊ ብርሃን ይበርህ። ብጆከር እንተወዲእኩም 2x (ድሕሪ 3 ተኸታታሊ ዓወት 3x)፤ 5 ጽምድታት + 1 ትሪስ 2x ብጆከር እንተተዓጽዩ 3x ዕጽፊ ይህብ።',
     rule4Title: '4. ሓደ ካርታ ምድርባይን ዝገጥም ካርታ ምኽልካልን',
     rule4Desc: 'ኣብ ሓደ ተራ ሓደ ካርታ ጥራይ ይድርበ። ኣብ ጠረጴዛ ምስ ዘሎ ጉጅለ ዝገጥም ካርታ ምድርባይ ኣይከኣልን።',
     rule5Title: '5. መደብ ምስ ተወድአ',
@@ -1439,6 +1453,8 @@ const RAMINO_T: Record<Language, any> = {
     notifyNeedSwapNatural: (lbl: string) => `ነዚ ጆከር ንምቕያር ትኽክለኛ ${lbl} ክህልወኩም ኣለዎ!`,
     winTitleDopeyJoker: '👑 ዶፔይ ብጆከር ተዓዋቲ! (3x)',
     winTitleDopey: '🔥 ዶፔይ ተዓዋቲ! (2x)',
+    winTitleJokerFinish: '🃏 ብጆከር ተዓዋቲ! (2x)',
+    winTitleStreakJoker: (n: number) => `👑 ${n}ይ ተኸታታሊ ዓወት ብጆከር! (3x)`,
     winTitleStreak: (n: number) => `🔥 ${n}ይ ተኸታታሊ ዓወት! (2x)`,
     winTitleNormal: '🎉 እንቋዕ ሓጎሰኩም! ተዓዊትኩም!',
     loseTitle: (w: string) => `😔 ${w} ነዚ ዙር ተዓዊቱ!`,
@@ -1613,14 +1629,20 @@ const RAMINO_T: Record<Language, any> = {
     potAmountLabel: 'Qabeenya Waliigalaa:',
     rakeLabel: 'Koomishinii 10%:',
     dopeyMultLabel: 'Baay\'ata Dooppey:',
+    jokerFinishMultLabel: '🃏 Jookeraan Xumuruu:',
     streakMultLabel: (n: number) => `🔥 Injifannoo walitti aansee (${n}ffaa):`,
     streakTimes: (m: number) => `Dachaa ${m}x`,
-    streakProgress: (n: number) => `🔥 Walitti aansee: ${n}/3 (3ffaa irratti dachaa kaffala!)`,
+    streakProgress: (n: number) => `🔥 Walitti aansee: ${n}/3 (3ffaa booda jookeraan 3x!)`,
     netWonLabel: 'Galii Qulqulluu:',
     nextDealerLabel: '👑 Kan itti aansee raabsu:',
     nextRoundBtn: (dealer: string, extra: string) => `🔄 Marsaa itti aanu jalqabi (${dealer} ni raabsa${extra})`,
     postDayWinnerBtn: '🪑 Poost Deey (Hundi yoo fudhatan teessoo haaraa)',
     backToLobbyResetBtn: 'Gara Galmaatti Deebi\'i',
+    resumeBannerTitle: 'Taphni Raaminoo Jiru Jira!',
+    resumeBannerSub: (stake: number, secs: number) => `🪙 ${stake} ETB • Yeroon osoo hin dhumiin itti deebi\'uu dandeessa (⏳ ${secs}s)`,
+    resumeReturnBtn: '▶️ Gara Taphaatti Deebi\'i',
+    resumeForfeitBtn: 'Tapha Dhiisi',
+    notifySavedCanReturn: '⏳ Taphni kee banaadha — yeroon osoo hin dhumiin deebi\'uu dandeessa!',
     postDayModalTitle: 'Poost Deey — Gaaffii Jijjiirraa Teessoo',
     postDayModalDesc: (name: string) => `${name} hundi teessoo haaraa akka argatan Poost Deey gaafateera`,
     acceptedBadge: '✓ Fudhatameera',
@@ -1635,8 +1657,8 @@ const RAMINO_T: Record<Language, any> = {
     rule1Desc: 'Taphataan kaardii yoo gatu sekondii 90 keessatti harkisuu qabda; yoo darbe sekondii 30 of eeggannoo booda ni dhorkamta.',
     rule2Title: '2. Bu\'uu (Qabxii 41) fi Kaardii gatame kaasuun',
     rule2Desc: 'Bu\'uuf yoo xiqqaate qabxii 41 garee sirriidhaan qabaachuu qabda. Osoo hin bu\'iin kaardii gatame yoo kaaste bu\'uu ykn deebisuu qabda.',
-    rule3Title: '3. Kaardii Jalaa fi Dooppey',
-    rule3Desc: 'Kaardiiwwan hunda gareedhaan qabattee kaardii jalaa qofa yoo si hafe ifa warqee ibsa. Cimdii 5 + 1 tiriis 2x yoo jookeraan cufame 3x kenna.',
+    rule3Title: '3. Kaardii Jalaa, Jookera fi Dooppey',
+    rule3Desc: 'Kaardiiwwan hunda gareedhaan qabattee kaardii jalaa qofa yoo si hafe ifa warqee ibsa. Jookeraan yoo xumurte 2x (injifannoo 3 booda 3x); Cimdii 5 + 1 tiriis 2x yoo jookeraan cufame 3x kenna.',
     rule4Title: '4. Kaardii Tokko Gatuu',
     rule4Desc: 'Marsaa tokko keessatti kaardii tokko qofa gatuun danda\'ama. Kaardii gabatee irratti galu gatuun hin danda\'amu.',
     rule5Title: '5. Yeroo tuutaan dhumu',
@@ -1688,6 +1710,8 @@ const RAMINO_T: Record<Language, any> = {
     notifyNeedSwapNatural: (lbl: string) => `Jookera kana jijjiiruuf ${lbl} harka kee keessa qabaachuu qabda!`,
     winTitleDopeyJoker: '👑 Dooppey Jookeraan Injifate! (3x)',
     winTitleDopey: '🔥 Dooppey Injifate! (2x)',
+    winTitleJokerFinish: '🃏 Jookera Gatuun Injifate! (2x)',
+    winTitleStreakJoker: (n: number) => `👑 Injifannoo ${n}ffaa Jookeraan! (3x)`,
     winTitleStreak: (n: number) => `🔥 Injifannoo Walitti Aanu ${n}ffaa! (2x)`,
     winTitleNormal: '🎉 Baga Gammaddan! Injifattaniittu!',
     loseTitle: (w: string) => `😔 ${w} marsaa kana injifateera!`,
@@ -1862,14 +1886,20 @@ const RAMINO_T: Record<Language, any> = {
     potAmountLabel: 'Total Pot:',
     rakeLabel: 'House Commission (10%):',
     dopeyMultLabel: 'Dopey Multiplier:',
+    jokerFinishMultLabel: '🃏 Joker Finish:',
     streakMultLabel: (n: number) => `🔥 Win Streak (${n}):`,
     streakTimes: (m: number) => `${m}x Multiplier`,
-    streakProgress: (n: number) => `🔥 Win Streak: ${n}/3 (3rd consecutive win pays 2x!)`,
+    streakProgress: (n: number) => `🔥 Win Streak: ${n}/3 (After 3 wins, Joker finish pays 3x!)`,
     netWonLabel: 'Net Winnings:',
     nextDealerLabel: '👑 Next Round Dealer:',
     nextRoundBtn: (dealer: string, extra: string) => `🔄 Start Next Round (${dealer} deals${extra})`,
     postDayWinnerBtn: '🪑 Post Day (All Accept New Seats)',
     backToLobbyResetBtn: 'Back to Lobby',
+    resumeBannerTitle: 'Active Ramino Game Found!',
+    resumeBannerSub: (stake: number, secs: number) => `🪙 ${stake} ETB • Return to your active table before time expires (⏳ ${secs}s)`,
+    resumeReturnBtn: '▶️ Return to Game',
+    resumeForfeitBtn: 'Leave Table',
+    notifySavedCanReturn: '⏳ Your game stays open — you can return before the timer runs out!',
     postDayModalTitle: 'Post Day — Reseat Request',
     postDayModalDesc: (name: string) => `${name} requested Post Day so all players receive new seats`,
     acceptedBadge: '✓ Accepted',
@@ -1884,8 +1914,8 @@ const RAMINO_T: Record<Language, any> = {
     rule1Desc: 'Once the previous player discards, you have 90s to think plus a 30s red warning. Failing to draw removes you from the table.',
     rule2Title: '2. Opening Meld (41 Points) & Discard Pickup',
     rule2Desc: 'Your opening meld must total at least 41 points in valid sets or runs. If you pick up from the discard pile before your opening meld, you must either meld immediately or return it before discarding.',
-    rule3Title: '3. Bottom Card & Dopey Payouts',
-    rule3Desc: 'If you have not melded and all remaining cards form complete melds/Dopey only with the Bottom Card, it glows gold — tap it to win! Dopey (5 pairs + 1 set) pays 2x, or 3x when closed with a Joker.',
+    rule3Title: '3. Bottom Card, Joker Finish & Dopey Payouts',
+    rule3Desc: 'If you have not melded and all remaining cards form complete melds/Dopey only with the Bottom Card, it glows gold — tap it to win! Closing by discarding a Joker pays 2x (3x after 3 consecutive wins). Dopey (5 pairs + 1 set) pays 2x, or 3x when closed with a Joker.',
     rule4Title: '4. Single Discard & No Matching Discard',
     rule4Desc: 'Discard exactly 1 card per turn. You cannot discard a card that cleanly lays off onto an existing table meld.',
     rule5Title: '5. When the Deck Runs Out',
@@ -1937,6 +1967,8 @@ const RAMINO_T: Record<Language, any> = {
     notifyNeedSwapNatural: (lbl: string) => `You must hold ${lbl} in your hand to swap this Joker!`,
     winTitleDopeyJoker: '👑 Joker Dopey Winner! (3x)',
     winTitleDopey: '🔥 Dopey Winner! (2x)',
+    winTitleJokerFinish: '🃏 Joker Finish Winner! (2x)',
+    winTitleStreakJoker: (n: number) => `👑 ${n}th Win Streak + Joker! (3x)`,
     winTitleStreak: (n: number) => `🔥 ${n} Consecutive Wins! (2x)`,
     winTitleNormal: '🎉 Congratulations! You Won!',
     loseTitle: (w: string) => `😔 ${w} won this round!`,
@@ -2147,13 +2179,19 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const mutedPeerIdsRef = useRef<Record<string, boolean>>({});
   mutedPeerIdsRef.current = mutedPeerIds;
 
+  const activePrivateRoomCodeRef = useRef<string | null>(null);
+  activePrivateRoomCodeRef.current = activePrivateRoomCode;
+
   const myVoicePeerIdRef = useRef<string>(`peer_${Math.random().toString(36).slice(2, 10)}`);
-  const voiceWsRef = useRef<WebSocket | null>(null);
+  const voiceJoinedRef = useRef<boolean>(false);
+  const activeVoiceRoomCodeRef = useRef<string | null>(null);
   const localMicStreamRef = useRef<MediaStream | null>(null);
-  const voicePeerConnsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const remoteAudioMapRef = useRef<Map<string, HTMLAudioElement>>(new Map());
-  const micAnalyserIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const localAudioCtxRef = useRef<AudioContext | null>(null);
+  const micCaptureCtxRef = useRef<AudioContext | null>(null);
+  const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const micSilentGainRef = useRef<GainNode | null>(null);
+  const playbackAudioCtxRef = useRef<AudioContext | null>(null);
+  const peerPlaybackMapRef = useRef<Map<string, { nextPlayTime: number; gainNode: GainNode }>>(new Map());
+  const voiceAesKeyRef = useRef<CryptoKey | null>(null);
   const pttReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMicMutedRef = useRef(isMicMuted);
   isMicMutedRef.current = isMicMuted;
@@ -2164,81 +2202,110 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const playerNameRef = useRef(playerName);
   playerNameRef.current = playerName;
 
-  // Smooth HD 48kHz wideband Opus (usedtx=0 prevents harsh radio/walkie-talkie static bursts; FEC prevents jitter drops)
-  const tuneVoiceOpusSdp = (sdp?: string): string | undefined => {
-    if (!sdp) return sdp;
+  const deriveVoiceAesKey = async (roomCode: string, accessKey: string): Promise<CryptoKey | null> => {
     try {
-      const lines = sdp.split(/\r?\n/);
-      let opusPt: string | null = null;
-      for (const line of lines) {
-        const m = line.match(/^a=rtpmap:(\d+)\s+opus\/48000/i);
-        if (m) {
-          opusPt = m[1];
-          break;
-        }
-      }
-      if (!opusPt) return sdp;
-      const fmtpPrefix = `a=fmtp:${opusPt} `;
-      let replaced = false;
-      const out = lines.map((line) => {
-        if (line.startsWith(fmtpPrefix)) {
-          replaced = true;
-          const params = new URLSearchParams(
-            line.slice(fmtpPrefix.length).replace(/;\s*/g, '&')
-          );
-          params.set('useinbandfec', '1');
-          params.set('usedtx', '0');
-          params.set('cbr', '0');
-          params.set('stereo', '0');
-          params.set('sprop-stereo', '0');
-          params.set('maxaveragebitrate', '64000');
-          params.set('maxplaybackrate', '48000');
-          params.set('ptime', '20');
-          params.set('minptime', '10');
-          return `${fmtpPrefix}${Array.from(params.entries())
-            .map(([k, v]) => `${k}=${v}`)
-            .join(';')}`;
-        }
-        return line;
-      });
-      if (!replaced) {
-        const rtpmapIdx = out.findIndex((l) => l.startsWith(`a=rtpmap:${opusPt} `));
-        if (rtpmapIdx >= 0) {
-          out.splice(
-            rtpmapIdx + 1,
-            0,
-            `${fmtpPrefix}minptime=10;ptime=20;useinbandfec=1;usedtx=0;cbr=0;stereo=0;sprop-stereo=0;maxaveragebitrate=64000;maxplaybackrate=48000`
-          );
-        }
-      }
-      return out.join('\r\n');
+      if (typeof window === 'undefined' || !window.crypto?.subtle) return null;
+      const enc = new TextEncoder();
+      const material = enc.encode(`SUN_RAMINO_VOICE_E2EE_V1:${roomCode}:${accessKey || roomCode}`);
+      const digest = await window.crypto.subtle.digest('SHA-256', material);
+      return await window.crypto.subtle.importKey(
+        'raw',
+        digest,
+        { name: 'AES-GCM' },
+        false,
+        ['encrypt', 'decrypt']
+      );
     } catch {
-      return sdp;
+      return null;
+    }
+  };
+
+  const uint8ToBase64 = (bytes: Uint8Array): string => {
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  };
+
+  const base64ToUint8 = (b64: string): Uint8Array => {
+    const binary = atob(b64);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      out[i] = binary.charCodeAt(i);
+    }
+    return out;
+  };
+
+  const downsampleFloat32ToInt16 = (input: Float32Array, inputRate: number, targetRate = 16000): Int16Array => {
+    if (inputRate <= targetRate) {
+      const out = new Int16Array(input.length);
+      for (let i = 0; i < input.length; i++) {
+        const s = Math.max(-1, Math.min(1, input[i]));
+        out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      return out;
+    }
+    const ratio = inputRate / targetRate;
+    const outLen = Math.max(1, Math.floor(input.length / ratio));
+    const out = new Int16Array(outLen);
+    let offsetResult = 0;
+    let offsetBuffer = 0;
+    while (offsetResult < outLen) {
+      const nextOffsetBuffer = Math.min(input.length, Math.round((offsetResult + 1) * ratio));
+      let accum = 0;
+      let count = 0;
+      for (let i = offsetBuffer; i < nextOffsetBuffer; i++) {
+        accum += input[i];
+        count++;
+      }
+      const avg = count > 0 ? accum / count : 0;
+      const clamped = Math.max(-1, Math.min(1, avg));
+      out[offsetResult] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
+      offsetResult++;
+      offsetBuffer = nextOffsetBuffer;
+    }
+    return out;
+  };
+
+  const ensurePlaybackAudioCtx = (): AudioContext | null => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return null;
+      if (!playbackAudioCtxRef.current || playbackAudioCtxRef.current.state === 'closed') {
+        playbackAudioCtxRef.current = new AudioCtx({ latencyHint: 'interactive' });
+        peerPlaybackMapRef.current.clear();
+      }
+      if (playbackAudioCtxRef.current.state === 'suspended') {
+        playbackAudioCtxRef.current.resume().catch(() => {});
+      }
+      return playbackAudioCtxRef.current;
+    } catch {
+      return null;
     }
   };
 
   const applyRemoteAudioVolumes = () => {
     const shouldDuck = !isMicMutedRef.current && isLocalSpeakingRef.current;
-    const targetVol = shouldDuck ? 0.28 : 0.92;
-    remoteAudioMapRef.current.forEach((audioEl, peerId) => {
+    const targetVol = shouldDuck ? 0.28 : 0.95;
+    const ctx = playbackAudioCtxRef.current;
+    peerPlaybackMapRef.current.forEach((slot, peerId) => {
       const peerMuted = Boolean(mutedPeerIdsRef.current[peerId]);
-      audioEl.muted = isDeafenedRef.current || peerMuted;
-      audioEl.volume = targetVol;
-    });
-  };
-
-  const setLocalDescriptionTuned = async (
-    pc: RTCPeerConnection,
-    desc: RTCSessionDescriptionInit
-  ) => {
-    if (desc.sdp) {
+      const finalGain = isDeafenedRef.current || peerMuted ? 0 : targetVol;
       try {
-        const tunedSdp = tuneVoiceOpusSdp(desc.sdp);
-        await pc.setLocalDescription({ type: desc.type, sdp: tunedSdp });
-        return;
-      } catch {}
-    }
-    await pc.setLocalDescription(desc);
+        if (ctx) {
+          slot.gainNode.gain.setTargetAtTime(finalGain, ctx.currentTime, 0.02);
+        } else {
+          slot.gainNode.gain.value = finalGain;
+        }
+      } catch {
+        slot.gainNode.gain.value = finalGain;
+      }
+    });
   };
 
   const stopVoiceChatSession = () => {
@@ -2246,15 +2313,24 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       clearTimeout(pttReleaseTimerRef.current);
       pttReleaseTimerRef.current = null;
     }
-    if (micAnalyserIntervalRef.current) {
-      clearInterval(micAnalyserIntervalRef.current);
-      micAnalyserIntervalRef.current = null;
-    }
-    if (localAudioCtxRef.current) {
+    if (micProcessorRef.current) {
       try {
-        localAudioCtxRef.current.close();
+        micProcessorRef.current.onaudioprocess = null;
+        micProcessorRef.current.disconnect();
       } catch {}
-      localAudioCtxRef.current = null;
+      micProcessorRef.current = null;
+    }
+    if (micSilentGainRef.current) {
+      try {
+        micSilentGainRef.current.disconnect();
+      } catch {}
+      micSilentGainRef.current = null;
+    }
+    if (micCaptureCtxRef.current) {
+      try {
+        micCaptureCtxRef.current.close();
+      } catch {}
+      micCaptureCtxRef.current = null;
     }
     if (localMicStreamRef.current) {
       localMicStreamRef.current.getTracks().forEach((t) => {
@@ -2264,28 +2340,26 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       });
       localMicStreamRef.current = null;
     }
-    voicePeerConnsRef.current.forEach((pc) => {
+    peerPlaybackMapRef.current.clear();
+    if (playbackAudioCtxRef.current) {
       try {
-        pc.close();
+        playbackAudioCtxRef.current.close();
       } catch {}
-    });
-    voicePeerConnsRef.current.clear();
-    remoteAudioMapRef.current.forEach((audioEl) => {
-      try {
-        audioEl.pause();
-        audioEl.srcObject = null;
-      } catch {}
-    });
-    remoteAudioMapRef.current.clear();
-    if (voiceWsRef.current) {
-      try {
-        if (voiceWsRef.current.readyState === WebSocket.OPEN) {
-          voiceWsRef.current.send(JSON.stringify({ type: 'ramino:voice:leave' }));
-        }
-        voiceWsRef.current.close();
-      } catch {}
-      voiceWsRef.current = null;
+      playbackAudioCtxRef.current = null;
     }
+    if (voiceJoinedRef.current && gameWsRef.current?.readyState === WebSocket.OPEN) {
+      try {
+        gameWsRef.current.send(
+          JSON.stringify({
+            type: 'ramino:voice:leave',
+            roomCode: activeVoiceRoomCodeRef.current || '',
+          })
+        );
+      } catch {}
+    }
+    voiceJoinedRef.current = false;
+    activeVoiceRoomCodeRef.current = null;
+    voiceAesKeyRef.current = null;
     setIsLocalSpeaking(false);
     setIsPushToTalkActive(false);
     setSpeakingOpponentId(null);
@@ -2294,7 +2368,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     setVoiceConnectedCount(1);
   };
 
-  // Sync mute state onto local mic tracks & broadcast real-time mic badge to peers
+  // Sync mute state onto local mic tracks & broadcast real-time mic badge on single shared socket
   useEffect(() => {
     if (localMicStreamRef.current) {
       localMicStreamRef.current.getAudioTracks().forEach((t) => {
@@ -2304,19 +2378,19 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     if (isMicMuted) {
       setIsLocalSpeaking(false);
     }
-    if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
-      voiceWsRef.current.send(
+    if (voiceJoinedRef.current && gameWsRef.current?.readyState === WebSocket.OPEN) {
+      gameWsRef.current.send(
         JSON.stringify({ type: 'ramino:voice:mic-state', isMuted: isMicMuted })
       );
       if (isMicMuted) {
-        voiceWsRef.current.send(
+        gameWsRef.current.send(
           JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: false })
         );
       }
     }
   }, [isMicMuted]);
 
-  // Sync deafen, per-peer local mute & acoustic echo-suppression ducking onto remote peer <audio> elements
+  // Sync deafen, per-peer local mute & acoustic echo-suppression ducking
   useEffect(() => {
     applyRemoteAudioVolumes();
     if (isDeafened) {
@@ -2325,7 +2399,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }
   }, [isDeafened, isLocalSpeaking, isMicMuted, mutedPeerIds]);
 
-  // Ensure live microphone capture & attach tracks to all active WebRTC peers
+  // Ensure live microphone capture & stream E2EE encrypted audio frames over the single gameWsRef WebSocket
   const ensureLocalMicAndAttach = async (): Promise<boolean> => {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
       triggerNotification(t.notifyMicUnsupported);
@@ -2339,13 +2413,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           noiseSuppression: { ideal: true },
           autoGainControl: { ideal: true },
           channelCount: { ideal: 1 },
-          sampleRate: { ideal: 48000 },
+          sampleRate: { ideal: 16000 },
           sampleSize: { ideal: 16 },
           googEchoCancellation: true,
           googAutoGainControl: true,
           googNoiseSuppression: true,
           googHighpassFilter: true,
-          googTypingNoiseDetection: true,
         } as MediaTrackConstraints;
 
         try {
@@ -2361,118 +2434,119 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           });
         }
         localMicStreamRef.current = stream;
-        stream.getAudioTracks().forEach((track) => {
-          try {
-            if ('contentHint' in track) {
-              (track as MediaStreamTrack & { contentHint: string }).contentHint = 'speech';
-            }
-          } catch {}
-        });
 
-        // Live microphone speaking level detector (strictly read-only analyser; never routed to audio destination)
-        try {
-          if (localAudioCtxRef.current) {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtx) {
+          if (micCaptureCtxRef.current) {
             try {
-              localAudioCtxRef.current.close();
+              micCaptureCtxRef.current.close();
             } catch {}
-            localAudioCtxRef.current = null;
+            micCaptureCtxRef.current = null;
           }
-          const AudioCtx =
-            window.AudioContext ||
-            (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-          if (AudioCtx) {
-            const ctx = new AudioCtx({ latencyHint: 'interactive' });
-            localAudioCtxRef.current = ctx;
-            const src = ctx.createMediaStreamSource(stream);
-            const analyser = ctx.createAnalyser();
-            analyser.fftSize = 256;
-            src.connect(analyser);
-            const data = new Uint8Array(analyser.frequencyBinCount);
-            let prevSpeaking = false;
-            let holdUntil = 0;
-            if (micAnalyserIntervalRef.current) clearInterval(micAnalyserIntervalRef.current);
-            micAnalyserIntervalRef.current = setInterval(() => {
-              if (isMicMutedRef.current) {
-                if (prevSpeaking) {
-                  prevSpeaking = false;
-                  setIsLocalSpeaking(false);
-                  if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
-                    voiceWsRef.current.send(
-                      JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: false })
-                    );
-                  }
-                }
-                return;
-              }
-              analyser.getByteTimeDomainData(data);
-              let sumSq = 0;
-              for (let i = 0; i < data.length; i++) {
-                const v = (data[i] - 128) / 128;
-                sumSq += v * v;
-              }
-              const rms = Math.sqrt(sumSq / data.length);
-              const now = Date.now();
-              if (rms > 0.022) {
-                holdUntil = now + 260;
-              }
-              const speakingNow = rms > 0.022 || now < holdUntil;
-              if (speakingNow !== prevSpeaking) {
-                prevSpeaking = speakingNow;
-                setIsLocalSpeaking(speakingNow);
-                if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
-                  voiceWsRef.current.send(
-                    JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: speakingNow })
+          const ctx = new AudioCtx({ latencyHint: 'interactive' });
+          micCaptureCtxRef.current = ctx;
+          if (ctx.state === 'suspended') {
+            ctx.resume().catch(() => {});
+          }
+          const src = ctx.createMediaStreamSource(stream);
+          const processor = ctx.createScriptProcessor(2048, 1, 1);
+          const silentGain = ctx.createGain();
+          silentGain.gain.value = 0;
+          micProcessorRef.current = processor;
+          micSilentGainRef.current = silentGain;
+
+          let prevSpeaking = false;
+          let speakingHoldUntil = 0;
+          let txHoldUntil = 0;
+
+          processor.onaudioprocess = (audioEvent) => {
+            const inputData = audioEvent.inputBuffer.getChannelData(0);
+            if (!inputData || inputData.length === 0) return;
+
+            if (isMicMutedRef.current) {
+              if (prevSpeaking) {
+                prevSpeaking = false;
+                setIsLocalSpeaking(false);
+                if (voiceJoinedRef.current && gameWsRef.current?.readyState === WebSocket.OPEN) {
+                  gameWsRef.current.send(
+                    JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: false })
                   );
                 }
               }
-            }, 120);
-          }
-        } catch {}
-      }
-
-      stream.getAudioTracks().forEach((t) => {
-        t.enabled = false; // caller toggles unmute immediately after attaching
-      });
-
-      // Attach local audio track cleanly to existing WebRTC peer connections & renegotiate if needed
-      const audioTrack = stream.getAudioTracks()[0];
-      if (audioTrack) {
-        for (const [peerId, pc] of voicePeerConnsRef.current.entries()) {
-          const audioTransceiver = pc.getTransceivers().find(
-            (tr) =>
-              tr.sender?.track?.kind === 'audio' ||
-              tr.receiver?.track?.kind === 'audio'
-          );
-          let needsOffer = false;
-          if (audioTransceiver) {
-            if (audioTransceiver.direction !== 'sendrecv') {
-              audioTransceiver.direction = 'sendrecv';
-              needsOffer = true;
+              return;
             }
-            if (audioTransceiver.sender.track !== audioTrack) {
-              await audioTransceiver.sender.replaceTrack(audioTrack);
+
+            let sumSq = 0;
+            for (let i = 0; i < inputData.length; i++) {
+              const v = inputData[i];
+              sumSq += v * v;
             }
-          } else {
-            pc.addTrack(audioTrack, stream);
-            needsOffer = true;
-          }
-          if (needsOffer && pc.signalingState === 'stable') {
-            try {
-              const offer = await pc.createOffer();
-              await setLocalDescriptionTuned(pc, offer);
-              if (voiceWsRef.current?.readyState === WebSocket.OPEN) {
-                voiceWsRef.current.send(
+            const rms = Math.sqrt(sumSq / inputData.length);
+            const now = Date.now();
+            if (rms > 0.015) {
+              speakingHoldUntil = now + 280;
+            }
+            if (rms > 0.006) {
+              txHoldUntil = now + 320;
+            }
+
+            const speakingNow = rms > 0.015 || now < speakingHoldUntil;
+            if (speakingNow !== prevSpeaking) {
+              prevSpeaking = speakingNow;
+              setIsLocalSpeaking(speakingNow);
+              if (voiceJoinedRef.current && gameWsRef.current?.readyState === WebSocket.OPEN) {
+                gameWsRef.current.send(
+                  JSON.stringify({ type: 'ramino:voice:speaking', isSpeaking: speakingNow })
+                );
+              }
+            }
+
+            const shouldTransmit = rms > 0.006 || now < txHoldUntil;
+            const roomCode = activeVoiceRoomCodeRef.current || activePrivateRoomCodeRef.current?.trim().toUpperCase();
+            if (!shouldTransmit || !roomCode || !voiceJoinedRef.current) return;
+            if (gameWsRef.current?.readyState !== WebSocket.OPEN) return;
+
+            const pcm16 = downsampleFloat32ToInt16(inputData, ctx.sampleRate, 16000);
+            const rawBytes = new Uint8Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength);
+
+            const sendEncrypted = async () => {
+              let aesKey = voiceAesKeyRef.current;
+              if (!aesKey) {
+                aesKey = await deriveVoiceAesKey(roomCode, voiceAccessKeyRef.current || '');
+                voiceAesKeyRef.current = aesKey;
+              }
+              if (!aesKey || gameWsRef.current?.readyState !== WebSocket.OPEN) return;
+              const iv = window.crypto.getRandomValues(new Uint8Array(12));
+              const cipherBuf = await window.crypto.subtle.encrypt(
+                { name: 'AES-GCM', iv: iv as BufferSource },
+                aesKey,
+                rawBytes as BufferSource
+              );
+              if (gameWsRef.current?.readyState === WebSocket.OPEN) {
+                gameWsRef.current.send(
                   JSON.stringify({
-                    type: 'ramino:voice:signal',
-                    toPeerId: peerId,
-                    signal: { sdp: pc.localDescription },
+                    type: 'ramino:voice:audio',
+                    roomCode,
+                    iv: uint8ToBase64(iv),
+                    data: uint8ToBase64(new Uint8Array(cipherBuf)),
                   })
                 );
               }
-            } catch {}
-          }
+            };
+            void sendEncrypted();
+          };
+
+          src.connect(processor);
+          processor.connect(silentGain);
+          silentGain.connect(ctx.destination);
         }
       }
+
+      stream.getAudioTracks().forEach((t) => {
+        t.enabled = true;
+      });
       return true;
     } catch {
       triggerNotification(t.notifyMicDenied);
@@ -2481,11 +2555,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   };
 
   const unlockRemoteAudioElements = () => {
-    remoteAudioMapRef.current.forEach((audioEl, peerId) => {
-      audioEl.muted = isDeafenedRef.current || Boolean(mutedPeerIdsRef.current[peerId]);
-      audioEl.volume = !isMicMutedRef.current && isLocalSpeakingRef.current ? 0.28 : 0.92;
-      audioEl.play().catch(() => {});
-    });
+    const ctx = ensurePlaybackAudioCtx();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    applyRemoteAudioVolumes();
   };
 
   const handleTogglePrivateMic = async () => {
@@ -2546,11 +2620,203 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }));
   };
 
-  // Connect real-time WebRTC + WebSocket E2EE Voice Channel ONLY inside Private Room games
+  // Single-Connection E2EE AES-256-GCM Voice Channel riding directly on gameWsRef (Zero extra sockets / zero ICE/STUN mesh failures!)
   const inPrivateVoiceArena =
     (view === 'waiting' || view === 'ceremony' || view === 'game') &&
     isPrivateRoomGame &&
     Boolean(activePrivateRoomCode);
+  const inPrivateVoiceArenaRef = useRef<boolean>(inPrivateVoiceArena);
+  inPrivateVoiceArenaRef.current = inPrivateVoiceArena;
+
+  const sendVoiceJoinOnSharedWs = (roomCode: string) => {
+    if (gameWsRef.current?.readyState !== WebSocket.OPEN) return;
+    voiceJoinedRef.current = true;
+    activeVoiceRoomCodeRef.current = roomCode;
+    gameWsRef.current.send(
+      JSON.stringify({
+        type: 'ramino:voice:join',
+        roomCode,
+        peerId: myVoicePeerIdRef.current,
+        playerId: myPlayerIdRef.current,
+        playerName: playerNameRef.current,
+        voiceAccessKey: voiceAccessKeyRef.current || '',
+        isMuted: isMicMutedRef.current,
+      })
+    );
+  };
+
+  const handleVoiceWsMessage = async (msg: any) => {
+    try {
+      const activeRoom = activeVoiceRoomCodeRef.current || activePrivateRoomCodeRef.current?.trim().toUpperCase();
+      if (!msg || !activeRoom || msg.roomCode !== activeRoom) return;
+      const sessionPeerId = myVoicePeerIdRef.current;
+
+      if (msg.type === 'ramino:voice:error') {
+        return;
+      } else if (msg.type === 'ramino:voice:peers' && Array.isArray(msg.peers)) {
+        const nextPeers = (msg.peers as { peerId: string; playerName: string; isMuted?: boolean }[])
+          .filter((p) => p?.peerId && p.peerId !== sessionPeerId)
+          .map((p) => ({
+            peerId: String(p.peerId),
+            playerName: String(p.playerName || 'Friend'),
+            isMuted: p.isMuted !== false,
+            isSpeaking: false,
+          }));
+        setVoicePeersList(nextPeers);
+        setVoiceConnectedCount(1 + nextPeers.length);
+      } else if (msg.type === 'ramino:voice:peer-joined') {
+        const remotePeerId = String(msg.peerId || '');
+        if (!remotePeerId || remotePeerId === sessionPeerId) return;
+        setVoicePeersList((prev) => {
+          const exists = prev.some((p) => p.peerId === remotePeerId);
+          const next = exists
+            ? prev.map((p) =>
+                p.peerId === remotePeerId
+                  ? { ...p, playerName: msg.playerName || p.playerName, isMuted: msg.isMuted !== false }
+                  : p
+              )
+            : [
+                ...prev,
+                {
+                  peerId: remotePeerId,
+                  playerName: String(msg.playerName || 'Friend'),
+                  isMuted: msg.isMuted !== false,
+                  isSpeaking: false,
+                },
+              ];
+          setVoiceConnectedCount(1 + next.length);
+          return next;
+        });
+      } else if (msg.type === 'ramino:voice:audio') {
+        const fromPeerId = String(msg.fromPeerId || '');
+        if (!fromPeerId || fromPeerId === sessionPeerId) return;
+        if (isDeafenedRef.current || Boolean(mutedPeerIdsRef.current[fromPeerId])) return;
+        if (typeof msg.iv !== 'string' || typeof msg.data !== 'string') return;
+
+        let aesKey = voiceAesKeyRef.current;
+        if (!aesKey) {
+          aesKey = await deriveVoiceAesKey(activeRoom, voiceAccessKeyRef.current || '');
+          voiceAesKeyRef.current = aesKey;
+        }
+        if (!aesKey) return;
+
+        const ivBytes = base64ToUint8(msg.iv);
+        const cipherBytes = base64ToUint8(msg.data);
+        const plainBuf = await window.crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: ivBytes as BufferSource },
+          aesKey,
+          cipherBytes as BufferSource
+        );
+        const int16 = new Int16Array(plainBuf);
+        if (int16.length === 0) return;
+
+        const ctx = ensurePlaybackAudioCtx();
+        if (!ctx) return;
+
+        let slot = peerPlaybackMapRef.current.get(fromPeerId);
+        if (!slot) {
+          const gainNode = ctx.createGain();
+          const shouldDuck = !isMicMutedRef.current && isLocalSpeakingRef.current;
+          gainNode.gain.value = isDeafenedRef.current || mutedPeerIdsRef.current[fromPeerId] ? 0 : shouldDuck ? 0.28 : 0.95;
+          gainNode.connect(ctx.destination);
+          slot = { nextPlayTime: ctx.currentTime + 0.045, gainNode };
+          peerPlaybackMapRef.current.set(fromPeerId, slot);
+        }
+
+        const audioBuf = ctx.createBuffer(1, int16.length, 16000);
+        const chData = audioBuf.getChannelData(0);
+        for (let i = 0; i < int16.length; i++) {
+          chData[i] = int16[i] / 32768;
+        }
+
+        const nowTime = ctx.currentTime;
+        if (slot.nextPlayTime < nowTime + 0.015 || slot.nextPlayTime > nowTime + 0.28) {
+          slot.nextPlayTime = nowTime + 0.045;
+        }
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuf;
+        source.connect(slot.gainNode);
+        source.start(slot.nextPlayTime);
+        slot.nextPlayTime += audioBuf.duration;
+      } else if (msg.type === 'ramino:voice:mic-state') {
+        const pid = String(msg.peerId || '');
+        const peerMuted = Boolean(msg.isMuted);
+        setVoicePeersList((prev) =>
+          prev.map((p) =>
+            p.peerId === pid
+              ? { ...p, isMuted: peerMuted, isSpeaking: peerMuted ? false : p.isSpeaking }
+              : p
+          )
+        );
+      } else if (msg.type === 'ramino:voice:speaking') {
+        const pid = String(msg.peerId || '');
+        const speaker = String(msg.playerName || '');
+        const speakingNow = Boolean(msg.isSpeaking);
+        setVoicePeersList((prev) =>
+          prev.map((p) => (p.peerId === pid ? { ...p, isSpeaking: speakingNow } : p))
+        );
+        if (isDeafenedRef.current || (pid && mutedPeerIdsRef.current[pid])) return;
+        if (speakingNow) {
+          setActiveSpeakerName(speaker);
+          const matchedOpp = opponentsRef.current.find(
+            (o) => o.name.toLowerCase() === speaker.toLowerCase()
+          );
+          setSpeakingOpponentId(matchedOpp ? matchedOpp.id : speaker);
+        } else {
+          setActiveSpeakerName((cur) => (cur === speaker ? null : cur));
+          setSpeakingOpponentId(null);
+        }
+      } else if (msg.type === 'ramino:voice:peer-left') {
+        const leftId = String(msg.peerId || '');
+        peerPlaybackMapRef.current.delete(leftId);
+        setVoicePeersList((prev) => {
+          const next = prev.filter((p) => p.peerId !== leftId);
+          setVoiceConnectedCount(1 + next.length);
+          return next;
+        });
+        if (winStreakRef.current > 0) {
+          winStreakRef.current = 0;
+          setWinStreak(0);
+          triggerNotification(t.notifyStreakResetLeft);
+        }
+      } else if (msg.type === 'ramino:postday:request') {
+        const requester = String(msg.playerName || 'Friend');
+        const reqSource: 'header' | 'winner' = msg.source === 'winner' ? 'winner' : 'header';
+        setPostDayRequest({
+          requestedBy: requester,
+          source: reqSource,
+          acceptedIds: [requester],
+          needsMyAccept: true,
+          allAccepted: false,
+        });
+        raminoAudio.playSwap();
+        triggerNotification(t.notifyPostDayAsked(requester));
+      } else if (msg.type === 'ramino:postday:accept') {
+        const acceptor = String(msg.playerName || 'Friend');
+        setPostDayRequest((prev) => {
+          if (!prev) return prev;
+          if (prev.acceptedIds.includes(acceptor)) return prev;
+          const nextAccepted = [...prev.acceptedIds, acceptor];
+          return { ...prev, acceptedIds: nextAccepted };
+        });
+      } else if (msg.type === 'ramino:admin:control') {
+        if (msg.action === 'close') {
+          stopVoiceChatSession();
+          setView('lobby');
+          setIsPrivateRoomGame(false);
+          setActivePrivateRoomCode(null);
+          setVoiceAccessKey(null);
+          triggerNotification(t.notifyAdminClosedRoom);
+        } else if (msg.action === 'reset') {
+          setView('lobby');
+          triggerNotification(t.notifyAdminResetGame);
+        }
+      }
+    } catch {}
+  };
+
+  const handleVoiceWsMessageRef = useRef(handleVoiceWsMessage);
+  handleVoiceWsMessageRef.current = handleVoiceWsMessage;
 
   useEffect(() => {
     if (!inPrivateVoiceArena || !activePrivateRoomCode) {
@@ -2560,297 +2826,16 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
     const sessionPeerId = `peer_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
     myVoicePeerIdRef.current = sessionPeerId;
-
     const roomCode = activePrivateRoomCode.trim().toUpperCase();
-    const resolved = buildApiUrl('/ws/bingo');
-    const wsUrl = resolved.startsWith('http')
-      ? resolved.replace(/^http/, 'ws')
-      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/bingo`;
+    activeVoiceRoomCodeRef.current = roomCode;
 
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(wsUrl);
-    } catch {
-      return;
-    }
-    voiceWsRef.current = ws;
-
-    const cleanupRemotePeer = (remotePeerId: string) => {
-      const oldPc = voicePeerConnsRef.current.get(remotePeerId);
-      if (oldPc) {
-        try {
-          oldPc.close();
-        } catch {}
-        voicePeerConnsRef.current.delete(remotePeerId);
+    void deriveVoiceAesKey(roomCode, voiceAccessKeyRef.current || '').then((k) => {
+      if (activeVoiceRoomCodeRef.current === roomCode) {
+        voiceAesKeyRef.current = k;
       }
-      const oldEl = remoteAudioMapRef.current.get(remotePeerId);
-      if (oldEl) {
-        try {
-          oldEl.pause();
-          oldEl.srcObject = null;
-        } catch {}
-        remoteAudioMapRef.current.delete(remotePeerId);
-      }
-      setVoicePeersList((prev) => prev.filter((p) => p.peerId !== remotePeerId));
-    };
+    });
 
-    const getOrCreatePeer = (remotePeerId: string, remoteName: string, initialMuted = true) => {
-      const existing = voicePeerConnsRef.current.get(remotePeerId);
-      if (existing && existing.connectionState !== 'failed' && existing.connectionState !== 'closed') {
-        return existing;
-      }
-      if (existing) {
-        cleanupRemotePeer(remotePeerId);
-      }
-
-      const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun.cloudflare.com:3478' },
-        ],
-        iceCandidatePoolSize: 2,
-      });
-
-      if (localMicStreamRef.current) {
-        localMicStreamRef.current.getAudioTracks().forEach((tr) => {
-          pc.addTrack(tr, localMicStreamRef.current!);
-        });
-      } else {
-        try {
-          pc.addTransceiver('audio', { direction: 'sendrecv' });
-        } catch {}
-      }
-
-      pc.onicecandidate = (ev) => {
-        if (ev.candidate && ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: 'ramino:voice:signal',
-              toPeerId: remotePeerId,
-              signal: { candidate: ev.candidate },
-            })
-          );
-        }
-      };
-
-      pc.ontrack = (ev) => {
-        const remoteStream = ev.streams?.[0] || (ev.track ? new MediaStream([ev.track]) : null);
-        if (!remoteStream) return;
-        let audioEl = remoteAudioMapRef.current.get(remotePeerId);
-        if (!audioEl) {
-          audioEl = new Audio();
-          audioEl.autoplay = true;
-          (audioEl as unknown as { playsInline?: boolean }).playsInline = true;
-          remoteAudioMapRef.current.set(remotePeerId, audioEl);
-        }
-        if (audioEl.srcObject !== remoteStream) {
-          audioEl.srcObject = remoteStream;
-        }
-        audioEl.muted = isDeafenedRef.current || Boolean(mutedPeerIdsRef.current[remotePeerId]);
-        audioEl.volume = !isMicMutedRef.current && isLocalSpeakingRef.current ? 0.28 : 0.92;
-        audioEl.play().catch(() => {});
-      };
-
-      pc.oniceconnectionstatechange = async () => {
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-          if (pc.signalingState === 'stable' && ws.readyState === WebSocket.OPEN) {
-            try {
-              const offer = await pc.createOffer({ iceRestart: true });
-              await setLocalDescriptionTuned(pc, offer);
-              ws.send(
-                JSON.stringify({
-                  type: 'ramino:voice:signal',
-                  toPeerId: remotePeerId,
-                  signal: { sdp: pc.localDescription },
-                })
-              );
-            } catch {}
-          }
-        }
-      };
-
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-          cleanupRemotePeer(remotePeerId);
-          setVoiceConnectedCount(1 + voicePeerConnsRef.current.size);
-        }
-      };
-
-      voicePeerConnsRef.current.set(remotePeerId, pc);
-      setVoiceConnectedCount(1 + voicePeerConnsRef.current.size);
-      setVoicePeersList((prev) => {
-        const idx = prev.findIndex((p) => p.peerId === remotePeerId);
-        if (idx >= 0) {
-          const next = [...prev];
-          next[idx] = { ...next[idx], playerName: remoteName || next[idx].playerName };
-          return next;
-        }
-        return [
-          ...prev,
-          { peerId: remotePeerId, playerName: remoteName || 'Friend', isMuted: initialMuted, isSpeaking: false },
-        ];
-      });
-      return pc;
-    };
-
-    ws.onopen = () => {
-      ws.send(
-        JSON.stringify({
-          type: 'ramino:voice:join',
-          roomCode,
-          peerId: sessionPeerId,
-          playerId: myPlayerIdRef.current,
-          playerName: playerNameRef.current,
-          voiceAccessKey: voiceAccessKeyRef.current || '',
-          isMuted: isMicMutedRef.current,
-        })
-      );
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const msg = JSON.parse(String(event.data));
-        if (!msg || msg.roomCode !== roomCode) return;
-
-        if (msg.type === 'ramino:voice:error') {
-          return;
-        } else if (msg.type === 'ramino:voice:peers' && Array.isArray(msg.peers)) {
-          for (const peer of msg.peers as { peerId: string; playerName: string; isMuted?: boolean }[]) {
-            if (!peer?.peerId || peer.peerId === sessionPeerId) continue;
-            const pc = getOrCreatePeer(peer.peerId, peer.playerName, peer.isMuted !== false);
-            if (pc.signalingState !== 'stable') continue;
-            try {
-              const offer = await pc.createOffer();
-              await setLocalDescriptionTuned(pc, offer);
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(
-                  JSON.stringify({
-                    type: 'ramino:voice:signal',
-                    toPeerId: peer.peerId,
-                    signal: { sdp: pc.localDescription },
-                  })
-                );
-              }
-            } catch {}
-          }
-          setVoiceConnectedCount(1 + voicePeerConnsRef.current.size);
-        } else if (msg.type === 'ramino:voice:peer-joined') {
-          if (msg.peerId && msg.peerId !== sessionPeerId) {
-            getOrCreatePeer(msg.peerId, msg.playerName || 'Friend', msg.isMuted !== false);
-          }
-        } else if (msg.type === 'ramino:voice:signal') {
-          const fromPeerId = String(msg.fromPeerId || '');
-          if (!fromPeerId || fromPeerId === sessionPeerId) return;
-          const sig = msg.signal;
-          if (sig?.sdp) {
-            // Mandatory DTLS-SRTP media encryption fingerprint check
-            if (!String(sig.sdp.sdp || '').includes('a=fingerprint:')) {
-              return;
-            }
-            const pc = getOrCreatePeer(fromPeerId, msg.playerName || 'Friend');
-            if (sig.sdp.type === 'offer' && pc.signalingState !== 'stable') {
-              if (sessionPeerId < fromPeerId) {
-                try {
-                  await pc.setLocalDescription({ type: 'rollback' });
-                } catch {}
-              } else {
-                return;
-              }
-            }
-            await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp));
-            if (sig.sdp.type === 'offer') {
-              const answer = await pc.createAnswer();
-              await setLocalDescriptionTuned(pc, answer);
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(
-                  JSON.stringify({
-                    type: 'ramino:voice:signal',
-                    toPeerId: fromPeerId,
-                    signal: { sdp: pc.localDescription },
-                  })
-                );
-              }
-            }
-          } else if (sig?.candidate) {
-            const pc = getOrCreatePeer(fromPeerId, msg.playerName || 'Friend');
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(sig.candidate));
-            } catch {}
-          }
-        } else if (msg.type === 'ramino:voice:mic-state') {
-          const pid = String(msg.peerId || '');
-          const peerMuted = Boolean(msg.isMuted);
-          setVoicePeersList((prev) =>
-            prev.map((p) =>
-              p.peerId === pid
-                ? { ...p, isMuted: peerMuted, isSpeaking: peerMuted ? false : p.isSpeaking }
-                : p
-            )
-          );
-        } else if (msg.type === 'ramino:voice:speaking') {
-          const pid = String(msg.peerId || '');
-          const speaker = String(msg.playerName || '');
-          const speakingNow = Boolean(msg.isSpeaking);
-          setVoicePeersList((prev) =>
-            prev.map((p) => (p.peerId === pid ? { ...p, isSpeaking: speakingNow } : p))
-          );
-          if (isDeafenedRef.current || (pid && mutedPeerIdsRef.current[pid])) return;
-          if (speakingNow) {
-            setActiveSpeakerName(speaker);
-            const matchedOpp = opponentsRef.current.find(
-              (o) => o.name.toLowerCase() === speaker.toLowerCase()
-            );
-            setSpeakingOpponentId(matchedOpp ? matchedOpp.id : speaker);
-          } else {
-            setActiveSpeakerName((cur) => (cur === speaker ? null : cur));
-            setSpeakingOpponentId(null);
-          }
-        } else if (msg.type === 'ramino:voice:peer-left') {
-          const leftId = String(msg.peerId || '');
-          cleanupRemotePeer(leftId);
-          setVoiceConnectedCount(1 + voicePeerConnsRef.current.size);
-          if (winStreakRef.current > 0) {
-            winStreakRef.current = 0;
-            setWinStreak(0);
-            triggerNotification(t.notifyStreakResetLeft);
-          }
-        } else if (msg.type === 'ramino:postday:request') {
-          const requester = String(msg.playerName || 'Friend');
-          const reqSource: 'header' | 'winner' = msg.source === 'winner' ? 'winner' : 'header';
-          setPostDayRequest({
-            requestedBy: requester,
-            source: reqSource,
-            acceptedIds: [requester],
-            needsMyAccept: true,
-            allAccepted: false,
-          });
-          raminoAudio.playSwap();
-          triggerNotification(t.notifyPostDayAsked(requester));
-        } else if (msg.type === 'ramino:postday:accept') {
-          const acceptor = String(msg.playerName || 'Friend');
-          setPostDayRequest((prev) => {
-            if (!prev) return prev;
-            if (prev.acceptedIds.includes(acceptor)) return prev;
-            const nextAccepted = [...prev.acceptedIds, acceptor];
-            return { ...prev, acceptedIds: nextAccepted };
-          });
-        } else if (msg.type === 'ramino:admin:control') {
-          if (msg.action === 'close') {
-            stopVoiceChatSession();
-            setView('lobby');
-            setIsPrivateRoomGame(false);
-            setActivePrivateRoomCode(null);
-            setVoiceAccessKey(null);
-            triggerNotification(t.notifyAdminClosedRoom);
-          } else if (msg.action === 'reset') {
-            setView('lobby');
-            triggerNotification(t.notifyAdminResetGame);
-          }
-        }
-      } catch {}
-    };
+    sendVoiceJoinOnSharedWs(roomCode);
 
     return () => {
       stopVoiceChatSession();
@@ -2919,6 +2904,15 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     winnerId: string;
     winnerName: string;
     isOpponentWin?: boolean;
+    finishMode?:
+      | 'normal'
+      | 'joker_finish'
+      | 'streak_joker'
+      | 'dopey'
+      | 'dopey_joker'
+      | 'bottom_normal'
+      | 'bottom_dopey'
+      | 'bottom_dopey_joker';
     multiplier: number;
     dopeyMultiplier: number;
     streakMultiplier: number;
@@ -2927,7 +2921,77 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     rakeAmount: number;
   } | null>(null);
 
+  // Temporary Exit & Rejoin Before Expiry State (supports both Multiplayer Server Tables & Solo/Bot Games)
+  interface SuspendedLocalRaminoSnapshot {
+    phase: 'ceremony' | 'game';
+    seatCount: 2 | 3 | 4 | 5;
+    stake: number;
+    isPrivateRoomGame: boolean;
+    activePrivateRoomCode: string | null;
+    privateRoundCount: number;
+    reshuffleCount: number;
+    tableSeatOrder: { id: string; name: string; avatarLetter: string; avatarColor: string }[];
+    winStreak: number;
+    opponents: RaminoOpponent[];
+    turnSeconds: number;
+    expiresAt: number;
+    currentTurn: number;
+    hasDrawn: boolean;
+    drawnFromDiscardCard: PlayingCard | null;
+    hasMelded: boolean;
+    hasDiscarded: boolean;
+    deckCards: PlayingCard[];
+    bottomCard: PlayingCard;
+    discardPile: PlayingCard[];
+    playerHand: PlayingCard[];
+    tableMelds: MeldGroup[];
+    closedSetBadges: ClosedSetBadge[];
+    meldTurnCounter: number;
+    ceremonyDealer: string;
+    cutParticipants: { id: string; name: string; card: PlayingCard; isWinner: boolean; isSelf?: boolean }[];
+    ceremonyRevealedCount: number;
+  }
+
+  const LOCAL_RESUME_STORAGE_KEY = 'sun_ramino_local_resume_v1';
+  const MP_RESUME_STORAGE_KEY = 'sun_ramino_mp_resume_v1';
+
+  const loadUnexpiredLocalResume = (): SuspendedLocalRaminoSnapshot | null => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem(LOCAL_RESUME_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as SuspendedLocalRaminoSnapshot;
+      if (!parsed || typeof parsed.expiresAt !== 'number' || parsed.expiresAt <= Date.now()) {
+        localStorage.removeItem(LOCAL_RESUME_STORAGE_KEY);
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const [suspendedLocalGame, setSuspendedLocalGame] = useState<SuspendedLocalRaminoSnapshot | null>(() =>
+    loadUnexpiredLocalResume()
+  );
+  const [localResumeSecondsLeft, setLocalResumeSecondsLeft] = useState<number>(() => {
+    const snap = loadUnexpiredLocalResume();
+    return snap ? Math.max(0, Math.ceil((snap.expiresAt - Date.now()) / 1000)) : 0;
+  });
+  const [resumableMpSession, setResumableMpSession] = useState<{
+    roomCode: string;
+    stake: number;
+    isPrivate: boolean;
+    privateCode: string | null;
+    phase: 'ceremony' | 'game';
+    turnSeconds: number;
+    isMyTurn: boolean;
+    activePlayerName: string;
+  } | null>(null);
+
   // Refs to keep interval/timeout callbacks free of stale closures or nested state setters
+  const isMinimizedToLobbyRef = useRef<boolean>(false);
+  const localGameEpochRef = useRef<number>(0);
   const openRoomsRef = useRef<RaminoRoom[]>(openRooms);
   openRoomsRef.current = openRooms;
   const onUpdateSharedUsersRef = useRef(onUpdateSharedUsers);
@@ -3132,8 +3196,17 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
     // Winner celebration + idempotent payout crediting
     if (tbl.winnerCelebration && tbl.winnerCelebration.show) {
+      isMinimizedToLobbyRef.current = false;
+      setResumableMpSession(null);
+      try {
+        localStorage.removeItem(MP_RESUME_STORAGE_KEY);
+      } catch {}
+
       const wc = tbl.winnerCelebration;
       const isMe = wc.winnerId === myPlayerIdRef.current;
+      const totalMult = Number(
+        wc.totalMultiplier || Number(wc.dopeyMultiplier || 1) * Number(wc.streakMultiplier || 1)
+      );
       let resolvedTitle = t.winTitleNormal;
       if (!isMe) {
         resolvedTitle = t.loseTitle(String(wc.winnerName || 'Opponent'));
@@ -3147,6 +3220,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         resolvedTitle = t.winTitleDopeyJoker;
       } else if (wc.titleKey === 'dopey') {
         resolvedTitle = t.winTitleDopey;
+      } else if (wc.titleKey === 'streak_joker') {
+        resolvedTitle = t.winTitleStreakJoker(Number(wc.streakCount || 3));
+      } else if (wc.titleKey === 'joker_finish') {
+        resolvedTitle = t.winTitleJokerFinish;
       } else if (wc.titleKey === 'streak') {
         resolvedTitle = t.winTitleStreak(Number(wc.streakCount || 3));
       }
@@ -3157,7 +3234,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         winnerId: String(wc.winnerId),
         winnerName: String(wc.winnerName),
         isOpponentWin: !isMe,
-        multiplier: Number(wc.dopeyMultiplier || 1) * Number(wc.streakMultiplier || 1),
+        finishMode: wc.titleKey,
+        multiplier: totalMult,
         dopeyMultiplier: Number(wc.dopeyMultiplier || 1),
         streakMultiplier: Number(wc.streakMultiplier || 1),
         streakCount: Number(wc.streakCount || 0),
@@ -3169,10 +3247,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         creditedRoundKeyRef.current = wc.roundKey;
         if (isMe) {
           raminoAudio.playVictory();
-          adjustWalletBalance(
-            Number(wc.winAmount || 0),
-            `Ramino Win (${Number(wc.dopeyMultiplier || 1) * Number(wc.streakMultiplier || 1)}x)`
-          );
+          adjustWalletBalance(Number(wc.winAmount || 0), `Ramino Win (${totalMult}x)`);
         } else {
           raminoAudio.playBuzzer();
         }
@@ -3219,16 +3294,82 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       }
     }
 
+    const turnSecVal = Number(tbl.turnSeconds ?? 0);
+    if (isMinimizedToLobbyRef.current) {
+      if ((tbl.phase === 'game' || tbl.phase === 'ceremony') && turnSecVal > 0) {
+        const turnIdx = Number(tbl.currentTurn ?? 0);
+        const activeName =
+          turnIdx === 0 ? playerNameRef.current : String(nextOpps[turnIdx - 1]?.name || '');
+        const mpSummary = {
+          roomCode: String(tbl.roomCode || activeMultiplayerRoomCodeRef.current || ''),
+          stake: stk,
+          isPrivate: Boolean(tbl.isPrivate),
+          privateCode: tbl.isPrivate && tbl.roomCode ? String(tbl.roomCode) : null,
+          phase: (tbl.phase === 'ceremony' ? 'ceremony' : 'game') as 'ceremony' | 'game',
+          turnSeconds: turnSecVal,
+          isMyTurn: turnIdx === 0,
+          activePlayerName: activeName,
+        };
+        setResumableMpSession(mpSummary);
+        try {
+          localStorage.setItem(
+            MP_RESUME_STORAGE_KEY,
+            JSON.stringify({ ...mpSummary, updatedAt: Date.now() })
+          );
+        } catch {}
+        return;
+      }
+      isMinimizedToLobbyRef.current = false;
+      setResumableMpSession(null);
+      try {
+        localStorage.removeItem(MP_RESUME_STORAGE_KEY);
+      } catch {}
+      if (tbl.phase !== 'finished') {
+        setView('lobby');
+        return;
+      }
+    }
+
     if (tbl.phase === 'waiting') {
       setView('waiting');
     } else if (tbl.phase === 'ceremony') {
       setIsPrivateModalOpen(false);
       setIsJoinCodeModalOpen(false);
+      setResumableMpSession(null);
+      try {
+        localStorage.setItem(
+          MP_RESUME_STORAGE_KEY,
+          JSON.stringify({
+            roomCode: String(tbl.roomCode || ''),
+            stake: stk,
+            turnSeconds: turnSecVal,
+            phase: 'ceremony',
+            updatedAt: Date.now(),
+          })
+        );
+      } catch {}
       setView('ceremony');
     } else if (tbl.phase === 'game' || tbl.phase === 'finished') {
       setIsPrivateModalOpen(false);
       setIsJoinCodeModalOpen(false);
       setIsBannedModalOpen(false);
+      setResumableMpSession(null);
+      try {
+        if (tbl.phase === 'game' && turnSecVal > 0) {
+          localStorage.setItem(
+            MP_RESUME_STORAGE_KEY,
+            JSON.stringify({
+              roomCode: String(tbl.roomCode || ''),
+              stake: stk,
+              turnSeconds: turnSecVal,
+              phase: 'game',
+              updatedAt: Date.now(),
+            })
+          );
+        } else {
+          localStorage.removeItem(MP_RESUME_STORAGE_KEY);
+        }
+      } catch {}
       setView('game');
     }
   };
@@ -3294,6 +3435,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       heldWaitingStakeRef.current = 0;
     }
     stopVoiceChatSession();
+    isMinimizedToLobbyRef.current = false;
+    setResumableMpSession(null);
+    try {
+      localStorage.removeItem(MP_RESUME_STORAGE_KEY);
+    } catch {}
     setActiveMultiplayerRoomCode(null);
     activeMultiplayerRoomCodeRef.current = null;
     setIsPrivateRoomGame(false);
@@ -3312,6 +3458,215 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     setIsBannedModalOpen(false);
     setView('lobby');
     fetchServerOpenRooms();
+  };
+
+  const checkActiveServerRaminoSession = async () => {
+    try {
+      const res = await fetch(
+        buildApiUrl(
+          `/api/ramino/active-session?playerId=${encodeURIComponent(myPlayerIdRef.current)}&_t=${Date.now()}`
+        ),
+        { cache: 'no-store' }
+      );
+      const data = await res.json();
+      if (
+        data?.ok &&
+        data.table &&
+        (data.table.phase === 'game' || data.table.phase === 'ceremony') &&
+        Number(data.table.turnSeconds ?? 0) > 0
+      ) {
+        const roomCode = String(data.table.roomCode || '');
+        if (viewRef.current === 'lobby') {
+          isMinimizedToLobbyRef.current = true;
+        }
+        setActiveMultiplayerRoomCode(roomCode);
+        activeMultiplayerRoomCodeRef.current = roomCode;
+        applyServerTableSnapshotRef.current(data.table);
+        if (gameWsRef.current?.readyState === WebSocket.OPEN && roomCode) {
+          gameWsRef.current.send(
+            JSON.stringify({
+              type: 'ramino:table:join',
+              roomCode,
+              playerId: myPlayerIdRef.current,
+            })
+          );
+        }
+      } else {
+        setResumableMpSession(null);
+        try {
+          localStorage.removeItem(MP_RESUME_STORAGE_KEY);
+        } catch {}
+      }
+    } catch {}
+  };
+
+  const clearLocalSuspendedGame = () => {
+    setSuspendedLocalGame(null);
+    setLocalResumeSecondsLeft(0);
+    try {
+      localStorage.removeItem(LOCAL_RESUME_STORAGE_KEY);
+    } catch {}
+  };
+
+  const exitGameTemporarilyToLobby = () => {
+    if (activeMultiplayerRoomCodeRef.current) {
+      isMinimizedToLobbyRef.current = true;
+      stopVoiceChatSession();
+      setIsMicMuted(true);
+      const secs = Math.max(15, turnSeconds);
+      const mpSummary = {
+        roomCode: activeMultiplayerRoomCodeRef.current,
+        stake: activeTableStake,
+        isPrivate: isPrivateRoomGame,
+        privateCode: activePrivateRoomCode,
+        phase: view === 'ceremony' ? ('ceremony' as const) : ('game' as const),
+        turnSeconds: secs,
+        isMyTurn: currentTurn === 0,
+        activePlayerName:
+          currentTurn === 0
+            ? playerName
+            : opponentsRef.current[currentTurn - 1]?.name || 'Player',
+      };
+      setResumableMpSession(mpSummary);
+      try {
+        localStorage.setItem(MP_RESUME_STORAGE_KEY, JSON.stringify(mpSummary));
+      } catch {}
+      setView('lobby');
+      triggerNotification(t.notifySavedCanReturn);
+      return;
+    }
+
+    localGameEpochRef.current += 1;
+    stopVoiceChatSession();
+    setIsMicMuted(true);
+    const snapSecs = Math.max(15, turnSeconds);
+    const snapshot: SuspendedLocalRaminoSnapshot = {
+      phase: view === 'ceremony' ? 'ceremony' : 'game',
+      seatCount: playerSeatCount,
+      stake: selectedStake,
+      isPrivateRoomGame,
+      activePrivateRoomCode,
+      privateRoundCount: privateRoundCountRef.current,
+      reshuffleCount,
+      tableSeatOrder: tableSeatOrderRef.current,
+      winStreak: winStreakRef.current,
+      opponents: opponentsRef.current,
+      turnSeconds: snapSecs,
+      expiresAt: Date.now() + snapSecs * 1000,
+      currentTurn,
+      hasDrawn,
+      drawnFromDiscardCard,
+      hasMelded,
+      hasDiscarded,
+      deckCards: deckCardsRef.current,
+      bottomCard,
+      discardPile: discardPileRef.current,
+      playerHand,
+      tableMelds: tableMeldsRef.current,
+      closedSetBadges,
+      meldTurnCounter: meldTurnCounterRef.current,
+      ceremonyDealer,
+      cutParticipants,
+      ceremonyRevealedCount,
+    };
+    setSuspendedLocalGame(snapshot);
+    setLocalResumeSecondsLeft(snapSecs);
+    try {
+      localStorage.setItem(LOCAL_RESUME_STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {}
+    setView('lobby');
+    triggerNotification(t.notifySavedCanReturn);
+  };
+
+  const handleResumeActiveGame = async () => {
+    raminoAudio.playDraw();
+    if (resumableMpSession && activeMultiplayerRoomCodeRef.current) {
+      isMinimizedToLobbyRef.current = false;
+      const targetCode = activeMultiplayerRoomCodeRef.current;
+      try {
+        const res = await fetch(
+          buildApiUrl(
+            `/api/ramino/tables/${encodeURIComponent(targetCode)}/state?playerId=${encodeURIComponent(myPlayerIdRef.current)}&_t=${Date.now()}`
+          ),
+          { cache: 'no-store' }
+        );
+        const data = await res.json();
+        if (data?.ok && data.table && (data.table.phase === 'game' || data.table.phase === 'ceremony')) {
+          applyServerTableSnapshotRef.current(data.table);
+          return;
+        }
+      } catch {}
+      setView(resumableMpSession.phase);
+      return;
+    }
+
+    const snap = suspendedLocalGame || loadUnexpiredLocalResume();
+    if (!snap || snap.expiresAt <= Date.now()) {
+      clearLocalSuspendedGame();
+      return;
+    }
+    clearLocalSuspendedGame();
+    localGameEpochRef.current += 1;
+
+    setPlayerSeatCount(snap.seatCount);
+    setSelectedStake(snap.stake);
+    setActiveTableStake(snap.stake);
+    setIsPrivateRoomGame(snap.isPrivateRoomGame);
+    setActivePrivateRoomCode(snap.activePrivateRoomCode);
+    privateRoundCountRef.current = snap.privateRoundCount;
+    setPrivateRoundCount(snap.privateRoundCount);
+    setReshuffleCount(snap.reshuffleCount);
+    tableSeatOrderRef.current = snap.tableSeatOrder;
+    setTableSeatOrder(snap.tableSeatOrder);
+    winStreakRef.current = snap.winStreak;
+    setWinStreak(snap.winStreak);
+
+    opponentsRef.current = snap.opponents;
+    setOpponents(snap.opponents);
+    deckCardsRef.current = snap.deckCards;
+    setDeckCards(snap.deckCards);
+    setBottomCard(snap.bottomCard);
+    discardPileRef.current = snap.discardPile;
+    setDiscardPile(snap.discardPile);
+    setPlayerHand(snap.playerHand);
+    tableMeldsRef.current = snap.tableMelds;
+    setTableMelds(snap.tableMelds);
+    setClosedSetBadges(snap.closedSetBadges);
+    meldTurnCounterRef.current = snap.meldTurnCounter;
+    setMeldTurnCounter(snap.meldTurnCounter);
+    setCeremonyDealer(snap.ceremonyDealer);
+    setCutParticipants(snap.cutParticipants);
+    setCeremonyRevealedCount(snap.ceremonyRevealedCount);
+
+    const remSecs = Math.max(1, Math.ceil((snap.expiresAt - Date.now()) / 1000));
+    setTurnSeconds(remSecs);
+    hasDrawnRef.current = snap.hasDrawn;
+    setHasDrawn(snap.hasDrawn);
+    setDrawnFromDiscardCard(snap.drawnFromDiscardCard);
+    setHasMelded(snap.hasMelded);
+    setHasDiscarded(snap.hasDiscarded);
+    setCurrentTurn(snap.currentTurn);
+    setIsBannedModalOpen(false);
+    setWinnerCelebration(null);
+    setView(snap.phase);
+
+    if (snap.phase === 'game' && snap.currentTurn > 0) {
+      runOpponentTurnsFrom(snap.currentTurn - 1, false);
+    }
+  };
+
+  const handleForfeitResumableGame = () => {
+    raminoAudio.playCardSnap();
+    if (resumableMpSession && activeMultiplayerRoomCodeRef.current) {
+      void leaveMultiplayerTable(false);
+      return;
+    }
+    clearLocalSuspendedGame();
+    localGameEpochRef.current += 1;
+    winStreakRef.current = 0;
+    setWinStreak(0);
+    setIsPrivateRoomGame(false);
+    setActivePrivateRoomCode(null);
   };
 
   // Persistent Ramino Game & Lobby WebSocket Synchronization
@@ -3344,6 +3699,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               })
             );
           }
+          if (inPrivateVoiceArenaRef.current && activePrivateRoomCodeRef.current) {
+            sendVoiceJoinOnSharedWs(activePrivateRoomCodeRef.current.trim().toUpperCase());
+          }
         };
 
         ws.onmessage = (evt) => {
@@ -3365,6 +3723,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             } else if (msg?.type === 'ramino:action:error' && msg.error) {
               raminoAudio.playBuzzer();
               triggerNotification(String(msg.error));
+            } else if (typeof msg?.type === 'string' && (msg.type.startsWith('ramino:voice:') || msg.type.startsWith('ramino:postday:') || msg.type === 'ramino:admin:control')) {
+              void handleVoiceWsMessageRef.current(msg);
             }
           } catch {}
         };
@@ -3384,6 +3744,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     };
 
     fetchServerOpenRooms();
+    void checkActiveServerRaminoSession();
     connectGameWs();
 
     const backupPoll = window.setInterval(async () => {
@@ -3566,6 +3927,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               );
               const stData = await stRes.json();
               if (stData?.ok && stData.table) {
+                if (stData.table.voiceAccessKey) {
+                  const vk = String(stData.table.voiceAccessKey);
+                  voiceAccessKeyRef.current = vk;
+                  setVoiceAccessKey(vk);
+                }
                 applyServerTableSnapshotRef.current(stData.table);
               }
             } catch {}
@@ -3600,7 +3966,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isJoinCodeModalOpen, joinCodeInput]);
 
-  // Smooth 1-Second Display Countdown for Lobby Open Rooms (Server owns authoritative expiry/refund)
+  // Smooth 1-Second Display Countdown for Lobby Open Rooms + Resumable Active Game Expiry
   useEffect(() => {
     const interval = setInterval(() => {
       setOpenRooms((prev) => {
@@ -3609,9 +3975,34 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           .map((rm) => ({ ...rm, timeRemaining: Math.max(0, rm.timeRemaining - 1) }))
           .filter((rm) => rm.timeRemaining > 0);
       });
+
+      if (suspendedLocalGame) {
+        const rem = Math.max(0, Math.ceil((suspendedLocalGame.expiresAt - Date.now()) / 1000));
+        setLocalResumeSecondsLeft(rem);
+        if (rem <= 0) {
+          setSuspendedLocalGame(null);
+          try {
+            localStorage.removeItem(LOCAL_RESUME_STORAGE_KEY);
+          } catch {}
+          winStreakRef.current = 0;
+          setWinStreak(0);
+        }
+      }
+
+      if (resumableMpSession && viewRef.current === 'lobby') {
+        setResumableMpSession((prev) => {
+          if (!prev) return null;
+          if (prev.turnSeconds <= 1) {
+            void checkActiveServerRaminoSession();
+            return { ...prev, turnSeconds: 0 };
+          }
+          return { ...prev, turnSeconds: prev.turnSeconds - 1 };
+        });
+      }
     }, 1000);
     return () => clearInterval(interval);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suspendedLocalGame, Boolean(resumableMpSession)]);
 
   // Format mm:ss
   const formatTimer = (sec: number) => {
@@ -3692,6 +4083,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Prepare Dealer Cut Ceremony for N players
   const startDealerCutCeremony = (seatCount: 2 | 3 | 4 | 5, stake: number) => {
+    clearLocalSuspendedGame();
+    localGameEpochRef.current += 1;
     winStreakRef.current = 0;
     setWinStreak(0);
     privateRoundCountRef.current = 1;
@@ -3760,6 +4153,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   // Deal Cards & Enter Landscape Game Screen (100% strict card conservation — zero duplicates!)
   // Deal Round with Specific Dealer (Ceremony Winner OR Previous Round Winner!)
   const dealRoundWithDealer = (dealerName: string) => {
+    clearLocalSuspendedGame();
+    localGameEpochRef.current += 1;
     const deckCount: 1 | 2 = playerSeatCount === 2 ? 1 : 2;
     const shuffled = buildShuffledDeck(deckCount);
 
@@ -3887,6 +4282,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       triggerNotification(t.notifyWarning30s);
     } else if (turnSeconds === 0) {
       raminoAudio.playBuzzer();
+      clearLocalSuspendedGame();
       winStreakRef.current = 0;
       setWinStreak(0);
       setIsBannedModalOpen(true);
@@ -4023,6 +4419,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       winnerId: 'self',
       winnerName: playerName,
       dopeyMultiplier: dopeyMult,
+      jokerFinish: isBottomJoker,
       customTitle: isDopeyViaBottom && isBottomJoker
         ? t.winBottomJokerDopey(bottomCard.suit)
         : isDopeyViaBottom
@@ -4159,8 +4556,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       allAccepted: false,
     });
 
-    if (voiceWsRef.current?.readyState === WebSocket.OPEN && activePrivateRoomCode) {
-      voiceWsRef.current.send(
+    if (gameWsRef.current?.readyState === WebSocket.OPEN && activePrivateRoomCode) {
+      gameWsRef.current.send(
         JSON.stringify({
           type: 'ramino:postday:request',
           roomCode: activePrivateRoomCode,
@@ -4197,8 +4594,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       void sendRaminoGameAction('postday_accept');
       return;
     }
-    if (voiceWsRef.current?.readyState === WebSocket.OPEN && activePrivateRoomCode) {
-      voiceWsRef.current.send(
+    if (gameWsRef.current?.readyState === WebSocket.OPEN && activePrivateRoomCode) {
+      gameWsRef.current.send(
         JSON.stringify({
           type: 'ramino:postday:accept',
           roomCode: activePrivateRoomCode,
@@ -4594,18 +4991,21 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }
   };
 
-  // Unified Round Win Handler (Winner Deals Next + Dopey 2x/3x + 3+ Consecutive Win Streak 2x)
+  // Unified Round Win Handler (Winner Deals Next + Joker Finish 2x / 3-Streak+Joker 3x / Dopey 2x / Dopey+Joker 3x)
   const triggerRoundWin = ({
     winnerId,
     winnerName,
     dopeyMultiplier,
+    jokerFinish = false,
     customTitle,
   }: {
     winnerId: string;
     winnerName: string;
     dopeyMultiplier: number;
+    jokerFinish?: boolean;
     customTitle?: string;
   }) => {
+    clearLocalSuspendedGame();
     const pot = selectedStake * playerSeatCount;
     const rake = pot * 0.1;
 
@@ -4613,33 +5013,65 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     setCeremonyDealer(winnerName);
 
     if (winnerId === 'self') {
-      const nextStreak = winStreakRef.current + 1;
+      const prevStreak = winStreakRef.current;
+      const nextStreak = prevStreak + 1;
       winStreakRef.current = nextStreak;
       setWinStreak(nextStreak);
 
-      const streakMultiplier = nextStreak >= 3 ? 2 : 1;
-      const totalMultiplier = dopeyMultiplier * streakMultiplier;
+      const isDopeyWin = dopeyMultiplier >= 2;
+      const isJoker = Boolean(jokerFinish || dopeyMultiplier === 3);
+      const isThreePlusStreak = prevStreak >= 3;
+
+      let totalMultiplier = 1;
+      let finishMode:
+        | 'normal'
+        | 'joker_finish'
+        | 'streak_joker'
+        | 'dopey'
+        | 'dopey_joker' = 'normal';
+      let resolvedDopeyMult = 1;
+      let resolvedStreakMult = 1;
+      let resolvedTitle = t.winTitleNormal;
+
+      if (isDopeyWin && isJoker) {
+        totalMultiplier = 3;
+        resolvedDopeyMult = 3;
+        finishMode = 'dopey_joker';
+        resolvedTitle = t.winTitleDopeyJoker;
+      } else if (isDopeyWin) {
+        totalMultiplier = 2;
+        resolvedDopeyMult = 2;
+        finishMode = 'dopey';
+        resolvedTitle = t.winTitleDopey;
+      } else if (isThreePlusStreak && isJoker) {
+        totalMultiplier = 3;
+        resolvedStreakMult = 3;
+        finishMode = 'streak_joker';
+        resolvedTitle = t.winTitleStreakJoker(nextStreak);
+      } else if (isJoker) {
+        totalMultiplier = 2;
+        finishMode = 'joker_finish';
+        resolvedTitle = t.winTitleJokerFinish;
+      } else if (isThreePlusStreak) {
+        totalMultiplier = 2;
+        resolvedStreakMult = 2;
+        resolvedTitle = t.winTitleStreak(nextStreak);
+      }
+
       const netWin = (pot - rake) * totalMultiplier;
       adjustWalletBalance(netWin, `Ramino Win (${totalMultiplier}x)`);
 
       raminoAudio.playVictory();
       setWinnerCelebration({
         show: true,
-        title:
-          customTitle ||
-          (dopeyMultiplier === 3
-            ? t.winTitleDopeyJoker
-            : dopeyMultiplier === 2
-            ? t.winTitleDopey
-            : nextStreak >= 3
-            ? t.winTitleStreak(nextStreak)
-            : t.winTitleNormal),
+        title: customTitle || resolvedTitle,
         winnerId,
         winnerName,
         isOpponentWin: false,
+        finishMode,
         multiplier: totalMultiplier,
-        dopeyMultiplier,
-        streakMultiplier,
+        dopeyMultiplier: resolvedDopeyMult,
+        streakMultiplier: resolvedStreakMult,
         streakCount: nextStreak,
         winAmount: netWin,
         rakeAmount: rake,
@@ -4655,6 +5087,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         winnerId,
         winnerName,
         isOpponentWin: true,
+        finishMode: 'normal',
         multiplier: 1,
         dopeyMultiplier: 1,
         streakMultiplier: 1,
@@ -4667,7 +5100,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Sequential Opponent Turns Runner (starts from given opponent index, wraps back to player turn 0)
   const runOpponentTurnsFrom = (startOppIdx: number, firstOpponentAlreadyHas14 = false) => {
+    const epochAtStart = localGameEpochRef.current;
     const stepTurn = (oppIdx: number, skipDrawForOpeningDealer = false) => {
+      if (epochAtStart !== localGameEpochRef.current) return;
       const activeOpps = opponentsRef.current;
       if (oppIdx >= activeOpps.length) {
         setCurrentTurn(0);
@@ -4682,6 +5117,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       setCurrentTurn(oppIdx + 1);
 
       setTimeout(() => {
+        if (epochAtStart !== localGameEpochRef.current) return;
         raminoAudio.playCardSnap();
 
         const latestOpp = opponentsRef.current[oppIdx] || opp;
@@ -4850,7 +5286,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     runOpponentTurnsFrom(0);
   };
 
-  // Final Win Check (Dopey 2x/3x & 3+ Win Streak 2x & 10% Conker Rake)
+  // Final Win Check (Joker Finish 2x / 3-Streak+Joker 3x / Dopey 2x / Dopey+Joker 3x)
   const handleFinalWinCheck = (handSnapshot: PlayingCard[], closingCard?: PlayingCard | null) => {
     if (activeMultiplayerRoomCode) {
       void sendRaminoGameAction('dopey_win');
@@ -4858,10 +5294,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }
     const dopey = checkDopey(handSnapshot, closingCard, allowSameRankDopey);
     const dopeyMultiplier = dopey.isJokerFinished ? 3 : dopey.isDopey ? 2 : 1;
+    const isJokerClosing = Boolean(closingCard && (closingCard.isJoker || closingCard.rank === 'JOKER'));
     triggerRoundWin({
       winnerId: 'self',
       winnerName: playerName,
       dopeyMultiplier,
+      jokerFinish: isJokerClosing,
     });
   };
 
@@ -5048,6 +5486,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Lobby Actions: Create Server-Synced Public Room (+ Deduct Stake + Cancelable Refund)
   const handleCreateRoom = async () => {
+    clearLocalSuspendedGame();
     if (balance < selectedStake) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyInsufficientStake(selectedStake));
@@ -5121,6 +5560,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Join or Enter Public Room -> Server-Synced Human Table (enters Waiting Room or Ceremony when full)
   const handleJoinOrStartRoom = async (room: RaminoRoom) => {
+    clearLocalSuspendedGame();
     const pubTableCode = `PUB_${room.id.toUpperCase()}`;
     if (!room.isUserCreated) {
       if (balance < room.stake) {
@@ -5448,6 +5888,41 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Resume Active Game Banner (while timer > 0) */}
+          {((resumableMpSession && resumableMpSession.turnSeconds > 0 && activeMultiplayerRoomCode) ||
+            (suspendedLocalGame && localResumeSecondsLeft > 0)) && (
+            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/90 via-[#15283d]/95 to-amber-950/80 border-2 border-emerald-400/70 shadow-xl flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs sm:text-sm font-black text-emerald-300 flex items-center gap-1.5">
+                  <Play className="w-4 h-4 fill-current shrink-0" />
+                  <span>{t.resumeBannerTitle}</span>
+                </div>
+                <p className="text-[11px] text-amber-200 font-bold mt-0.5">
+                  {t.resumeBannerSub(
+                    resumableMpSession ? resumableMpSession.stake : suspendedLocalGame!.stake,
+                    resumableMpSession ? resumableMpSession.turnSeconds : localResumeSecondsLeft
+                  )}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleForfeitResumableGame}
+                  className="px-2.5 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/35 border border-rose-400/40 text-rose-200 font-bold text-[11px] cursor-pointer transition"
+                >
+                  {t.resumeForfeitBtn}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleResumeActiveGame()}
+                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-400 hover:brightness-105 text-slate-950 font-black text-xs shadow-lg cursor-pointer transition"
+                >
+                  {t.resumeReturnBtn}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* 3 Live Stats Cards */}
           <div className="grid grid-cols-3 gap-2 sm:gap-3 mt-1">
@@ -5954,15 +6429,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             <button
               onClick={() => {
                 raminoAudio.playCardSnap();
-                if (activeMultiplayerRoomCode) {
-                  void leaveMultiplayerTable(false);
-                  return;
-                }
-                stopVoiceChatSession();
-                setIsPrivateRoomGame(false);
-                setActivePrivateRoomCode(null);
-                setIsMicMuted(true);
-                setView('lobby');
+                exitGameTemporarilyToLobby();
               }}
               className="px-2.5 py-0.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-yellow-300 font-black text-xs flex items-center gap-1 transition cursor-pointer"
             >
@@ -6126,17 +6593,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               <button
                 onClick={() => {
                   raminoAudio.playCardSnap();
-                  if (activeMultiplayerRoomCode) {
-                    void leaveMultiplayerTable(false);
-                    return;
-                  }
-                  stopVoiceChatSession();
-                  setIsPrivateRoomGame(false);
-                  setActivePrivateRoomCode(null);
-                  setIsMicMuted(true);
-                  winStreakRef.current = 0;
-                  setWinStreak(0);
-                  setView('lobby');
+                  exitGameTemporarilyToLobby();
                 }}
                 className="px-2.5 py-0.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-yellow-300 font-black text-[11px] flex items-center gap-1 transition cursor-pointer active:scale-95"
               >
@@ -6899,6 +7356,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             <button
               onClick={() => {
                 setIsBannedModalOpen(false);
+                clearLocalSuspendedGame();
                 if (activeMultiplayerRoomCode) {
                   void leaveMultiplayerTable(false);
                   return;
@@ -7322,6 +7780,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                     triggerNotification(t.notifyInsufficientWallet);
                     return;
                   }
+                  const resolvedVoiceKey = data.room?.voiceAccessKey || data.table?.voiceAccessKey;
+                  if (resolvedVoiceKey) {
+                    const vk = String(resolvedVoiceKey);
+                    voiceAccessKeyRef.current = vk;
+                    setVoiceAccessKey(vk);
+                  }
                   saveLocalPrivateRoom(data.room);
                   heldWaitingStakeRef.current = targetStake;
                   adjustWalletBalance(-targetStake, `Ramino Private Join ${cleanCode}`);
@@ -7385,7 +7849,19 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   <span>{winnerCelebration.dopeyMultiplier}x</span>
                 </div>
               )}
-              {winnerCelebration.streakMultiplier > 1 && (
+              {winnerCelebration.finishMode === 'joker_finish' && (
+                <div className="flex justify-between text-amber-300 font-bold">
+                  <span>{t.jokerFinishMultLabel}</span>
+                  <span>2x</span>
+                </div>
+              )}
+              {winnerCelebration.finishMode === 'streak_joker' && (
+                <div className="flex justify-between text-yellow-300 font-bold">
+                  <span>{t.streakMultLabel(winnerCelebration.streakCount)}</span>
+                  <span>{t.streakTimes(3)}</span>
+                </div>
+              )}
+              {winnerCelebration.finishMode !== 'streak_joker' && winnerCelebration.streakMultiplier > 1 && (
                 <div className="flex justify-between text-emerald-300 font-bold">
                   <span>{t.streakMultLabel(winnerCelebration.streakCount)}</span>
                   <span>{t.streakTimes(winnerCelebration.streakMultiplier)}</span>
@@ -7457,6 +7933,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
               <button
                 onClick={() => {
+                  clearLocalSuspendedGame();
                   if (activeMultiplayerRoomCode) {
                     void leaveMultiplayerTable(false);
                     return;

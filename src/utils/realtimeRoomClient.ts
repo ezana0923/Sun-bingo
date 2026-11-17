@@ -1,6 +1,7 @@
 import {
   GameHistoryRecord,
   GameStartNotificationEvent,
+  HeroBannerAd,
   TransactionRecord,
   WinnerAnnouncement,
 } from '../types/bingo';
@@ -80,11 +81,13 @@ export interface RealtimeRoomSyncMessage {
     phone: string;
     name: string;
     balance: number;
+    withdrawableBalance?: number;
     bonusBalance: number;
     referralEarnings: number;
     referredCount: number;
     isBlocked: boolean;
   }[];
+  homeHeroAds?: HeroBannerAd[];
   requireDepositApproval?: boolean;
   timestamp: number;
 }
@@ -382,7 +385,7 @@ function notifyListeners(msg: RealtimeRoomSyncMessage, fromStream = false) {
     ? msg.players
         .map(
           (p) =>
-            `${p.phone}:${p.name}:${p.balance}:${p.bonusBalance}:${p.isBlocked}:${p.referredCount}`
+            `${p.phone}:${p.name}:${p.balance}:${p.withdrawableBalance ?? ''}:${p.bonusBalance}:${p.isBlocked}:${p.referredCount}`
         )
         .join(',')
     : '';
@@ -400,12 +403,15 @@ function notifyListeners(msg: RealtimeRoomSyncMessage, fromStream = false) {
   const bannerSig = Array.isArray((rRoom || fRoom)?.heroBanners)
     ? (rRoom || fRoom)!.heroBanners!.map((b) => `${b.id}:${b.title}:${b.imageUrl ? b.imageUrl.length : 0}`).join(',')
     : '';
+  const homeAdsSig = Array.isArray(msg.homeHeroAds)
+    ? msg.homeHeroAds.map((b) => `${b.id}:${b.title}:${b.isActive}:${b.imageUrl ? b.imageUrl.length : 0}`).join(',')
+    : '';
   const bankSig = Array.isArray((rRoom || fRoom)?.bankAccounts)
     ? (rRoom || fRoom)!
         .bankAccounts!.map((b) => `${b.id}:${b.shortName}:${b.accountNumber}:${b.isActive !== false}`)
         .join(',')
     : '';
-  const fingerprint = `${allFastSummary}|${rRoom?.gameMatchId}:${rRoom?.calledBalls?.length || 0}:${rRoom?.activeBall}:${rRoom?.preGameCountdown}:${rRoom?.bingoClaimCountdown}:${rRoom?.winnerDisplayCountdown}:${rRoom?.isPlaying}:${rRoom?.isPaused}:${rRoom?.winnersList?.length || 0}:${rRoom?.blockedCartelaIds?.length || 0}:${rRoom?.stakeAmount || 10}:${rRoom?.prizeAmount || 500}:${rRoom?.activePatternId || 5}:${rRoom?.gameHistory?.length || 0}:${rRoom?.adminRoomMessage || ''}:${rRoom?.bonusCartelasForOver20 ?? 5}:${bannerSig}:${bankSig}|${txSummary}:${playersSummary}:${msg.requireDepositApproval}`;
+  const fingerprint = `${allFastSummary}|${rRoom?.gameMatchId}:${rRoom?.calledBalls?.length || 0}:${rRoom?.activeBall}:${rRoom?.preGameCountdown}:${rRoom?.bingoClaimCountdown}:${rRoom?.winnerDisplayCountdown}:${rRoom?.isPlaying}:${rRoom?.isPaused}:${rRoom?.winnersList?.length || 0}:${rRoom?.blockedCartelaIds?.length || 0}:${rRoom?.stakeAmount || 10}:${rRoom?.prizeAmount || 500}:${rRoom?.activePatternId || 5}:${rRoom?.gameHistory?.length || 0}:${rRoom?.adminRoomMessage || ''}:${rRoom?.bonusCartelasForOver20 ?? 5}:${bannerSig}:${homeAdsSig}:${bankSig}|${txSummary}:${playersSummary}:${msg.requireDepositApproval}`;
   if (fingerprint === lastStateFingerprint) {
     return;
   }

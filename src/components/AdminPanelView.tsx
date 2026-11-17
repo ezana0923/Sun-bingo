@@ -565,7 +565,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   // Bonuses Tab State (IMG_3564)
   const [welcomeBonus, setWelcomeBonus] = useState('15');
   const [referralBonus, setReferralBonus] = useState('10');
-  const [depositBonusPct, setDepositBonusPct] = useState('0');
+  const [depositBonusEnabled, setDepositBonusEnabled] = useState<boolean>(true);
+  const [depositBonusPct, setDepositBonusPct] = useState('10');
   const [minDepositAmt, setMinDepositAmt] = useState('10');
   const [minWithdrawAmt, setMinWithdrawAmt] = useState('100');
   const [over20BonusCartelasInput, setOver20BonusCartelasInput] = useState(
@@ -1133,13 +1134,14 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         body: JSON.stringify({
           welcomeBonusAmount: wBonus,
           referralBonusAmount: rBonus,
+          depositBonusEnabled,
           depositBonusPercent: dBonus,
           minDepositAmount: minDep,
           minWithdrawAmount: minWith,
         }),
       });
       showToast(
-        `✅ የቦነስ ቅንብሮች ተቀምጠዋል! ከ 20 በላይ ካርቴላ ለሚይዙ +${over20Cards} ነፃ ካርቴላ ይሰጣል።`
+        `✅ የቦነስ ቅንብሮች ተቀምጠዋል! (የገቢ ቦነስ ${depositBonusEnabled ? `ON • +${dBonus}%` : 'OFF'}) • ከ 20 በላይ ካርቴላ +${over20Cards} ነፃ ካርቴላ።`
       );
     } catch {
       showToast(`✅ ተቀምጧል! ከ 20 በላይ ካርቴላ ለሚይዙ +${over20Cards} ነፃ ካርቴላ ይሰጣል።`);
@@ -1291,6 +1293,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         if (data?.config) {
           if (typeof data.config.smsWebhookEnabled === 'boolean') {
             setSmsWebhookEnabled(data.config.smsWebhookEnabled);
+          }
+          if (typeof data.config.depositBonusEnabled === 'boolean') {
+            setDepositBonusEnabled(data.config.depositBonusEnabled);
           }
           if (data.config.welcomeBonusAmount !== undefined) setWelcomeBonus(String(data.config.welcomeBonusAmount));
           if (data.config.referralBonusAmount !== undefined) setReferralBonus(String(data.config.referralBonusAmount));
@@ -3921,17 +3926,57 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               />
             </div>
 
-            <div>
-              <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1.5">
-                Deposit Bonus (%) — ገቢ ሲያደርጉ የሚጨመር ቦነስ በመቶኛ
-              </label>
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="block text-xs sm:text-sm font-medium text-slate-400">
+                  Deposit Bonus (%) — ገቢ ሲያደርጉ የሚጨመር ተጨማሪ ቦነስ (ነባሪ 10%)
+                </label>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const nextEnabled = !depositBonusEnabled;
+                    setDepositBonusEnabled(nextEnabled);
+                    const pctVal = Math.max(0, Math.min(100, parseFloat(depositBonusPct) || 10));
+                    if (nextEnabled && Number(depositBonusPct) === 0) {
+                      setDepositBonusPct('10');
+                    }
+                    try {
+                      await fetch(buildApiUrl('/api/admin/settings'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          depositBonusEnabled: nextEnabled,
+                          depositBonusPercent: nextEnabled && pctVal === 0 ? 10 : pctVal,
+                        }),
+                      });
+                      showToast(
+                        nextEnabled
+                          ? `🎁 +${nextEnabled && pctVal === 0 ? 10 : pctVal}% የገቢ ቦነስ በርቷል (ON)!`
+                          : '⏸️ የገቢ ቦነስ ጠፍቷል (OFF)!'
+                      );
+                    } catch {
+                      showToast('❌ ማስቀመጥ አልተቻለም');
+                    }
+                  }}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer border ${
+                    depositBonusEnabled
+                      ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 hover:bg-emerald-500/30'
+                      : 'bg-rose-500/20 border-rose-500 text-rose-400 hover:bg-rose-500/30'
+                  }`}
+                >
+                  {depositBonusEnabled ? '🟢 ቦነስ ON (በርቷል)' : '🔴 ቦነስ OFF (ጠፍቷል)'}
+                </button>
+              </div>
               <input
                 type="number"
                 min={0}
                 max={100}
+                disabled={!depositBonusEnabled}
                 value={depositBonusPct}
                 onChange={(e) => setDepositBonusPct(e.target.value)}
                 className={`w-full px-4 py-3 rounded-xl text-sm font-mono-tabular border focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                  !depositBonusEnabled ? 'opacity-50 cursor-not-allowed ' : ''
+                }${
                   isDark
                     ? 'bg-[#14141d] border-slate-800 text-white'
                     : 'bg-slate-50 border-slate-300 text-slate-900'

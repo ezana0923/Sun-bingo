@@ -310,8 +310,11 @@ export const WalletView: React.FC<WalletViewProps> = ({
       setFeedbackMsg({ type: 'err', text: 'ከፍተኛው የወጪ መጠን 75,000 ETB ነው።' });
       return;
     }
-    if (amt > currentUser.balance) {
-      setFeedbackMsg({ type: 'err', text: 'በቂ ቀሪ ሂሳብ የለዎትም!' });
+    if (amt > availableWithdrawable) {
+      setFeedbackMsg({
+        type: 'err',
+        text: `❌ ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም! (ወጪ ሊደረግ የሚችል: ${availableWithdrawable.toFixed(2)} ETB — ገቢ ያደረጉት ብር ጨዋታ አሸንፈው ብቻ ወጪ ይደረጋል)`,
+      });
       return;
     }
     if (!withAccount.trim()) {
@@ -376,6 +379,17 @@ export const WalletView: React.FC<WalletViewProps> = ({
       normalizePhoneForMatch(tx.userPhone) === myCleanPhone ||
       (tx.recipientPhone && normalizePhoneForMatch(tx.recipientPhone) === myCleanPhone)
   );
+  const pendingWithdrawTotal = userTransactions
+    .filter((tx) => tx.type === 'withdraw' && tx.status === 'pending')
+    .reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+  const rawWithdrawable = Math.max(
+    0,
+    Math.min(currentUser.balance, Number(currentUser.withdrawableBalance ?? 0))
+  );
+  const availableWithdrawable = Math.max(
+    0,
+    Number((rawWithdrawable - pendingWithdrawTotal).toFixed(2))
+  );
 
   return (
     <div className="space-y-5">
@@ -389,7 +403,10 @@ export const WalletView: React.FC<WalletViewProps> = ({
             <div className="text-3xl sm:text-4xl font-extrabold font-mono-tabular mt-1">
               {currentUser.balance.toFixed(2)} <span className="text-lg">ETB</span>
             </div>
-            <p className="text-xs mt-1 text-emerald-200 font-semibold">
+            <p className="text-xs mt-1 text-amber-200 font-bold">
+              💸 ወጪ ሊደረግ የሚችል (ከድል): {availableWithdrawable.toFixed(2)} ETB
+            </p>
+            <p className="text-xs mt-0.5 text-emerald-200 font-semibold">
               🎁 {t.bonusBalanceLabel}: {currentUser.bonusBalance.toFixed(2)} ETB · 📱 {t.phoneLabel}: {currentUser.phone}
             </p>
           </div>
@@ -997,19 +1014,28 @@ export const WalletView: React.FC<WalletViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    setWithAmount(String(Math.floor(currentUser.balance)));
+                    setWithAmount(String(Math.floor(availableWithdrawable)));
                     setFeedbackMsg(null);
                   }}
                   className={`py-2.5 px-2.5 rounded-xl text-xs font-black border cursor-pointer transition-all ${
-                    withAmount === String(Math.floor(currentUser.balance))
+                    withAmount === String(Math.floor(availableWithdrawable))
                       ? 'bg-amber-500 text-slate-950 border-amber-300'
                       : isDark
                       ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-400 hover:bg-emerald-900/50'
                       : 'bg-emerald-50 border-emerald-300 text-emerald-800'
                   }`}
                 >
-                  ሁሉንም ({Math.floor(currentUser.balance)})
+                  ሁሉንም ({Math.floor(availableWithdrawable)})
                 </button>
+              </div>
+
+              <div className="rounded-xl px-3.5 py-2.5 bg-amber-500/10 border border-amber-500/35 text-xs flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-amber-300">
+                  💸 ወጪ ሊደረግ የሚችል (ከጨዋታ ድል የተገኘ)፦
+                </span>
+                <span className="font-mono-tabular font-black text-amber-300">
+                  {availableWithdrawable.toFixed(2)} ETB
+                </span>
               </div>
 
               <div>
@@ -1041,8 +1067,11 @@ export const WalletView: React.FC<WalletViewProps> = ({
                     setFeedbackMsg({ type: 'err', text: 'ከፍተኛው የወጪ መጠን 75,000 ETB ነው።' });
                     return;
                   }
-                  if (amt > currentUser.balance) {
-                    setFeedbackMsg({ type: 'err', text: 'በቂ ቀሪ ሂሳብ የለዎትም!' });
+                  if (amt > availableWithdrawable) {
+                    setFeedbackMsg({
+                      type: 'err',
+                      text: `❌ ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም! (ወጪ ሊደረግ የሚችል: ${availableWithdrawable.toFixed(2)} ETB — ገቢ ያደረጉት ብር ጨዋታ አሸንፈው ብቻ ወጪ ይደረጋል)`,
+                    });
                     return;
                   }
                   setFeedbackMsg(null);

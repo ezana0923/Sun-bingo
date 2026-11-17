@@ -29,6 +29,7 @@ export interface AuthenticatedPlayerPayload {
   name: string;
   phone: string;
   balance?: number;
+  withdrawableBalance?: number;
   bonusBalance?: number;
   referralEarnings?: number;
   referredCount?: number;
