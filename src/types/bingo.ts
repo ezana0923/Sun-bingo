@@ -102,6 +102,7 @@ export interface UserAccount {
   balance: number;
   withdrawableBalance?: number;
   bonusBalance: number;
+  nonWithdrawableBonus?: number;
   referralCode: string;
   referredCount: number;
   referralEarnings: number;

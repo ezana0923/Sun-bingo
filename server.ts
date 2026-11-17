@@ -112,6 +112,7 @@ export interface ServerPlayerRecord {
   balance: number;
   withdrawableBalance?: number;
   bonusBalance: number;
+  nonWithdrawableBonus?: number;
   referralEarnings: number;
   referredCount: number;
   isBlocked: boolean;
@@ -736,7 +737,7 @@ function deductLockedStakesOnGameStart(
     const totalCost = Number((paidCount * room.stakeAmount).toFixed(2));
     if (totalCost > 0) {
       player.balance = Math.max(0, Number((player.balance - totalCost).toFixed(2)));
-      player.withdrawableBalance = Math.min(player.balance, getWithdrawableBalance(player));
+      clampBalancesAfterDebit(player);
       player.updatedAt = new Date().toLocaleString();
       if (ph === globalRegisteredPhone || ph === '0942742684') {
         globalWalletBalance = player.balance;
@@ -898,12 +899,41 @@ function getActiveDepositBonusPct(): number {
   return Math.max(0, Math.min(100, Number(adminPinConfig.depositBonusPercent ?? 10)));
 }
 
+function getNonWithdrawableBonus(player?: ServerPlayerRecord | null): number {
+  if (!player) return 0;
+  const bal = Math.max(0, Number(player.balance ?? 0));
+  const raw =
+    typeof player.nonWithdrawableBonus === 'number' && Number.isFinite(player.nonWithdrawableBonus)
+      ? player.nonWithdrawableBonus
+      : Number(player.bonusBalance ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(bal, Number(raw.toFixed(2)));
+}
+
 function getWithdrawableBalance(player?: ServerPlayerRecord | null): number {
   if (!player) return 0;
   const bal = Math.max(0, Number(player.balance ?? 0));
+  const lockedBonus = getNonWithdrawableBonus(player);
+  const maxCashAllowed = Math.max(0, Number((bal - lockedBonus).toFixed(2)));
   const raw = Number(player.withdrawableBalance ?? 0);
   if (!Number.isFinite(raw) || raw <= 0) return 0;
-  return Math.min(bal, Number(raw.toFixed(2)));
+  return Math.min(maxCashAllowed, Number(raw.toFixed(2)));
+}
+
+function unlockAllWithdrawableAfterWin(player?: ServerPlayerRecord | null) {
+  if (!player) return;
+  const bal = Math.max(0, Number(player.balance ?? 0));
+  const lockedBonus = getNonWithdrawableBonus(player);
+  player.nonWithdrawableBonus = lockedBonus;
+  player.withdrawableBalance = Math.max(0, Number((bal - lockedBonus).toFixed(2)));
+}
+
+function clampBalancesAfterDebit(player?: ServerPlayerRecord | null) {
+  if (!player) return;
+  const bal = Math.max(0, Number(player.balance ?? 0));
+  player.balance = Number(bal.toFixed(2));
+  player.nonWithdrawableBonus = getNonWithdrawableBonus(player);
+  player.withdrawableBalance = getWithdrawableBalance(player);
 }
 
 function getPendingWithdrawTotal(phone?: string): number {
@@ -936,6 +966,7 @@ interface SignedAccountSnapshotPayload {
   balance: number;
   withdrawableBalance?: number;
   bonusBalance: number;
+  nonWithdrawableBonus?: number;
   referralEarnings: number;
   referredCount: number;
   chatId?: number;
@@ -950,6 +981,7 @@ function createSignedPlayerToken(player: ServerPlayerRecord): string {
     balance: Number((player.balance ?? 0).toFixed(2)),
     withdrawableBalance: getWithdrawableBalance(player),
     bonusBalance: Number((player.bonusBalance ?? 0).toFixed(2)),
+    nonWithdrawableBonus: getNonWithdrawableBonus(player),
     referralEarnings: Number((player.referralEarnings ?? 0).toFixed(2)),
     referredCount: Number(player.referredCount ?? 0),
     chatId: player.chatId,
@@ -988,6 +1020,11 @@ function restorePlayerFromSignedTokenIfMissing(token?: string | null): ServerPla
   const existing = playersByPhone.get(cleanPhone);
   if (!existing) {
     const restoredBal = Number(snap.balance.toFixed(2));
+    const restoredBonus = Number((snap.bonusBalance ?? 15).toFixed(2));
+    const restoredNonWithdrawable = Math.min(
+      restoredBal,
+      Number((snap.nonWithdrawableBonus ?? restoredBonus).toFixed(2))
+    );
     const restored: ServerPlayerRecord = {
       id: `usr-${cleanPhone.slice(-4)}-${Date.now().toString().slice(-3)}`,
       phone: cleanPhone,
@@ -997,9 +1034,10 @@ function restorePlayerFromSignedTokenIfMissing(token?: string | null): ServerPla
       balance: restoredBal,
       withdrawableBalance: Math.max(
         0,
-        Math.min(restoredBal, Number((snap.withdrawableBalance ?? 0).toFixed(2)))
+        Math.min(Math.max(0, restoredBal - restoredNonWithdrawable), Number((snap.withdrawableBalance ?? 0).toFixed(2)))
       ),
-      bonusBalance: Number((snap.bonusBalance ?? 15).toFixed(2)),
+      bonusBalance: restoredBonus,
+      nonWithdrawableBonus: restoredNonWithdrawable,
       referralEarnings: Number((snap.referralEarnings ?? 0).toFixed(2)),
       referredCount: Number(snap.referredCount ?? 0),
       isBlocked: false,
@@ -1023,9 +1061,13 @@ function ensurePlayerRecord(phone: string, name = 'Player', chatId?: number): Se
     if (name && name !== 'Player' && name !== 'King' && name !== 'Ezana_Player') {
       existing.name = name;
     }
+    if (typeof existing.nonWithdrawableBonus !== 'number' || Number.isNaN(existing.nonWithdrawableBonus)) {
+      existing.nonWithdrawableBonus = Math.min(Number(existing.balance || 0), Number(existing.bonusBalance ?? 0));
+    }
     if (typeof existing.withdrawableBalance !== 'number' || Number.isNaN(existing.withdrawableBalance)) {
       existing.withdrawableBalance = 0;
     }
+    existing.withdrawableBalance = getWithdrawableBalance(existing);
     return existing;
   }
   const resolvedName =
@@ -1034,14 +1076,16 @@ function ensurePlayerRecord(phone: string, name = 'Player', chatId?: number): Se
       : clean === '0942742684'
       ? 'Ezana_Player'
       : `Player_${clean.slice(-4)}`;
+  const initialBal = clean === '0942742684' ? 1250.0 : 15.0;
   const created: ServerPlayerRecord = {
     id: `usr-${clean.slice(-4)}-${Date.now().toString().slice(-3)}`,
     phone: clean,
     name: resolvedName,
     chatId,
-    balance: clean === '0942742684' ? 1250.0 : 15.0,
+    balance: initialBal,
     withdrawableBalance: 0,
     bonusBalance: 15.0,
+    nonWithdrawableBonus: 15.0,
     referralEarnings: 0,
     referredCount: 0,
     isBlocked: false,
@@ -1281,6 +1325,11 @@ function loadBotsFromDisk() {
           if (p.balance > 1000000) {
             p.balance = p.phone === '0942742684' ? 1250 : 15;
           }
+          if (typeof p.nonWithdrawableBonus !== 'number' || Number.isNaN(p.nonWithdrawableBonus)) {
+            p.nonWithdrawableBonus = Math.min(Number(p.balance || 0), Number(p.bonusBalance ?? 0));
+          } else {
+            p.nonWithdrawableBonus = Math.max(0, Math.min(Number(p.balance || 0), Number(p.nonWithdrawableBonus)));
+          }
           if (typeof p.withdrawableBalance !== 'number' || Number.isNaN(p.withdrawableBalance)) {
             const pPhone = normalizeEthiopianPhone(p.phone) || p.phone;
             let netWon = 0;
@@ -1290,9 +1339,15 @@ function loadBotsFromDisk() {
               if (tx.type === 'win') netWon += Number(tx.amount || 0);
               else if (tx.type === 'withdraw') netWon -= Number(tx.amount || 0);
             }
-            p.withdrawableBalance = Math.max(0, Math.min(Number(p.balance || 0), Number(netWon.toFixed(2))));
+            p.withdrawableBalance = Math.max(
+              0,
+              Math.min(
+                Math.max(0, Number(p.balance || 0) - Number(p.nonWithdrawableBonus || 0)),
+                Number(netWon.toFixed(2))
+              )
+            );
           } else {
-            p.withdrawableBalance = Math.max(0, Math.min(Number(p.balance || 0), Number(p.withdrawableBalance)));
+            p.withdrawableBalance = getWithdrawableBalance(p);
           }
           playersByPhone.set(p.phone, p);
         }
@@ -1745,8 +1800,8 @@ function buildWelcomeMessageText(firstName = 'Player', registeredPhone?: string,
     `👋 ሰላም *${safeName}*!\n` +
     phoneNotice +
     `\n💰 ጠቅላላ ዋሌት፦ *${cashBal.toFixed(2)} ETB*\n` +
-    `💸 ወጪ ሊደረግ የሚችል (ከድል)፦ *${withdrawableBal.toFixed(2)} ETB*\n` +
-    `🎁 ቦነስ ሂሳብ፦ *${bonusTotal}*\n` +
+    `💸 ወጪ ሊደረግ የሚችል፦ *${withdrawableBal.toFixed(2)} ETB*\n` +
+    `🎁 ቦነስ ሂሳብ (ለጨዋታ ብቻ)፦ *${bonusTotal}*\n` +
     (depBonusPct > 0 ? `🎉 *አሁን ሲያስገቡ +${depBonusPct}% ተጨማሪ ገቢ ቦነስ!*\n` : '') +
     `\n⚡ ፈጣን ገቢ እና ወጪ በ Telebirr, CBE, Abyssinia እና M-Pesa\n` +
     `👇 ጨዋታ ለመጀመር ወይም ገቢ/ወጪ ለማድረግ ከታች ያሉትን ቁልፎች ይጠቀሙ፦`
@@ -2519,9 +2574,10 @@ async function handleTelegramMenuAction(
       `💸 *ወጪ (Withdraw) — ደረጃ 1/3*\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
       `💰 ጠቅላላ ዋሌት፦ *${currentPlayer.balance.toFixed(2)} ETB*\n` +
-      `✅ ወጪ ሊደረግ የሚችል (ከጨዋታ ድል የተገኘ)፦ *${availWithdrawable.toFixed(2)} ETB*\n` +
+      `✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*\n` +
+      `🎁 ቦነስ (ለጨዋታ ብቻ)፦ *${getNonWithdrawableBonus(currentPlayer).toFixed(2)} ETB*\n` +
       `• ዝቅተኛ፦ *50 ETB* | ከፍተኛ፦ *75,000 ETB*\n` +
-      `ℹ️ _(ገቢ ያደረጉት ብር ጨዋታ አሸንፈው ብቻ ወጪ ይደረጋል)_\n\n` +
+      `ℹ️ _(ጨዋታ ካሸነፉ ከተሰጠዎት ቦነስ ውጪ ያለውን ሁሉንም ማውጣት ይችላሉ፤ ቦነስ ለጨዋታ ብቻ ነው)_\n\n` +
       `👇 የሚያወጡትን የብር መጠን ከታች ይምረጡ ወይም እዚሁ ቻት ላይ ይጻፉ፦`;
 
     await sendTelegramMessage(
@@ -2576,7 +2632,7 @@ async function handleTelegramMenuAction(
       await sendTelegramMessage(
         token,
         chatId,
-        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB*\n_(ገቢ ያደረጉት ብር ጨዋታ አሸንፈው ብቻ ወጪ ይደረጋል)_`,
+        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*\n_(ጨዋታ ካሸነፉ ከተሰጠዎት ቦነስ ውጪ ያለውን ሁሉንም ማውጣት ይችላሉ)_`,
         {
           inline_keyboard: [
             [{ text: 'Deposit 💵 (ገቢ አድርግ)', callback_data: 'menu_deposit' }],
@@ -2617,7 +2673,7 @@ async function handleTelegramMenuAction(
       await sendTelegramMessage(
         token,
         chatId,
-        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB*`,
+        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*`,
         {
           inline_keyboard: [
             [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
@@ -2681,7 +2737,7 @@ async function handleTelegramMenuAction(
       await sendTelegramMessage(
         token,
         chatId,
-        `❌ *የወጪ ጥያቄው አልተሳካም!*\nከ 50 – 75,000 ETB መካከል መሆን አለበት። ✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB* ነው።`,
+        `❌ *የወጪ ጥያቄው አልተሳካም!*\nከ 50 – 75,000 ETB መካከል መሆን አለበት። ✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB* ነው።`,
         buildSubMenuInlineKeyboard(appUrl, regPhone)
       );
       return;
@@ -2707,8 +2763,9 @@ async function handleTelegramMenuAction(
       currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - amt).toFixed(2)));
       currentPlayer.withdrawableBalance = Math.max(
         0,
-        Math.min(currentPlayer.balance, Number((getWithdrawableBalance(currentPlayer) - amt).toFixed(2)))
+        Number((getWithdrawableBalance(currentPlayer) - amt).toFixed(2))
       );
+      clampBalancesAfterDebit(currentPlayer);
       globalWalletBalance = currentPlayer.balance;
     }
     saveBotsToDisk();
@@ -2743,8 +2800,8 @@ async function handleTelegramMenuAction(
       `👋 ሰላም *${escapeTelegramMarkdown(currentPlayer.name || firstName)}*!\n` +
       (regPhone ? `📱 ስልክ፦ *${regPhone}*\n` : '') +
       `💰 ጠቅላላ ዋሌት፦ *${currentPlayer.balance.toFixed(2)} ETB*\n` +
-      `✅ ወጪ ሊደረግ የሚችል (ከጨዋታ ድል)፦ *${getWithdrawableBalance(currentPlayer).toFixed(2)} ETB*\n` +
-      `🎁 ቦነስ ሂሳብ፦ *${currentPlayer.bonusBalance.toFixed(2)} ETB${has15Bonus ? ' (+15 ETB Welcome Bonus!)' : ''}*`;
+      `✅ ወጪ ሊደረግ የሚችል፦ *${getWithdrawableBalance(currentPlayer).toFixed(2)} ETB*\n` +
+      `🎁 ቦነስ ሂሳብ (ለጨዋታ ብቻ)፦ *${currentPlayer.bonusBalance.toFixed(2)} ETB${has15Bonus ? ' (+15 ETB Welcome Bonus!)' : ''}*`;
 
     await sendTelegramMessage(
       token,
@@ -2925,11 +2982,9 @@ async function handleTelegramMenuAction(
       currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - transferAmt).toFixed(2)));
       currentPlayer.withdrawableBalance = Math.max(
         0,
-        Math.min(
-          currentPlayer.balance,
-          Number((getWithdrawableBalance(currentPlayer) - transferAmt).toFixed(2))
-        )
+        Number((getWithdrawableBalance(currentPlayer) - transferAmt).toFixed(2))
       );
+      clampBalancesAfterDebit(currentPlayer);
       currentPlayer.updatedAt = new Date().toLocaleString();
       const recipient = ensurePlayerRecord(targetPhoneRaw, `Player_${targetPhoneRaw.slice(-4)}`);
       recipient.balance = Number((recipient.balance + transferAmt).toFixed(2));
@@ -3031,7 +3086,7 @@ async function handleTelegramMenuAction(
           await sendTelegramMessage(
             token,
             chatId,
-            `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${singleNum.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB*`,
+            `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${singleNum.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*`,
             { inline_keyboard: [[{ text: '← ተመለስ', callback_data: 'menu_withdraw' }], [{ text: '🏠 Main Menu', callback_data: 'menu_main' }]] },
             undefined,
             true
@@ -3066,8 +3121,9 @@ async function handleTelegramMenuAction(
         currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - amt).toFixed(2)));
         currentPlayer.withdrawableBalance = Math.max(
           0,
-          Math.min(currentPlayer.balance, Number((getWithdrawableBalance(currentPlayer) - amt).toFixed(2)))
+          Number((getWithdrawableBalance(currentPlayer) - amt).toFixed(2))
         );
+        clampBalancesAfterDebit(currentPlayer);
         globalWalletBalance = currentPlayer.balance;
       }
       saveBotsToDisk();
@@ -3120,7 +3176,7 @@ async function handleTelegramMenuAction(
         token,
         chatId,
         `💸 *የወጪ (Withdraw) ጥያቄ በራሱ ተለይቷል!*\n` +
-          `✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB*\n\n` +
+          `✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*\n\n` +
           `እባክዎ የሚያወጡትን የብር መጠን ይምረጡ (ዝቅተኛ 50 ETB)፦`,
         {
           inline_keyboard: [
@@ -3145,7 +3201,7 @@ async function handleTelegramMenuAction(
       await sendTelegramMessage(
         token,
         chatId,
-        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት ወጪ፦ *${withAmt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል (ከድል)፦ *${availWithdrawable.toFixed(2)} ETB*`,
+        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት ወጪ፦ *${withAmt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*`,
         buildSubMenuInlineKeyboard(appUrl, regPhone)
       );
       return;
@@ -3200,8 +3256,9 @@ async function handleTelegramMenuAction(
       currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - withAmt).toFixed(2)));
       currentPlayer.withdrawableBalance = Math.max(
         0,
-        Math.min(currentPlayer.balance, Number((getWithdrawableBalance(currentPlayer) - withAmt).toFixed(2)))
+        Number((getWithdrawableBalance(currentPlayer) - withAmt).toFixed(2))
       );
+      clampBalancesAfterDebit(currentPlayer);
       globalWalletBalance = currentPlayer.balance;
     }
     saveBotsToDisk();
@@ -3450,6 +3507,9 @@ async function handleTelegramMenuAction(
       targetPlayer.balance = Number((targetPlayer.balance + verifiedAmt + bonusAmt).toFixed(2));
       if (bonusAmt > 0) {
         targetPlayer.bonusBalance = Number(((targetPlayer.bonusBalance || 0) + bonusAmt).toFixed(2));
+        targetPlayer.nonWithdrawableBonus = Number(
+          (getNonWithdrawableBonus(targetPlayer) + bonusAmt).toFixed(2)
+        );
       }
       if (
         targetPlayer.phone === globalRegisteredPhone ||
@@ -3772,6 +3832,7 @@ app.post('/api/wallet/sync', (req, res) => {
     if (typeof balance === 'number' && Number.isFinite(balance) && balance >= 0) {
       if (balance < player.balance) {
         player.balance = Number(balance.toFixed(2));
+        clampBalancesAfterDebit(player);
       }
     }
     if (typeof bonusBalance === 'number' && Number.isFinite(bonusBalance) && bonusBalance >= 0) {
@@ -5416,10 +5477,7 @@ app.post('/api/live-room/action', (req, res) => {
       if (winnerPhone) {
         const winnerPlayer = ensurePlayerRecord(winnerPhone, winner.userName);
         winnerPlayer.balance = Number((winnerPlayer.balance + equalShare).toFixed(2));
-        winnerPlayer.withdrawableBalance = Math.min(
-          winnerPlayer.balance,
-          Number((getWithdrawableBalance(winnerPlayer) + equalShare).toFixed(2))
-        );
+        unlockAllWithdrawableAfterWin(winnerPlayer);
         winnerPlayer.updatedAt = new Date().toLocaleString();
         if (winnerPhone === globalRegisteredPhone || winnerPhone === '0942742684') {
           globalWalletBalance = winnerPlayer.balance;
@@ -6160,6 +6218,9 @@ app.post('/api/transactions/submit', (req, res) => {
       player.balance = Number((player.balance + effectiveDepositAmount + bonusAmt).toFixed(2));
       if (bonusAmt > 0) {
         player.bonusBalance = Number(((player.bonusBalance || 0) + bonusAmt).toFixed(2));
+        player.nonWithdrawableBonus = Number(
+          (getNonWithdrawableBonus(player) + bonusAmt).toFixed(2)
+        );
       }
       player.updatedAt = new Date().toLocaleString();
 
@@ -6194,8 +6255,9 @@ app.post('/api/transactions/submit', (req, res) => {
       player.balance = Math.max(0, Number((player.balance - amt).toFixed(2)));
       player.withdrawableBalance = Math.max(
         0,
-        Math.min(player.balance, Number((getWithdrawableBalance(player) - amt).toFixed(2)))
+        Number((getWithdrawableBalance(player) - amt).toFixed(2))
       );
+      clampBalancesAfterDebit(player);
       player.updatedAt = new Date().toLocaleString();
       if (resolvedType === 'transfer' && recipientRecord && cleanRecipientPhone) {
         recipientRecord.balance = Number((recipientRecord.balance + amt).toFixed(2));
@@ -6492,6 +6554,9 @@ function processIncomingBankSms(
     player.balance = Number((player.balance + amt + bonusAmt).toFixed(2));
     if (bonusAmt > 0) {
       player.bonusBalance = Number(((player.bonusBalance || 0) + bonusAmt).toFixed(2));
+      player.nonWithdrawableBonus = Number(
+        (getNonWithdrawableBonus(player) + bonusAmt).toFixed(2)
+      );
     }
     if (
       player.phone === globalRegisteredPhone ||
@@ -6603,6 +6668,9 @@ function processIncomingBankSms(
     player.balance = Number((player.balance + amt + bonusAmt).toFixed(2));
     if (bonusAmt > 0) {
       player.bonusBalance = Number(((player.bonusBalance || 0) + bonusAmt).toFixed(2));
+      player.nonWithdrawableBonus = Number(
+        (getNonWithdrawableBonus(player) + bonusAmt).toFixed(2)
+      );
     }
     if (
       player.phone === globalRegisteredPhone ||
@@ -6909,13 +6977,17 @@ app.post('/api/transactions/approve', async (req, res) => {
       player.balance = Number((player.balance + tx.amount + bonusAmt).toFixed(2));
       if (bonusAmt > 0) {
         player.bonusBalance = Number(((player.bonusBalance || 0) + bonusAmt).toFixed(2));
+        player.nonWithdrawableBonus = Number(
+          (getNonWithdrawableBonus(player) + bonusAmt).toFixed(2)
+        );
       }
     } else if (tx.type === 'withdraw') {
       player.balance = Math.max(0, Number((player.balance - tx.amount).toFixed(2)));
       player.withdrawableBalance = Math.max(
         0,
-        Math.min(player.balance, Number((getWithdrawableBalance(player) - tx.amount).toFixed(2)))
+        Number((getWithdrawableBalance(player) - tx.amount).toFixed(2))
       );
+      clampBalancesAfterDebit(player);
     }
     if (
       player.phone === globalRegisteredPhone ||
@@ -7677,6 +7749,16 @@ interface RaminoTablePlayer {
   winStreak: number;
   isDealer: boolean;
 }
+interface RaminoPostDayCutEntry {
+  id: string;
+  name: string;
+  avatarLetter: string;
+  avatarColor: string;
+  card: RaminoCard;
+  rankOrder: number;
+  pickedSeat: number | null;
+}
+
 interface RaminoTableSession {
   roomCode: string;
   isPrivate: boolean;
@@ -7685,7 +7767,7 @@ interface RaminoTableSession {
   hostName: string;
   maxPlayers: 2 | 3 | 4 | 5;
   stake: number;
-  phase: 'waiting' | 'ceremony' | 'game' | 'finished';
+  phase: 'waiting' | 'ceremony' | 'postday_pick' | 'game' | 'finished';
   roundIndex: number;
   privateRoundCount: number;
   reshuffleCount: number;
@@ -7723,6 +7805,7 @@ interface RaminoTableSession {
     dopeyMultiplier: number;
     streakMultiplier: number;
     totalMultiplier?: number;
+    loserExtraPenalty?: number;
     streakCount: number;
     pot: number;
     rakeAmount: number;
@@ -7735,6 +7818,16 @@ interface RaminoTableSession {
     source: 'header' | 'winner';
     acceptedPlayerIds: string[];
     allAccepted: boolean;
+  } | null;
+  postDaySeatPick?: {
+    source: 'header' | 'winner';
+    revealedCount: number;
+    entries: RaminoPostDayCutEntry[];
+    currentPickerIdx: number;
+    chosenSeats: (string | null)[];
+    prevDealerId: string;
+    activeTurnPlayerId: string | null;
+    completed: boolean;
   } | null;
   lastEvent: {
     id: number;
@@ -8448,6 +8541,7 @@ function createOrSyncRaminoTableFromPrivateRoom(room: RaminoPrivateRoomRecord): 
       turnSeconds: 120,
       winnerCelebration: null,
       postDayRequest: null,
+      postDaySeatPick: null,
       lastEvent: null,
     };
     raminoTables.set(room.code, session);
@@ -8587,6 +8681,39 @@ function serializeRaminoTableForPlayer(session: RaminoTableSession, playerId: st
           allAccepted: session.postDayRequest.allAccepted,
         }
       : null,
+    postDaySeatPick: session.postDaySeatPick
+      ? {
+          source: session.postDaySeatPick.source,
+          revealedCount: session.postDaySeatPick.revealedCount,
+          currentPickerIdx: session.postDaySeatPick.currentPickerIdx,
+          currentPickerId:
+            session.postDaySeatPick.entries[session.postDaySeatPick.currentPickerIdx]?.id || null,
+          currentPickerName:
+            session.postDaySeatPick.entries[session.postDaySeatPick.currentPickerIdx]?.name || null,
+          isMyPickTurn:
+            session.postDaySeatPick.revealedCount >= session.postDaySeatPick.entries.length &&
+            !session.postDaySeatPick.completed &&
+            session.postDaySeatPick.entries[session.postDaySeatPick.currentPickerIdx]?.id === playerId,
+          entries: session.postDaySeatPick.entries.map((e) => ({
+            ...e,
+            isSelf: e.id === playerId,
+          })),
+          chosenSeats: session.postDaySeatPick.chosenSeats.map((pid) => {
+            if (!pid) return null;
+            const pl = session.players.find((x) => x.id === pid);
+            return pl
+              ? {
+                  id: pl.id,
+                  name: pl.name,
+                  avatarLetter: pl.avatarLetter,
+                  avatarColor: pl.avatarColor,
+                  isSelf: pl.id === playerId,
+                }
+              : null;
+          }),
+          completed: session.postDaySeatPick.completed,
+        }
+      : null,
     lastEvent: session.lastEvent,
     serverTimestamp: Date.now(),
   };
@@ -8612,8 +8739,7 @@ function dealServerRaminoRound(session: RaminoTableSession, dealerId: string) {
     clearTimeout(session.ceremonyTimer);
     session.ceremonyTimer = null;
   }
-  const actualCount = session.players.length;
-  const deckCount: 1 | 2 = actualCount <= 2 ? 1 : 2;
+  const deckCount: 1 | 2 = 2;
   const shuffled = buildServerRaminoDeck(deckCount);
   let offset = 0;
 
@@ -8644,6 +8770,7 @@ function dealServerRaminoRound(session: RaminoTableSession, dealerId: string) {
   session.turnSeconds = 120;
   session.winnerCelebration = null;
   session.postDayRequest = null;
+  session.postDaySeatPick = null;
   session.roundIndex += 1;
 
   session.ceremonyDealerId = session.players[validDealerIdx].id;
@@ -8802,6 +8929,52 @@ function finishServerRaminoRound(
   const pot = session.stake * session.players.length;
   const rake = pot * 0.1;
   const winAmount = (pot - rake) * totalMultiplier;
+  const loserExtraPenalty =
+    totalMultiplier > 1 ? Number((session.stake * (totalMultiplier - 1)).toFixed(2)) : 0;
+
+  // Enforce 2x (ዶፔይ / ሞንቴ) & 3x (ጎልደን) penalty directly on server for any disconnected human loser
+  if (loserExtraPenalty > 0) {
+    const activeOnlinePlayerIds = new Set<string>();
+    for (const [sock, meta] of raminoTableSockets.entries()) {
+      if (meta.roomCode === session.roomCode && sock.readyState === WebSocket.OPEN) {
+        activeOnlinePlayerIds.add(meta.playerId);
+      }
+    }
+    let anyServerDebit = false;
+    for (const p of session.players) {
+      if (p.id === winner.id || p.isBot || activeOnlinePlayerIds.has(p.id)) continue;
+      const cleanPh = normalizeEthiopianPhone(p.phone || '') || (p.phone || '').trim();
+      if (cleanPh && playersByPhone.has(cleanPh)) {
+        const lp = playersByPhone.get(cleanPh)!;
+        const debitAmt = Math.min(lp.balance, loserExtraPenalty);
+        if (debitAmt > 0) {
+          lp.balance = Math.max(0, Number((lp.balance - debitAmt).toFixed(2)));
+          clampBalancesAfterDebit(lp);
+          lp.updatedAt = new Date().toLocaleString();
+          serverTransactions.unshift({
+            id: `gtx-pen-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            userId: lp.id,
+            userName: lp.name,
+            userPhone: lp.phone,
+            type: 'bet',
+            method: 'Conker Ramino',
+            amount: debitAmt,
+            referenceNumber:
+              totalMultiplier >= 3
+                ? `Ramino Golden 3x Loss (-${debitAmt} ETB)`
+                : `Ramino Dopey 2x Loss (-${debitAmt} ETB)`,
+            status: 'approved',
+            timestamp: new Date().toLocaleString(),
+          });
+          anyServerDebit = true;
+        }
+      }
+    }
+    if (anyServerDebit) {
+      saveBotsToDisk();
+      broadcastRealtimeSync();
+    }
+  }
 
   session.ceremonyDealerId = winner.id;
   session.ceremonyDealerName = winner.name;
@@ -8815,6 +8988,7 @@ function finishServerRaminoRound(
     dopeyMultiplier: effectiveDopeyMult,
     streakMultiplier: effectiveStreakMult,
     totalMultiplier,
+    loserExtraPenalty,
     streakCount,
     pot,
     rakeAmount: rake,
@@ -8934,38 +9108,147 @@ function handleServerRaminoAction(
     }
     if (req.acceptedPlayerIds.length >= session.players.length) {
       req.allAccepted = true;
-      const activeId = session.players[session.currentTurnIdx]?.id;
-      if (session.players.length >= 2) {
-        const prevSig = session.players.map((p) => p.id).join(',');
-        for (let attempt = 0; attempt < 6; attempt++) {
-          for (let i = session.players.length - 1; i > 0; i--) {
-            const j = crypto.randomInt(0, i + 1);
-            [session.players[i], session.players[j]] = [session.players[j], session.players[i]];
+      const src = req.source;
+      const prevDealerId = session.winnerCelebration?.winnerId || session.ceremonyDealerId;
+      const activeTurnPlayerId =
+        src === 'header' ? session.players[session.currentTurnIdx]?.id || null : null;
+
+      // Deal 1 unique-rank non-Joker card to each player and sort highest -> lowest for sequential seat picking
+      const cutDeck = buildServerRaminoDeck(1).filter((c) => !c.isJoker);
+      const usedRanks = new Set<string>();
+      const pickCut = () => {
+        for (const c of cutDeck) {
+          if (!usedRanks.has(c.rank)) {
+            usedRanks.add(c.rank);
+            return c;
           }
-          if (session.players.map((p) => p.id).join(',') !== prevSig) break;
+        }
+        return cutDeck[0];
+      };
+      const rawEntries: RaminoPostDayCutEntry[] = session.players.map((p) => ({
+        id: p.id,
+        name: p.name,
+        avatarLetter: p.avatarLetter,
+        avatarColor: p.avatarColor,
+        card: pickCut(),
+        rankOrder: 0,
+        pickedSeat: null,
+      }));
+      rawEntries.sort(
+        (a, b) => (RAMINO_CUT_RANK_ORDER[b.card.rank] || 0) - (RAMINO_CUT_RANK_ORDER[a.card.rank] || 0)
+      );
+      rawEntries.forEach((e, idx) => {
+        e.rankOrder = idx + 1;
+      });
+
+      if (session.ceremonyTimer) {
+        clearTimeout(session.ceremonyTimer);
+        session.ceremonyTimer = null;
+      }
+
+      session.postDayRequest = null;
+      session.phase = 'postday_pick';
+      session.postDaySeatPick = {
+        source: src,
+        revealedCount: 0,
+        entries: rawEntries,
+        currentPickerIdx: 0,
+        chosenSeats: Array.from({ length: session.players.length }, () => null),
+        prevDealerId,
+        activeTurnPlayerId,
+        completed: false,
+      };
+      session.lastEvent = { id: ++raminoEventSeq, type: 'postday_pick_started', actorName: me.name };
+      broadcastRaminoTableState(session);
+
+      const totalCut = rawEntries.length;
+      const stepPostDayReveal = (rev: number) => {
+        const cur = raminoTables.get(session.roomCode);
+        if (!cur || cur.phase !== 'postday_pick' || !cur.postDaySeatPick) return;
+        cur.postDaySeatPick.revealedCount = rev;
+        broadcastRaminoTableState(cur);
+        if (rev < totalCut) {
+          cur.ceremonyTimer = setTimeout(() => stepPostDayReveal(rev + 1), 650);
+        }
+      };
+      session.ceremonyTimer = setTimeout(() => stepPostDayReveal(1), 650);
+      return { ok: true };
+    }
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'postday_pick_seat') {
+    const pick = session.postDaySeatPick;
+    if (session.phase !== 'postday_pick' || !pick || pick.completed) {
+      return { ok: false, error: 'የወንበር መምረጫ ጊዜው አሁን አይደለም።' };
+    }
+    if (pick.revealedCount < pick.entries.length) {
+      return { ok: false, error: 'ካርዶቹ እስኪከፈቱ ይጠብቁ...' };
+    }
+    const activeEntry = pick.entries[pick.currentPickerIdx];
+    if (!activeEntry || activeEntry.id !== me.id) {
+      return { ok: false, error: 'የእርስዎ የወንበር መምረጫ ተራ አይደለም!' };
+    }
+    const seatIdx = Number(payload.seatIndex);
+    if (!Number.isInteger(seatIdx) || seatIdx < 0 || seatIdx >= pick.chosenSeats.length) {
+      return { ok: false, error: 'ትክክለኛ ወንበር ይምረጡ።' };
+    }
+    if (pick.chosenSeats[seatIdx] !== null) {
+      return { ok: false, error: 'ይህ ወንበር ቀድሞ ተይዟል!' };
+    }
+
+    pick.chosenSeats[seatIdx] = me.id;
+    activeEntry.pickedSeat = seatIdx;
+    pick.currentPickerIdx += 1;
+
+    // If only 1 seat & 1 player remain, automatically assign the last seat cleanly
+    if (pick.currentPickerIdx === pick.entries.length - 1) {
+      const lastEntry = pick.entries[pick.currentPickerIdx];
+      const remSeatIdx = pick.chosenSeats.findIndex((s) => s === null);
+      if (lastEntry && remSeatIdx !== -1) {
+        pick.chosenSeats[remSeatIdx] = lastEntry.id;
+        lastEntry.pickedSeat = remSeatIdx;
+        pick.currentPickerIdx = pick.entries.length;
+      }
+    }
+
+    if (pick.currentPickerIdx >= pick.entries.length) {
+      pick.completed = true;
+      const byId = new Map(session.players.map((p) => [p.id, p]));
+      const reordered: RaminoTablePlayer[] = [];
+      for (const pid of pick.chosenSeats) {
+        if (pid && byId.has(pid)) {
+          reordered.push(byId.get(pid)!);
         }
       }
-      if (activeId) {
-        const ni = session.players.findIndex((p) => p.id === activeId);
+      if (reordered.length === session.players.length) {
+        session.players = reordered;
+      }
+      if (pick.activeTurnPlayerId) {
+        const ni = session.players.findIndex((p) => p.id === pick.activeTurnPlayerId);
         if (ni !== -1) session.currentTurnIdx = ni;
       }
       session.privateRoundCount = 1;
-      const src = req.source;
-      const prevDealerId = session.winnerCelebration?.winnerId || session.ceremonyDealerId;
       session.lastEvent = { id: ++raminoEventSeq, type: 'postday_applied', actorName: me.name };
       broadcastRaminoTableState(session);
+
+      const src = pick.source;
+      const prevDealerId = pick.prevDealerId;
       setTimeout(() => {
         const cur = raminoTables.get(session.roomCode);
         if (!cur) return;
-        cur.postDayRequest = null;
+        cur.postDaySeatPick = null;
         if (src === 'winner') {
           dealServerRaminoRound(cur, prevDealerId);
         } else {
+          cur.phase = 'game';
           broadcastRaminoTableState(cur);
         }
-      }, 900);
+      }, 1100);
       return { ok: true };
     }
+
     broadcastRaminoTableState(session);
     return { ok: true };
   }
@@ -9517,12 +9800,9 @@ app.post('/api/wallet/game-tx', (req, res) => {
   const player = ensurePlayerRecord(phone, name);
   player.balance = Math.max(0, Number((player.balance + delta).toFixed(2)));
   if (delta > 0 && !/refund|revert|cancel/i.test(reason)) {
-    player.withdrawableBalance = Math.min(
-      player.balance,
-      Number((getWithdrawableBalance(player) + delta).toFixed(2))
-    );
+    unlockAllWithdrawableAfterWin(player);
   } else {
-    player.withdrawableBalance = Math.min(player.balance, getWithdrawableBalance(player));
+    clampBalancesAfterDebit(player);
   }
   player.updatedAt = new Date().toLocaleString();
   if (game === 'keno') {
@@ -9571,6 +9851,7 @@ app.post('/api/wallet/game-tx', (req, res) => {
     ok: true,
     balance: player.balance,
     withdrawableBalance: getWithdrawableBalance(player),
+    nonWithdrawableBonus: getNonWithdrawableBonus(player),
     phone: player.phone,
     accountToken: createSignedPlayerToken(player),
     transaction: createdTx,
@@ -9853,6 +10134,7 @@ app.post('/api/ramino/rooms', (req, res) => {
     turnSeconds: 120,
     winnerCelebration: null,
     postDayRequest: null,
+    postDaySeatPick: null,
     lastEvent: null,
   });
 
@@ -9948,6 +10230,7 @@ app.post('/api/ramino/rooms/:id/join', (req, res) => {
       turnSeconds: 120,
       winnerCelebration: null,
       postDayRequest: null,
+      postDaySeatPick: null,
       lastEvent: null,
     };
     raminoTables.set(tableCode, tbl);

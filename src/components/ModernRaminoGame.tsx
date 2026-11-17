@@ -328,9 +328,17 @@ function buildShuffledDeck(deckCount: 1 | 2): PlayingCard[] {
       });
     }
   }
-  // Fisher-Yates shuffle
+  // Cryptographically strong Fisher-Yates shuffle
+  const randInt = (maxExclusive: number) => {
+    if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+      const buf = new Uint32Array(1);
+      window.crypto.getRandomValues(buf);
+      return buf[0] % maxExclusive;
+    }
+    return Math.floor(Math.random() * maxExclusive);
+  };
   for (let i = cards.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = randInt(i + 1);
     [cards[i], cards[j]] = [cards[j], cards[i]];
   }
   return cards;
@@ -1069,8 +1077,8 @@ const RAMINO_T: Record<Language, any> = {
     discardPileTip: 'የተጣለውን ካርድ አንሳ',
     closedSetsTip: 'ገቢ የሌላቸው የተዘጉ 4-ካርዶች',
     hereMarker: '▼ እዚህ',
-    dopeyBtn: '👑 ዶፔይ • 2x',
-    dopeyJokerBtn: '👑 ዶፔይ በጆከር • 3x',
+    dopeyBtn: '👑 ዶፔይ / ሞንቴ • 2x',
+    dopeyJokerBtn: '👑 ጎልደን • 3x',
     meldBtn: (pts: number) => `ውረድ • ${pts}`,
     sortBtn: 'ደርድር',
     returnBtn: 'መልስ',
@@ -1114,15 +1122,17 @@ const RAMINO_T: Record<Language, any> = {
       preview ? `ተቀላቀል (${preview.stake} ብር • ${preview.maxPlayers} ሰው)` : 'ተቀላቀል',
     potAmountLabel: 'የድስት መጠን:',
     rakeLabel: 'የኮንከር 10% ኮሚሽን:',
-    dopeyMultLabel: 'ዶፔይ ብዜት:',
-    jokerFinishMultLabel: '🃏 በጆከር መጨረስ:',
+    dopeyMultLabel: 'ዶፔይ / ሞንቴ (2x):',
+    goldenMultLabel: '👑 ጎልደን (3x):',
+    penaltyDeductedLabel: '💸 ከዋሌትዎ የተቆረጠ:',
+    jokerFinishMultLabel: '🃏 ዶፔይ / ሞንቴ (በጆከር):',
     streakMultLabel: (n: number) => `🔥 ተከታታይ ድል (${n}ኛ):`,
-    streakTimes: (m: number) => `${m}x እጥፍ`,
-    streakProgress: (n: number) => `🔥 ተከታታይ ድል: ${n}/3 (ከ3 ተከታታይ ድል በኋላ በጆከር መጨረስ 3x!)`,
+    streakTimes: (m: number) => `${m}x (${m >= 3 ? 'ጎልደን' : 'ዶፔይ / ሞንቴ'})`,
+    streakProgress: (n: number) => `🔥 ተከታታይ ድል: ${n}/3 (ከ3 ተከታታይ ድል በኋላ በጆከር ጎልደን 3x!)`,
     netWonLabel: 'የተጣራ ገቢ:',
     nextDealerLabel: '👑 ቀጣይ ካርታ የሚያከፋፍለው:',
     nextRoundBtn: (dealer: string, extra: string) => `🔄 ቀጣይ ዙር ጀምር (${dealer} ያከፋፍላል${extra})`,
-    postDayWinnerBtn: '🪑 ፖስት ዴይ (ሁሉም ተቀብለው አዲስ ወንበር ይሰጣል)',
+    postDayWinnerBtn: '🪑 ፖስት ዴይ (ሁሉም ተቀብለው ወንበር ይመርጣሉ)',
     backToLobbyResetBtn: 'ወደ ሎቢ ተመለስ',
     resumeBannerTitle: 'ንቁ የራሚኖ ጨዋታ አለዎት!',
     resumeBannerSub: (stake: number, secs: number) => `🪙 ${stake} ብር • ሰዓቱ ከማለቁ በፊት ተመልሰው መቀጠል ይችላሉ (⏳ ${secs}s)`,
@@ -1130,13 +1140,19 @@ const RAMINO_T: Record<Language, any> = {
     resumeForfeitBtn: 'ጨዋታውን ውጣ',
     notifySavedCanReturn: '⏳ ጨዋታዎ ክፍት ነው — ሰዓቱ እስካላለቀ ድረስ ተመልሰው መግባት ይችላሉ!',
     postDayModalTitle: 'ፖስት ዴይ — የወንበር መቀየሪያ ጥያቄ',
-    postDayModalDesc: (name: string) => `${name} ሁሉም ተጫዋቾች አዲስ ወንበር እንዲያገኙ ፖስት ዴይ ጠይቋል`,
+    postDayModalDesc: (name: string) => `${name} ፖስት ዴይ ጠይቋል — ሁሉም 1 ካርታ ወስደው ከፍተኛው ቅድሚያ ወንበር ይመርጣል`,
     acceptedBadge: '✓ ተቀብሏል',
     waitingAcceptBadge: '⏳ በመጠበቅ ላይ...',
     acceptPostDayBtn: '✓ ጥያቄውን ተቀበል',
     closeBtn: 'ዝጋ',
-    allAcceptedPostDay: '✅ ሁሉም ተጫዋቾች ተቀብለዋል! አዲስ ወንበር በመሰጠት ላይ...',
+    allAcceptedPostDay: '✅ ሁሉም ተቀብለዋል! የወንበር መምረጫ ካርታ በመታደል ላይ...',
     waitingAllPostDay: '⏳ የሁሉም ተጫዋቾች መቀበል በመጠበቅ ላይ...',
+    postDayPickTitle: (seats: number) => `🪑 ፖስት ዴይ — የወንበር መምረጫ (${seats} ተጫዋቾች)`,
+    postDayPickYourTurn: '🎯 የእርስዎ ተራ ነው — ከታች የሚፈልጉትን ወንበር ይምረጡ!',
+    postDayPickOtherTurn: (name: string) => `⏳ አሁን ${name} ወንበር እየመረጡ ነው...`,
+    postDayPickDone: '✅ ሁሉም ወንበራቸውን መርጠዋል! ወደ ጠረጴዛ በመግባት ላይ...',
+    postDaySeatLabel: (n: number) => `ወንበር #${n}`,
+    postDayPickOpenSeat: 'ክፍት ወንበር (ምረጥ)',
     rulesModalTitle: 'የመቀለ ራሚኖ ህግጋት',
     understoodCloseBtn: 'ተረድቻለሁ',
     rule1Title: '1. ሰዓት (90 ሰከንድ + 30 ሰከንድ ማስጠንቀቂያ)',
@@ -1170,11 +1186,11 @@ const RAMINO_T: Record<Language, any> = {
     notifyYourTurnStart: (dealer: string) => `👑 ${dealer} ካርታ አከፋፍሏል! የእርስዎ ተራ ነው።`,
     notifyWarning30s: '⚠️ 30 ሰከንድ ማስጠንቀቂያ! ካርታ ካልሳቡ ከጨዋታ ይታገዳሉ!',
     notifyBottomNotReady: 'የታችኛው ካርድ ማሸነፊያ ገና አልተሟላም! ተራዎ ሲደርስ ሁሉንም ካርታዎች በቡድን መያዝ አለብዎት።',
-    winBottomJokerDopey: (s: string) => `👑 ዶፔይ በታችኛው ጆከር (${s}) አሸናፊ! (3x)`,
-    winBottomDopey: (c: string) => `🔥 ዶፔይ በታችኛው ካርድ (${c}) አሸናፊ! (2x)`,
+    winBottomJokerDopey: (s: string) => `👑 ጎልደን በታችኛው ጆከር (${s}) አሸናፊ! (3x)`,
+    winBottomDopey: (c: string) => `🔥 ዶፔይ / ሞንቴ በታችኛው ካርድ (${c}) አሸናፊ! (2x)`,
     winBottomNormal: (c: string) => `🏆 በታችኛው ካርድ (${c}) አሸናፊ!`,
     notifyReshuffled: '🔄 መደቡ ስላለቀ የተጣሉት ካርዶች ተቀላቅለው አዲስ መደብ ሆነዋል!',
-    notifyPostDayApplied: '🪑 ሁሉም ተጫዋቾች የፖስት ዴይ ጥያቄውን ተቀብለዋል! አዲስ ወንበር ተሰጥቷል።',
+    notifyPostDayApplied: '🪑 ሁሉም ተጫዋቾች ወንበራቸውን መርጠዋል! አዲስ ቦታ ተይዟል።',
     notifyInsufficientNext: '❌ ለቀጣይ ዙር በቂ ቀሪ ሂሳብ የለም!',
     notifyWaitTurn: 'እባክዎን ተራዎን ይጠብቁ!',
     notifyAlreadyDrawn: 'አስቀድመው ካርታ ስበዋል፤ የሚጥሉት ካርታ ይምረጡ!',
@@ -1194,13 +1210,18 @@ const RAMINO_T: Record<Language, any> = {
     notifyMismatchGroup: 'ይህ ካርድ ከዚህ ቡድን ጋር አይገጥምም!',
     notifyCardLaidOff: (c: string) => `ካርታ ${c} ወደ ጠረጴዛው ገቢ ተደርጓል!`,
     notifyNeedSwapNatural: (lbl: string) => `ይህን ጆከር ለመቀየር ትክክለኛው ${lbl} በእጅዎ ሊኖር ይገባል!`,
-    winTitleDopeyJoker: '👑 ዶፔይ በጆከር አሸናፊ! (3x)',
-    winTitleDopey: '🔥 ዶፔይ አሸናፊ! (2x)',
-    winTitleJokerFinish: '🃏 ጆከር ጥለው አሸናፊ! (2x)',
-    winTitleStreakJoker: (n: number) => `👑 ${n}ኛ ተከታታይ ድል በጆከር! (3x)`,
-    winTitleStreak: (n: number) => `🔥 ${n}ኛ ተከታታይ ድል! (2x)`,
+    winTitleDopeyJoker: '👑 ጎልደን አሸናፊ! (3x)',
+    winTitleDopey: '🔥 ዶፔይ / ሞንቴ አሸናፊ! (2x)',
+    winTitleJokerFinish: '🃏 ዶፔይ / ሞንቴ በጆከር አሸናፊ! (2x)',
+    winTitleStreakJoker: (n: number) => `👑 ጎልደን (${n}ኛ ተከታታይ ድል በጆከር)! (3x)`,
+    winTitleStreak: (n: number) => `🔥 ዶፔይ / ሞንቴ (${n}ኛ ተከታታይ ድል)! (2x)`,
     winTitleNormal: '🎉 እንኳን ደስ አለዎት! አሸንፈዋል!',
-    loseTitle: (w: string) => `😔 ${w} ይህን ዙር አሸንፏል!`,
+    loseTitle: (w: string, mult?: number) =>
+      mult && mult >= 3
+        ? `😔 ${w} ጎልደን (3x) አሸንፏል!`
+        : mult === 2
+        ? `😔 ${w} ዶፔይ / ሞንቴ (2x) አሸንፏል!`
+        : `😔 ${w} ይህን ዙር አሸንፏል!`,
     notifyYourTurnFull: 'የእርስዎ ተራ ነው! (90 ሰከንድ ማሰቢያ + 30 ሰከንድ ማስጠንቀቂያ)',
     notifyOppMelded: (name: string, pts: number) => `${name} በ${pts} ነጥብ ወረደ!`,
     notifyAlreadyDiscarded: '🚫 በዚህ ተራ ውስጥ አስቀድመው ካርታ ጥለዋል፤ በድጋሜ መጣል አይቻልም!',
@@ -1326,8 +1347,8 @@ const RAMINO_T: Record<Language, any> = {
     discardPileTip: 'ዝተደርበየ ካርታ ኣልዕል',
     closedSetsTip: 'ዝተዓጽዉ 4-ካርታታት',
     hereMarker: '▼ ኣብዚ',
-    dopeyBtn: '👑 ዶፔይ • 2x',
-    dopeyJokerBtn: '👑 ዶፔይ ብጆከር • 3x',
+    dopeyBtn: '👑 ዶፔይ / ሞንቴ • 2x',
+    dopeyJokerBtn: '👑 ጎልደን • 3x',
     meldBtn: (pts: number) => `ውረድ • ${pts}`,
     sortBtn: 'ደርድር',
     returnBtn: 'ምለስ',
@@ -1371,15 +1392,17 @@ const RAMINO_T: Record<Language, any> = {
       preview ? `ተጸንበር (${preview.stake} ብር • ${preview.maxPlayers} ሰብ)` : 'ተጸንበር',
     potAmountLabel: 'ጠቕላላ ድስቲ:',
     rakeLabel: 'ናይ ኮንከር 10% ኮሚሽን:',
-    dopeyMultLabel: 'ዶፔይ ብዜት:',
-    jokerFinishMultLabel: '🃏 ብጆከር ምዝዛም:',
+    dopeyMultLabel: 'ዶፔይ / ሞንቴ (2x):',
+    goldenMultLabel: '👑 ጎልደን (3x):',
+    penaltyDeductedLabel: '💸 ካብ ዋሌትኩም ዝተቘርጸ:',
+    jokerFinishMultLabel: '🃏 ዶፔይ / ሞንቴ (ብጆከር):',
     streakMultLabel: (n: number) => `🔥 ተኸታታሊ ዓወት (${n}ይ):`,
-    streakTimes: (m: number) => `${m}x ዕጽፊ`,
-    streakProgress: (n: number) => `🔥 ተኸታታሊ ዓወት: ${n}/3 (ድሕሪ 3 ተኸታታሊ ዓወት ብጆከር 3x!)`,
+    streakTimes: (m: number) => `${m}x (${m >= 3 ? 'ጎልደን' : 'ዶፔይ / ሞንቴ'})`,
+    streakProgress: (n: number) => `🔥 ተኸታታሊ ዓወት: ${n}/3 (ድሕሪ 3 ተኸታታሊ ዓወት ብጆከር ጎልደን 3x!)`,
     netWonLabel: 'ዝተጻረየ እቶት:',
     nextDealerLabel: '👑 ቀጻሊ ካርታ ዘከፋፍል:',
     nextRoundBtn: (dealer: string, extra: string) => `🔄 ቀጻሊ ዙር ጀምር (${dealer} የከፋፍል${extra})`,
-    postDayWinnerBtn: '🪑 ፖስት ዴይ (ኩሎም ምስ ተቐበሉ ሓድሽ ወንበር)',
+    postDayWinnerBtn: '🪑 ፖስት ዴይ (ኩሎም ተቐቢሎም ወንበር ይመርጹ)',
     backToLobbyResetBtn: 'ናብ ሎቢ ተመለስ',
     resumeBannerTitle: 'ንቑ ጸወታ ራሚኖ ኣለኩም!',
     resumeBannerSub: (stake: number, secs: number) => `🪙 ${stake} ብር • ሰዓት ከይተወድአ ተመሊስኩም ክትቅጽሉ ትኽእሉ (⏳ ${secs}s)`,
@@ -1387,13 +1410,19 @@ const RAMINO_T: Record<Language, any> = {
     resumeForfeitBtn: 'ጸወታ ግደፍ',
     notifySavedCanReturn: '⏳ ጸወታኹም ክፉት እዩ — ሰዓቱ ከይተወድአ ክትምለሱ ትኽእሉ!',
     postDayModalTitle: 'ፖስት ዴይ — ሕቶ መቐየሪ ወንበር',
-    postDayModalDesc: (name: string) => `${name} ኩሎም ተጻወትቲ ሓድሽ ወንበር ክረኽቡ ፖስት ዴይ ሓቲቱ`,
+    postDayModalDesc: (name: string) => `${name} ፖስት ዴይ ሓቲቱ — ኩሎም 1 ካርታ ወሲዶም ዝለዓለ ቅድምያ ወንበር ይመርጽ`,
     acceptedBadge: '✓ ተቐቢሉ',
     waitingAcceptBadge: '⏳ ይጽበ ኣሎ...',
     acceptPostDayBtn: '✓ ሕቶ ተቐበል',
     closeBtn: 'ዕጾ',
-    allAcceptedPostDay: '✅ ኩሎም ተጻወትቲ ተቐቢሎም! ሓድሽ ወንበር ይወሃብ ኣሎ...',
+    allAcceptedPostDay: '✅ ኩሎም ተቐቢሎም! ናይ ወንበር መምረጺ ካርታ ይዕደል ኣሎ...',
     waitingAllPostDay: '⏳ ምቕባል ኩሎም ተጻወትቲ ይጽበ ኣሎ...',
+    postDayPickTitle: (seats: number) => `🪑 ፖስት ዴይ — መምረጺ ወንበር (${seats} ተጻወትቲ)`,
+    postDayPickYourTurn: '🎯 ተራኹም እዩ — ካብ ታሕቲ ዝደለኹምዎ ወንበር ምረጹ!',
+    postDayPickOtherTurn: (name: string) => `⏳ ሕጂ ${name} ወንበር ይመርጽ ኣሎ...`,
+    postDayPickDone: '✅ ኩሎም ወንበሮም መሪጾም! ናብ ጠረጴዛ ይኣቱ ኣሎ...',
+    postDaySeatLabel: (n: number) => `ወንበር #${n}`,
+    postDayPickOpenSeat: 'ክፉት ወንበር (ምረጽ)',
     rulesModalTitle: 'ሕግታት መቐለ ራሚኖ',
     understoodCloseBtn: 'ተረዲአዮ',
     rule1Title: '1. ሰዓት (90 ሰከንድ + 30 ሰከንድ መጠንቀቕታ)',
@@ -1427,11 +1456,11 @@ const RAMINO_T: Record<Language, any> = {
     notifyYourTurnStart: (dealer: string) => `👑 ${dealer} ካርታ ኣከፋፊሉ! ተራኹም እዩ።`,
     notifyWarning30s: '⚠️ 30 ሰከንድ መጠንቀቕታ! ካርታ እንተዘይስሒብኩም ክትእገዱ ኢኹም!',
     notifyBottomNotReady: 'ናይ ታሕቲ ካርታ መሸነፊ ገና ኣይተማልአን።',
-    winBottomJokerDopey: (s: string) => `👑 ዶፔይ ብናይ ታሕቲ ጆከር (${s}) ተዓዋቲ! (3x)`,
-    winBottomDopey: (c: string) => `🔥 ዶፔይ ብናይ ታሕቲ ካርታ (${c}) ተዓዋቲ! (2x)`,
+    winBottomJokerDopey: (s: string) => `👑 ጎልደን ብናይ ታሕቲ ጆከር (${s}) ተዓዋቲ! (3x)`,
+    winBottomDopey: (c: string) => `🔥 ዶፔይ / ሞንቴ ብናይ ታሕቲ ካርታ (${c}) ተዓዋቲ! (2x)`,
     winBottomNormal: (c: string) => `🏆 ብናይ ታሕቲ ካርታ (${c}) ተዓዋቲ!`,
     notifyReshuffled: '🔄 መደብ ስለዝተወድአ ዝተደርበዩ ካርታታት ተሓዋዊሶም!',
-    notifyPostDayApplied: '🪑 ኩሎም ተጻወትቲ ፖስት ዴይ ተቐቢሎም! ሓድሽ ወንበር ተዋሂቡ።',
+    notifyPostDayApplied: '🪑 ኩሎም ተጻወትቲ ወንበሮም መሪጾም! ሓድሽ ቦታ ተታሒዙ።',
     notifyInsufficientNext: '❌ ንቀጻሊ ዙር እኹል ቀሪ ሕሳብ የለን!',
     notifyWaitTurn: 'በጃኹም ተራኹም ተጸበዩ!',
     notifyAlreadyDrawn: 'ኣቐዲምኩም ካርታ ስሒብኩም፤ ትድርብይዎ ካርታ ምረጹ!',
@@ -1451,13 +1480,18 @@ const RAMINO_T: Record<Language, any> = {
     notifyMismatchGroup: 'እዚ ካርታ ምስዚ ጉጅለ ኣይገጥምን!',
     notifyCardLaidOff: (c: string) => `ካርታ ${c} ናብ ጠረጴዛ ኣትዩ!`,
     notifyNeedSwapNatural: (lbl: string) => `ነዚ ጆከር ንምቕያር ትኽክለኛ ${lbl} ክህልወኩም ኣለዎ!`,
-    winTitleDopeyJoker: '👑 ዶፔይ ብጆከር ተዓዋቲ! (3x)',
-    winTitleDopey: '🔥 ዶፔይ ተዓዋቲ! (2x)',
-    winTitleJokerFinish: '🃏 ብጆከር ተዓዋቲ! (2x)',
-    winTitleStreakJoker: (n: number) => `👑 ${n}ይ ተኸታታሊ ዓወት ብጆከር! (3x)`,
-    winTitleStreak: (n: number) => `🔥 ${n}ይ ተኸታታሊ ዓወት! (2x)`,
+    winTitleDopeyJoker: '👑 ጎልደን ተዓዋቲ! (3x)',
+    winTitleDopey: '🔥 ዶፔይ / ሞንቴ ተዓዋቲ! (2x)',
+    winTitleJokerFinish: '🃏 ዶፔይ / ሞንቴ ብጆከር ተዓዋቲ! (2x)',
+    winTitleStreakJoker: (n: number) => `👑 ጎልደን (${n}ይ ተኸታታሊ ዓወት ብጆከር)! (3x)`,
+    winTitleStreak: (n: number) => `🔥 ዶፔይ / ሞንቴ (${n}ይ ተኸታታሊ ዓወት)! (2x)`,
     winTitleNormal: '🎉 እንቋዕ ሓጎሰኩም! ተዓዊትኩም!',
-    loseTitle: (w: string) => `😔 ${w} ነዚ ዙር ተዓዊቱ!`,
+    loseTitle: (w: string, mult?: number) =>
+      mult && mult >= 3
+        ? `😔 ${w} ጎልደን (3x) ተዓዊቱ!`
+        : mult === 2
+        ? `😔 ${w} ዶፔይ / ሞንቴ (2x) ተዓዊቱ!`
+        : `😔 ${w} ነዚ ዙር ተዓዊቱ!`,
     notifyYourTurnFull: 'ተራኹም እዩ! (90 ሰከንድ መሕሰቢ + 30 ሰከንድ መጠንቀቕታ)',
     notifyOppMelded: (name: string, pts: number) => `${name} ብ${pts} ነጥቢ ወሪዱ!`,
     notifyAlreadyDiscarded: '🚫 ኣብዚ ተራ ኣቐዲምኩም ደርቢኹም ኢኹም!',
@@ -1628,15 +1662,17 @@ const RAMINO_T: Record<Language, any> = {
       preview ? `Seeni (${preview.stake} ETB • Nama ${preview.maxPlayers})` : 'Seeni',
     potAmountLabel: 'Qabeenya Waliigalaa:',
     rakeLabel: 'Koomishinii 10%:',
-    dopeyMultLabel: 'Baay\'ata Dooppey:',
-    jokerFinishMultLabel: '🃏 Jookeraan Xumuruu:',
+    dopeyMultLabel: 'Dooppey / Monte (2x):',
+    goldenMultLabel: '👑 Golden (3x):',
+    penaltyDeductedLabel: '💸 Waaletii kee irraa cite:',
+    jokerFinishMultLabel: '🃏 Dooppey / Monte (Jookeraan):',
     streakMultLabel: (n: number) => `🔥 Injifannoo walitti aansee (${n}ffaa):`,
-    streakTimes: (m: number) => `Dachaa ${m}x`,
-    streakProgress: (n: number) => `🔥 Walitti aansee: ${n}/3 (3ffaa booda jookeraan 3x!)`,
+    streakTimes: (m: number) => `${m}x (${m >= 3 ? 'Golden' : 'Dooppey / Monte'})`,
+    streakProgress: (n: number) => `🔥 Walitti aansee: ${n}/3 (3ffaa booda jookeraan Golden 3x!)`,
     netWonLabel: 'Galii Qulqulluu:',
     nextDealerLabel: '👑 Kan itti aansee raabsu:',
     nextRoundBtn: (dealer: string, extra: string) => `🔄 Marsaa itti aanu jalqabi (${dealer} ni raabsa${extra})`,
-    postDayWinnerBtn: '🪑 Poost Deey (Hundi yoo fudhatan teessoo haaraa)',
+    postDayWinnerBtn: '🪑 Poost Deey (Hundi fudhatanii teessoo filatu)',
     backToLobbyResetBtn: 'Gara Galmaatti Deebi\'i',
     resumeBannerTitle: 'Taphni Raaminoo Jiru Jira!',
     resumeBannerSub: (stake: number, secs: number) => `🪙 ${stake} ETB • Yeroon osoo hin dhumiin itti deebi\'uu dandeessa (⏳ ${secs}s)`,
@@ -1644,13 +1680,19 @@ const RAMINO_T: Record<Language, any> = {
     resumeForfeitBtn: 'Tapha Dhiisi',
     notifySavedCanReturn: '⏳ Taphni kee banaadha — yeroon osoo hin dhumiin deebi\'uu dandeessa!',
     postDayModalTitle: 'Poost Deey — Gaaffii Jijjiirraa Teessoo',
-    postDayModalDesc: (name: string) => `${name} hundi teessoo haaraa akka argatan Poost Deey gaafateera`,
+    postDayModalDesc: (name: string) => `${name} Poost Deey gaafateera — hundi kaardii 1 fudhatanii ol\'aanaan dursa teessoo filata`,
     acceptedBadge: '✓ Fudhatameera',
     waitingAcceptBadge: '⏳ Eegaa jira...',
     acceptPostDayBtn: '✓ Gaaffii Fudhadhu',
     closeBtn: 'Cufi',
-    allAcceptedPostDay: '✅ Hundi fudhataniiru! Teessoon haaraan kennamaa jira...',
+    allAcceptedPostDay: '✅ Hundi fudhataniiru! Kaardiin filannoo teessoo raabsamaa jira...',
     waitingAllPostDay: '⏳ Hundi akka fudhatan eegaa jira...',
+    postDayPickTitle: (seats: number) => `🪑 Poost Deey — Filannoo Teessoo (Taphattoota ${seats})`,
+    postDayPickYourTurn: '🎯 Dabaree keeti — teessoo barbaaddu gadi irraa filadhu!',
+    postDayPickOtherTurn: (name: string) => `⏳ Amma ${name} teessoo filachaa jira...`,
+    postDayPickDone: '✅ Hundi teessoo filataniiru! Gara gabatee seenaa jira...',
+    postDaySeatLabel: (n: number) => `Teessoo #${n}`,
+    postDayPickOpenSeat: 'Teessoo Banaa (Filadhu)',
     rulesModalTitle: 'Seera Raaminoo',
     understoodCloseBtn: 'Hubadheera',
     rule1Title: '1. Sa\'aatii (Sekondii 90 + Sekondii 30 of eeggannoo)',
@@ -1684,11 +1726,11 @@ const RAMINO_T: Record<Language, any> = {
     notifyYourTurnStart: (dealer: string) => `👑 ${dealer} raabseera! Dabaan kan keeti.`,
     notifyWarning30s: '⚠️ Of eeggannoo sekondii 30! Kaardii yoo hin harkisne ni dhorkamta!',
     notifyBottomNotReady: 'Kaardiin jalaa ammallee qophii miti.',
-    winBottomJokerDopey: (s: string) => `👑 Dooppey jookera jalaa (${s}) dhaan injifate! (3x)`,
-    winBottomDopey: (c: string) => `🔥 Dooppey kaardii jalaa (${c}) dhaan injifate! (2x)`,
+    winBottomJokerDopey: (s: string) => `👑 Golden jookera jalaa (${s}) dhaan injifate! (3x)`,
+    winBottomDopey: (c: string) => `🔥 Dooppey / Monte kaardii jalaa (${c}) dhaan injifate! (2x)`,
     winBottomNormal: (c: string) => `🏆 Kaardii jalaa (${c}) dhaan injifate!`,
     notifyReshuffled: '🔄 Tuutaan waan dhumeef kaardiiwwan walitti makamaniiru!',
-    notifyPostDayApplied: '🪑 Hundi Poost Deey fudhataniiru! Teessoon haaraan kennameera.',
+    notifyPostDayApplied: '🪑 Hundi teessoo haaraa filataniiru!',
     notifyInsufficientNext: '❌ Marsaa itti aanuuf hafteen qarshii hin ga\'u!',
     notifyWaitTurn: 'Mee dabaree kee eegi!',
     notifyAlreadyDrawn: 'Dursee kaardii harkisteetta; kan gattu filadhu!',
@@ -1708,13 +1750,18 @@ const RAMINO_T: Record<Language, any> = {
     notifyMismatchGroup: 'Kaardiin kun garee kana waliin hin galu!',
     notifyCardLaidOff: (c: string) => `Kaardii ${c} gara gabateetti galfameera!`,
     notifyNeedSwapNatural: (lbl: string) => `Jookera kana jijjiiruuf ${lbl} harka kee keessa qabaachuu qabda!`,
-    winTitleDopeyJoker: '👑 Dooppey Jookeraan Injifate! (3x)',
-    winTitleDopey: '🔥 Dooppey Injifate! (2x)',
-    winTitleJokerFinish: '🃏 Jookera Gatuun Injifate! (2x)',
-    winTitleStreakJoker: (n: number) => `👑 Injifannoo ${n}ffaa Jookeraan! (3x)`,
-    winTitleStreak: (n: number) => `🔥 Injifannoo Walitti Aanu ${n}ffaa! (2x)`,
+    winTitleDopeyJoker: '👑 Golden Injifate! (3x)',
+    winTitleDopey: '🔥 Dooppey / Monte Injifate! (2x)',
+    winTitleJokerFinish: '🃏 Dooppey / Monte Jookeraan Injifate! (2x)',
+    winTitleStreakJoker: (n: number) => `👑 Golden (Injifannoo ${n}ffaa Jookeraan)! (3x)`,
+    winTitleStreak: (n: number) => `🔥 Dooppey / Monte (Injifannoo ${n}ffaa)! (2x)`,
     winTitleNormal: '🎉 Baga Gammaddan! Injifattaniittu!',
-    loseTitle: (w: string) => `😔 ${w} marsaa kana injifateera!`,
+    loseTitle: (w: string, mult?: number) =>
+      mult && mult >= 3
+        ? `😔 ${w} Golden (3x) injifateera!`
+        : mult === 2
+        ? `😔 ${w} Dooppey / Monte (2x) injifateera!`
+        : `😔 ${w} marsaa kana injifateera!`,
     notifyYourTurnFull: 'Dabaree keeti! (Sekondii 90 yaaduu + sekondii 30 of eeggannoo)',
     notifyOppMelded: (name: string, pts: number) => `${name} qabxii ${pts} n bu\'eera!`,
     notifyAlreadyDiscarded: '🚫 Marsaa kana keessatti dursee kaardii gatteetta!',
@@ -1840,8 +1887,8 @@ const RAMINO_T: Record<Language, any> = {
     discardPileTip: 'Pick up top discard card',
     closedSetsTip: 'Closed 4-card sets',
     hereMarker: '▼ Here',
-    dopeyBtn: '👑 Dopey • 2x',
-    dopeyJokerBtn: '👑 Joker Dopey • 3x',
+    dopeyBtn: '👑 Dopey / Monte • 2x',
+    dopeyJokerBtn: '👑 Golden • 3x',
     meldBtn: (pts: number) => `Meld • ${pts}`,
     sortBtn: 'Sort',
     returnBtn: 'Return',
@@ -1885,15 +1932,17 @@ const RAMINO_T: Record<Language, any> = {
       preview ? `Join (${preview.stake} ETB • ${preview.maxPlayers} Seats)` : 'Join Room',
     potAmountLabel: 'Total Pot:',
     rakeLabel: 'House Commission (10%):',
-    dopeyMultLabel: 'Dopey Multiplier:',
-    jokerFinishMultLabel: '🃏 Joker Finish:',
+    dopeyMultLabel: 'Dopey / Monte (2x):',
+    goldenMultLabel: '👑 Golden (3x):',
+    penaltyDeductedLabel: '💸 Deducted From Wallet:',
+    jokerFinishMultLabel: '🃏 Dopey / Monte (Joker):',
     streakMultLabel: (n: number) => `🔥 Win Streak (${n}):`,
-    streakTimes: (m: number) => `${m}x Multiplier`,
-    streakProgress: (n: number) => `🔥 Win Streak: ${n}/3 (After 3 wins, Joker finish pays 3x!)`,
+    streakTimes: (m: number) => `${m}x (${m >= 3 ? 'Golden' : 'Dopey / Monte'})`,
+    streakProgress: (n: number) => `🔥 Win Streak: ${n}/3 (After 3 wins, Joker finish pays Golden 3x!)`,
     netWonLabel: 'Net Winnings:',
     nextDealerLabel: '👑 Next Round Dealer:',
     nextRoundBtn: (dealer: string, extra: string) => `🔄 Start Next Round (${dealer} deals${extra})`,
-    postDayWinnerBtn: '🪑 Post Day (All Accept New Seats)',
+    postDayWinnerBtn: '🪑 Post Day (All Accept & Pick Seats)',
     backToLobbyResetBtn: 'Back to Lobby',
     resumeBannerTitle: 'Active Ramino Game Found!',
     resumeBannerSub: (stake: number, secs: number) => `🪙 ${stake} ETB • Return to your active table before time expires (⏳ ${secs}s)`,
@@ -1901,13 +1950,19 @@ const RAMINO_T: Record<Language, any> = {
     resumeForfeitBtn: 'Leave Table',
     notifySavedCanReturn: '⏳ Your game stays open — you can return before the timer runs out!',
     postDayModalTitle: 'Post Day — Reseat Request',
-    postDayModalDesc: (name: string) => `${name} requested Post Day so all players receive new seats`,
+    postDayModalDesc: (name: string) => `${name} requested Post Day — all players draw 1 card and pick seats from highest to lowest`,
     acceptedBadge: '✓ Accepted',
     waitingAcceptBadge: '⏳ Waiting...',
     acceptPostDayBtn: '✓ Accept Request',
     closeBtn: 'Close',
-    allAcceptedPostDay: '✅ Everyone accepted! Reassigning seats...',
+    allAcceptedPostDay: '✅ Everyone accepted! Dealing seat-pick cut cards...',
     waitingAllPostDay: '⏳ Waiting for all players to accept...',
+    postDayPickTitle: (seats: number) => `🪑 Post Day — Seat Selection (${seats} Players)`,
+    postDayPickYourTurn: '🎯 Your Turn — Choose your seat below!',
+    postDayPickOtherTurn: (name: string) => `⏳ ${name} is choosing a seat...`,
+    postDayPickDone: '✅ All seats chosen! Returning to table...',
+    postDaySeatLabel: (n: number) => `Seat #${n}`,
+    postDayPickOpenSeat: 'Open Seat (Pick)',
     rulesModalTitle: 'Conker Ramino Rules',
     understoodCloseBtn: 'Got It',
     rule1Title: '1. Turn Timer (90s + 30s Warning)',
@@ -1941,11 +1996,11 @@ const RAMINO_T: Record<Language, any> = {
     notifyYourTurnStart: (dealer: string) => `👑 ${dealer} dealt! It is your turn.`,
     notifyWarning30s: '⚠️ 30s Warning! Draw a card now or you will be removed!',
     notifyBottomNotReady: 'Bottom card win condition is not complete yet.',
-    winBottomJokerDopey: (s: string) => `👑 Bottom Joker Dopey Win (${s})! (3x)`,
-    winBottomDopey: (c: string) => `🔥 Bottom Card Dopey Win (${c})! (2x)`,
+    winBottomJokerDopey: (s: string) => `👑 Golden Bottom Joker Win (${s})! (3x)`,
+    winBottomDopey: (c: string) => `🔥 Dopey / Monte Bottom Card Win (${c})! (2x)`,
     winBottomNormal: (c: string) => `🏆 Bottom Card Finisher Win (${c})!`,
     notifyReshuffled: '🔄 Deck ran out — discard pile reshuffled into a fresh deck!',
-    notifyPostDayApplied: '🪑 All players accepted Post Day! New seats have been assigned.',
+    notifyPostDayApplied: '🪑 All players selected their new seats!',
     notifyInsufficientNext: '❌ Insufficient balance for next round!',
     notifyWaitTurn: 'Please wait for your turn!',
     notifyAlreadyDrawn: 'You already drew a card — choose 1 card to discard!',
@@ -1965,13 +2020,18 @@ const RAMINO_T: Record<Language, any> = {
     notifyMismatchGroup: 'This card does not fit that meld group!',
     notifyCardLaidOff: (c: string) => `Card ${c} laid off onto the table!`,
     notifyNeedSwapNatural: (lbl: string) => `You must hold ${lbl} in your hand to swap this Joker!`,
-    winTitleDopeyJoker: '👑 Joker Dopey Winner! (3x)',
-    winTitleDopey: '🔥 Dopey Winner! (2x)',
-    winTitleJokerFinish: '🃏 Joker Finish Winner! (2x)',
-    winTitleStreakJoker: (n: number) => `👑 ${n}th Win Streak + Joker! (3x)`,
-    winTitleStreak: (n: number) => `🔥 ${n} Consecutive Wins! (2x)`,
+    winTitleDopeyJoker: '👑 Golden Winner! (3x)',
+    winTitleDopey: '🔥 Dopey / Monte Winner! (2x)',
+    winTitleJokerFinish: '🃏 Dopey / Monte (Joker Finish)! (2x)',
+    winTitleStreakJoker: (n: number) => `👑 Golden (${n}th Win Streak + Joker)! (3x)`,
+    winTitleStreak: (n: number) => `🔥 Dopey / Monte (${n} Win Streak)! (2x)`,
     winTitleNormal: '🎉 Congratulations! You Won!',
-    loseTitle: (w: string) => `😔 ${w} won this round!`,
+    loseTitle: (w: string, mult?: number) =>
+      mult && mult >= 3
+        ? `😔 ${w} won Golden (3x)!`
+        : mult === 2
+        ? `😔 ${w} won Dopey / Monte (2x)!`
+        : `😔 ${w} won this round!`,
     notifyYourTurnFull: 'Your turn! (90s timer + 30s warning)',
     notifyOppMelded: (name: string, pts: number) => `${name} melded ${pts} points!`,
     notifyAlreadyDiscarded: '🚫 You already discarded this turn!',
@@ -2041,8 +2101,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   onRecordWalletTx,
 }) => {
   const t = RAMINO_T[language] || RAMINO_T.am;
-  // Navigation Flow: 1. Lobby -> (Optional Waiting) -> 2. Dealer Cut Ceremony -> 3. Game
-  const [view, setView] = useState<'lobby' | 'waiting' | 'ceremony' | 'game'>('lobby');
+  // Navigation Flow: 1. Lobby -> (Optional Waiting) -> 2. Dealer Cut Ceremony -> 3. Game / PostDay Seat Pick
+  const [view, setView] = useState<'lobby' | 'waiting' | 'ceremony' | 'postday_pick' | 'game'>('lobby');
   useEffect(() => {
     applyTelegramSwipeLock();
     scrollAppToTop();
@@ -2131,7 +2191,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   }, []);
 
   useEffect(() => {
-    if (view === 'game' || view === 'ceremony') {
+    if (view === 'game' || view === 'ceremony' || view === 'postday_pick') {
       if (typeof screen !== 'undefined' && 'orientation' in screen && (screen.orientation as any)?.lock) {
         try {
           (screen.orientation as any).lock('landscape').catch(() => {});
@@ -2140,7 +2200,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }
   }, [view]);
 
-  const shouldRotateToLandscape = isPortrait && forceLandscapeRotate && (view === 'game' || view === 'ceremony');
+  const shouldRotateToLandscape =
+    isPortrait && forceLandscapeRotate && (view === 'game' || view === 'ceremony' || view === 'postday_pick');
   const modalMaxHeightPx = shouldRotateToLandscape ? Math.max(220, viewportSize.w - 20) : undefined;
 
   // Player Profile & Balance
@@ -2898,6 +2959,29 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     allAccepted: boolean;
   } | null>(null);
 
+  const [postDaySeatPick, setPostDaySeatPick] = useState<{
+    source: 'header' | 'winner';
+    revealedCount: number;
+    currentPickerIdx: number;
+    currentPickerId: string | null;
+    currentPickerName: string | null;
+    isMyPickTurn: boolean;
+    entries: {
+      id: string;
+      name: string;
+      avatarLetter: string;
+      avatarColor: string;
+      card: PlayingCard;
+      rankOrder: number;
+      pickedSeat: number | null;
+      isSelf?: boolean;
+    }[];
+    chosenSeats: ({ id: string; name: string; avatarLetter: string; avatarColor: string; isSelf?: boolean } | null)[];
+    completed: boolean;
+    prevDealerName?: string;
+    activeTurnOppId?: string | null;
+  } | null>(null);
+
   const [winnerCelebration, setWinnerCelebration] = useState<{
     show: boolean;
     title: string;
@@ -2919,6 +3003,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     streakCount: number;
     winAmount: number;
     rakeAmount: number;
+    lostPenalty?: number;
   } | null>(null);
 
   // Temporary Exit & Rejoin Before Expiry State (supports both Multiplayer Server Tables & Solo/Bot Games)
@@ -3179,7 +3264,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       heldWaitingStakeRef.current = 0;
     }
 
-    // Post Day Request sync
+    // Post Day Request & 1-Card Cut Seat Pick Sync
     if (tbl.postDayRequest) {
       setPostDayRequest({
         requestedBy: String(tbl.postDayRequest.requestedBy || ''),
@@ -3193,9 +3278,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     } else {
       setPostDayRequest(null);
     }
+    setPostDaySeatPick(tbl.postDaySeatPick || null);
 
-    // Winner celebration + idempotent payout crediting
-    if (tbl.winnerCelebration && tbl.winnerCelebration.show) {
+    // Winner celebration + idempotent payout & 2x/3x loss penalty debiting
+    if (tbl.winnerCelebration && tbl.winnerCelebration.show && tbl.phase !== 'postday_pick') {
       isMinimizedToLobbyRef.current = false;
       setResumableMpSession(null);
       try {
@@ -3209,7 +3295,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       );
       let resolvedTitle = t.winTitleNormal;
       if (!isMe) {
-        resolvedTitle = t.loseTitle(String(wc.winnerName || 'Opponent'));
+        resolvedTitle = t.loseTitle(String(wc.winnerName || 'Opponent'), totalMult);
       } else if (wc.titleKey === 'bottom_dopey_joker') {
         resolvedTitle = t.winBottomJokerDopey(String(wc.bottomCardStr || '🃏').slice(-1));
       } else if (wc.titleKey === 'bottom_dopey') {
@@ -3228,6 +3314,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         resolvedTitle = t.winTitleStreak(Number(wc.streakCount || 3));
       }
 
+      const rawPenalty =
+        !isMe && totalMult > 1 ? Number(wc.loserExtraPenalty ?? stk * (totalMult - 1)) : 0;
+      const appliedPenalty =
+        !isMe && rawPenalty > 0 ? Math.min(balanceRef.current, Number(rawPenalty.toFixed(2))) : 0;
+
       setWinnerCelebration({
         show: true,
         title: resolvedTitle,
@@ -3241,6 +3332,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         streakCount: Number(wc.streakCount || 0),
         winAmount: isMe ? Number(wc.winAmount || 0) : 0,
         rakeAmount: Number(wc.rakeAmount || 0),
+        lostPenalty: appliedPenalty,
       });
 
       if (wc.roundKey && creditedRoundKeyRef.current !== wc.roundKey) {
@@ -3250,6 +3342,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           adjustWalletBalance(Number(wc.winAmount || 0), `Ramino Win (${totalMult}x)`);
         } else {
           raminoAudio.playBuzzer();
+          if (appliedPenalty > 0) {
+            adjustWalletBalance(
+              -appliedPenalty,
+              totalMult >= 3
+                ? `Ramino ጎልደን 3x Loss (-${appliedPenalty} ETB)`
+                : `Ramino ዶፔይ/ሞንቴ 2x Loss (-${appliedPenalty} ETB)`
+            );
+          }
         }
       }
     } else {
@@ -3349,6 +3449,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         );
       } catch {}
       setView('ceremony');
+    } else if (tbl.phase === 'postday_pick') {
+      setIsPrivateModalOpen(false);
+      setIsJoinCodeModalOpen(false);
+      setWinnerCelebration(null);
+      setResumableMpSession(null);
+      setView('postday_pick');
     } else if (tbl.phase === 'game' || tbl.phase === 'finished') {
       setIsPrivateModalOpen(false);
       setIsJoinCodeModalOpen(false);
@@ -3455,6 +3561,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     lastProcessedEventIdRef.current = 0;
     setWinnerCelebration(null);
     setPostDayRequest(null);
+    setPostDaySeatPick(null);
     setIsBannedModalOpen(false);
     setView('lobby');
     fetchServerOpenRooms();
@@ -4158,7 +4265,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const dealRoundWithDealer = (dealerName: string) => {
     clearLocalSuspendedGame();
     localGameEpochRef.current += 1;
-    const deckCount: 1 | 2 = playerSeatCount === 2 ? 1 : 2;
+    // Always deal from 2 full decks (108 cards) so identical paired cards (ጥንድ ካርታ) can be dealt cleanly for 2–5 players
+    const deckCount: 1 | 2 = 2;
     const shuffled = buildShuffledDeck(deckCount);
 
     const dealerOppIdx = tableSeatOrderRef.current
@@ -4481,67 +4589,284 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     return pool;
   };
 
-  // Post Day Handler (Available in Private Tables after 5+ games: reassigns all players into new seats)
-  const buildShuffledSeatOrder = () => {
-    const activeCount = Math.max(1, playerSeatCount - 1);
-    const currentActive = [...tableSeatOrderRef.current.slice(0, activeCount)];
-    const rest = [...tableSeatOrderRef.current.slice(activeCount)];
-    if (currentActive.length >= 2) {
-      const prevSig = currentActive.map((p) => p.id).join(',');
-      for (let attempt = 0; attempt < 6; attempt++) {
-        for (let i = currentActive.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [currentActive[i], currentActive[j]] = [currentActive[j], currentActive[i]];
+  // Post Day 1-Card Cut & Sequential Seat Selection (Available in Private Tables after 5+ games)
+  const applyAcceptedPostDay = (source: 'header' | 'winner') => {
+    const cutDeck = buildShuffledDeck(1).filter((c) => !c.isJoker);
+    const usedRanks = new Set<string>();
+    const pickUniqueCut = () => {
+      for (const c of cutDeck) {
+        if (!usedRanks.has(c.rank)) {
+          usedRanks.add(c.rank);
+          return c;
         }
-        if (currentActive.map((p) => p.id).join(',') !== prevSig) break;
       }
-    }
-    const nextOrder = [...currentActive, ...rest];
-    tableSeatOrderRef.current = nextOrder;
-    setTableSeatOrder(nextOrder);
-    return nextOrder;
+      return cutDeck[0];
+    };
+
+    const activeOpps = opponentsRef.current.slice(0, playerSeatCount - 1);
+    const rawEntries = [
+      {
+        id: 'self',
+        name: playerName,
+        avatarLetter: playerName[0]?.toUpperCase() || 'P',
+        avatarColor: 'bg-amber-400',
+        card: pickUniqueCut(),
+        rankOrder: 0,
+        pickedSeat: null as number | null,
+        isSelf: true,
+      },
+      ...activeOpps.map((o) => ({
+        id: o.id,
+        name: o.name,
+        avatarLetter: o.avatarLetter,
+        avatarColor: o.avatarColor,
+        card: pickUniqueCut(),
+        rankOrder: 0,
+        pickedSeat: null as number | null,
+        isSelf: false,
+      })),
+    ];
+
+    rawEntries.sort((a, b) => (CUT_RANK_ORDER[b.card.rank] || 0) - (CUT_RANK_ORDER[a.card.rank] || 0));
+    rawEntries.forEach((e, idx) => {
+      e.rankOrder = idx + 1;
+    });
+
+    const activeTurnOppId = source === 'header' && currentTurn > 0 ? opponentsRef.current[currentTurn - 1]?.id || null : null;
+    const prevDealerName = winnerCelebration?.winnerName || ceremonyDealer;
+
+    setPostDayRequest(null);
+    setWinnerCelebration(null);
+    setPostDaySeatPick({
+      source,
+      revealedCount: 0,
+      currentPickerIdx: 0,
+      currentPickerId: rawEntries[0]?.id || null,
+      currentPickerName: rawEntries[0]?.name || null,
+      isMyPickTurn: false,
+      entries: rawEntries,
+      chosenSeats: Array.from({ length: rawEntries.length }, () => null),
+      completed: false,
+      prevDealerName,
+      activeTurnOppId,
+    });
+    setView('postday_pick');
+    raminoAudio.playSwap();
   };
 
-  const applyAcceptedPostDay = (source: 'header' | 'winner') => {
-    const nextOrder = buildShuffledSeatOrder();
-    if (source === 'header') {
-      const activeOppId = currentTurn > 0 ? opponentsRef.current[currentTurn - 1]?.id : null;
-      const byId = new Map(opponentsRef.current.map((o) => [o.id, o]));
-      const reorderedOpps = nextOrder
-        .slice(0, playerSeatCount - 1)
-        .map((profile) => byId.get(profile.id))
-        .filter((o): o is RaminoOpponent => Boolean(o));
-
-      if (reorderedOpps.length === opponentsRef.current.length) {
-        opponentsRef.current = reorderedOpps;
-        setOpponents(reorderedOpps);
-        if (activeOppId) {
-          const newIdx = reorderedOpps.findIndex((o) => o.id === activeOppId);
-          if (newIdx !== -1) setCurrentTurn(newIdx + 1);
-        }
+  const applyLocalChosenPostDaySeats = (
+    pickSnap: NonNullable<typeof postDaySeatPick>
+  ) => {
+    const seats = pickSnap.chosenSeats;
+    const selfSeatIdx = seats.findIndex((s) => s?.id === 'self');
+    const n = seats.length;
+    const orderedOppsFromSelf: RaminoOpponent[] = [];
+    const oppById = new Map(opponentsRef.current.map((o) => [o.id, o]));
+    for (let step = 1; step < n; step++) {
+      const seatOccupant = seats[(Math.max(0, selfSeatIdx) + step) % n];
+      if (seatOccupant && seatOccupant.id !== 'self') {
+        const oppObj = oppById.get(seatOccupant.id);
+        if (oppObj) orderedOppsFromSelf.push(oppObj);
       }
     }
+
+    if (orderedOppsFromSelf.length === opponentsRef.current.length) {
+      opponentsRef.current = orderedOppsFromSelf;
+      setOpponents(orderedOppsFromSelf);
+      const activeSeats = orderedOppsFromSelf.map((o) => ({
+        id: o.id,
+        name: o.name,
+        avatarLetter: o.avatarLetter,
+        avatarColor: o.avatarColor,
+      }));
+      const activeIds = new Set(activeSeats.map((a) => a.id));
+      const rest = tableSeatOrderRef.current.filter((p) => !activeIds.has(p.id));
+      const nextSeatOrder = [...activeSeats, ...rest];
+      tableSeatOrderRef.current = nextSeatOrder;
+      setTableSeatOrder(nextSeatOrder);
+
+      if (pickSnap.source === 'header' && pickSnap.activeTurnOppId) {
+        const newIdx = orderedOppsFromSelf.findIndex((o) => o.id === pickSnap.activeTurnOppId);
+        if (newIdx !== -1) setCurrentTurn(newIdx + 1);
+      }
+    }
+
     privateRoundCountRef.current = 1;
     setPrivateRoundCount(1);
     raminoAudio.playVictory();
     triggerNotification(t.notifyPostDayApplied);
 
-    if (source === 'winner' && winnerCelebration) {
-      if (balance < selectedStake) {
-        raminoAudio.playBuzzer();
-        triggerNotification(t.notifyInsufficientNext);
-        return;
+    setTimeout(() => {
+      setPostDaySeatPick(null);
+      if (pickSnap.source === 'winner') {
+        const dealer = pickSnap.prevDealerName || playerName;
+        if (balanceRef.current < selectedStake) {
+          raminoAudio.playBuzzer();
+          triggerNotification(t.notifyInsufficientNext);
+          setView('lobby');
+          return;
+        }
+        adjustWalletBalance(-selectedStake, `Ramino Round (${selectedStake} ETB)`);
+        dealRoundWithDealer(dealer);
+      } else {
+        setView('game');
       }
-      adjustWalletBalance(-selectedStake, `Ramino Round (${selectedStake} ETB)`);
-      const dealer = winnerCelebration.winnerName;
-      setPostDayRequest(null);
-      dealRoundWithDealer(dealer);
-    } else {
-      setTimeout(() => {
-        setPostDayRequest(null);
-      }, 950);
+    }, 1050);
+  };
+
+  const handlePostDaySeatClick = (seatIndex: number) => {
+    if (activeMultiplayerRoomCode) {
+      void sendRaminoGameAction('postday_pick_seat', { seatIndex });
+      return;
+    }
+    if (!postDaySeatPick || postDaySeatPick.completed) return;
+    if (postDaySeatPick.revealedCount < postDaySeatPick.entries.length) return;
+    const activeEntry = postDaySeatPick.entries[postDaySeatPick.currentPickerIdx];
+    if (!activeEntry || activeEntry.id !== 'self') return;
+    if (postDaySeatPick.chosenSeats[seatIndex] !== null) return;
+
+    raminoAudio.playCardSnap();
+    const nextChosen = [...postDaySeatPick.chosenSeats];
+    nextChosen[seatIndex] = {
+      id: activeEntry.id,
+      name: activeEntry.name,
+      avatarLetter: activeEntry.avatarLetter,
+      avatarColor: activeEntry.avatarColor,
+      isSelf: true,
+    };
+    const nextEntries = postDaySeatPick.entries.map((e, i) =>
+      i === postDaySeatPick.currentPickerIdx ? { ...e, pickedSeat: seatIndex } : e
+    );
+    let nextPickerIdx = postDaySeatPick.currentPickerIdx + 1;
+
+    if (nextPickerIdx === nextEntries.length - 1) {
+      const lastEntry = nextEntries[nextPickerIdx];
+      const remIdx = nextChosen.findIndex((s) => s === null);
+      if (lastEntry && remIdx !== -1) {
+        nextChosen[remIdx] = {
+          id: lastEntry.id,
+          name: lastEntry.name,
+          avatarLetter: lastEntry.avatarLetter,
+          avatarColor: lastEntry.avatarColor,
+          isSelf: lastEntry.isSelf,
+        };
+        nextEntries[nextPickerIdx] = { ...lastEntry, pickedSeat: remIdx };
+        nextPickerIdx = nextEntries.length;
+      }
+    }
+
+    const done = nextPickerIdx >= nextEntries.length;
+    const nextEntry = !done ? nextEntries[nextPickerIdx] : null;
+    const nextPickState = {
+      ...postDaySeatPick,
+      entries: nextEntries,
+      chosenSeats: nextChosen,
+      currentPickerIdx: nextPickerIdx,
+      currentPickerId: nextEntry?.id || null,
+      currentPickerName: nextEntry?.name || null,
+      isMyPickTurn: Boolean(nextEntry && nextEntry.id === 'self' && !done),
+      completed: done,
+    };
+    setPostDaySeatPick(nextPickState);
+    if (done) {
+      applyLocalChosenPostDaySeats(nextPickState);
     }
   };
+
+  // Solo/Bot Post Day 1-Card Cut Reveal + Sequential Bot Seat Auto-Pick
+  useEffect(() => {
+    if (view !== 'postday_pick' || activeMultiplayerRoomCode || !postDaySeatPick || postDaySeatPick.completed) {
+      return;
+    }
+    const total = postDaySeatPick.entries.length;
+    if (postDaySeatPick.revealedCount < total) {
+      const timer = setTimeout(() => {
+        raminoAudio.playCardSnap();
+        setPostDaySeatPick((prev) => {
+          if (!prev) return prev;
+          const nextRev = prev.revealedCount + 1;
+          const active = prev.entries[prev.currentPickerIdx];
+          return {
+            ...prev,
+            revealedCount: nextRev,
+            isMyPickTurn: nextRev >= total && !prev.completed && active?.id === 'self',
+          };
+        });
+      }, 650);
+      return () => clearTimeout(timer);
+    }
+
+    const active = postDaySeatPick.entries[postDaySeatPick.currentPickerIdx];
+    if (active && active.id !== 'self') {
+      const timer = setTimeout(() => {
+        setPostDaySeatPick((prev) => {
+          if (!prev || prev.completed || prev.revealedCount < prev.entries.length) return prev;
+          const curEntry = prev.entries[prev.currentPickerIdx];
+          if (!curEntry || curEntry.id === 'self') return prev;
+          const openIndices = prev.chosenSeats
+            .map((s, idx) => (s === null ? idx : -1))
+            .filter((idx) => idx !== -1);
+          if (openIndices.length === 0) return prev;
+          const pickSeat = openIndices[Math.floor(Math.random() * openIndices.length)];
+          raminoAudio.playCardSnap();
+
+          const nextChosen = [...prev.chosenSeats];
+          nextChosen[pickSeat] = {
+            id: curEntry.id,
+            name: curEntry.name,
+            avatarLetter: curEntry.avatarLetter,
+            avatarColor: curEntry.avatarColor,
+            isSelf: false,
+          };
+          const nextEntries = prev.entries.map((e, i) =>
+            i === prev.currentPickerIdx ? { ...e, pickedSeat: pickSeat } : e
+          );
+          let nextIdx = prev.currentPickerIdx + 1;
+
+          if (nextIdx === nextEntries.length - 1) {
+            const lastEntry = nextEntries[nextIdx];
+            const remIdx = nextChosen.findIndex((s) => s === null);
+            if (lastEntry && remIdx !== -1) {
+              nextChosen[remIdx] = {
+                id: lastEntry.id,
+                name: lastEntry.name,
+                avatarLetter: lastEntry.avatarLetter,
+                avatarColor: lastEntry.avatarColor,
+                isSelf: lastEntry.isSelf,
+              };
+              nextEntries[nextIdx] = { ...lastEntry, pickedSeat: remIdx };
+              nextIdx = nextEntries.length;
+            }
+          }
+
+          const done = nextIdx >= nextEntries.length;
+          const nextEntry = !done ? nextEntries[nextIdx] : null;
+          const nextState = {
+            ...prev,
+            entries: nextEntries,
+            chosenSeats: nextChosen,
+            currentPickerIdx: nextIdx,
+            currentPickerId: nextEntry?.id || null,
+            currentPickerName: nextEntry?.name || null,
+            isMyPickTurn: Boolean(nextEntry && nextEntry.id === 'self' && !done),
+            completed: done,
+          };
+          if (done) {
+            setTimeout(() => applyLocalChosenPostDaySeats(nextState), 50);
+          }
+          return nextState;
+        });
+      }, 850);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    view,
+    activeMultiplayerRoomCode,
+    postDaySeatPick?.revealedCount,
+    postDaySeatPick?.currentPickerIdx,
+    postDaySeatPick?.completed,
+  ]);
 
   const requestPostDayConsensus = (source: 'header' | 'winner') => {
     if (!isPrivateRoomGame || privateRoundCountRef.current < 5) return;
@@ -5081,23 +5406,51 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         rakeAmount: rake,
       });
     } else {
-      // Loss resets consecutive win streak back to 0!
+      // Loss resets consecutive win streak back to 0 AND deducts 2x (ዶፔይ/ሞንቴ) or 3x (ጎልደን) penalty from wallet!
       winStreakRef.current = 0;
       setWinStreak(0);
+      const isDopeyLoss = dopeyMultiplier >= 2;
+      const isJokerLoss = Boolean(jokerFinish || dopeyMultiplier >= 3);
+      const lossMult =
+        dopeyMultiplier >= 3 || (isDopeyLoss && isJokerLoss)
+          ? 3
+          : isDopeyLoss || isJokerLoss
+          ? 2
+          : 1;
+      const extraPenalty =
+        lossMult > 1
+          ? Math.min(balanceRef.current, Number((selectedStake * (lossMult - 1)).toFixed(2)))
+          : 0;
+      if (extraPenalty > 0) {
+        adjustWalletBalance(
+          -extraPenalty,
+          lossMult >= 3
+            ? `Ramino ጎልደን 3x Loss (-${extraPenalty} ETB)`
+            : `Ramino ዶፔይ/ሞንቴ 2x Loss (-${extraPenalty} ETB)`
+        );
+      }
       raminoAudio.playBuzzer();
       setWinnerCelebration({
         show: true,
-        title: t.loseTitle(winnerName),
+        title: t.loseTitle(winnerName, lossMult),
         winnerId,
         winnerName,
         isOpponentWin: true,
-        finishMode: 'normal',
-        multiplier: 1,
-        dopeyMultiplier: 1,
+        finishMode:
+          lossMult >= 3
+            ? 'dopey_joker'
+            : isDopeyLoss
+            ? 'dopey'
+            : isJokerLoss
+            ? 'joker_finish'
+            : 'normal',
+        multiplier: lossMult,
+        dopeyMultiplier: dopeyMultiplier >= 2 ? dopeyMultiplier : 1,
         streakMultiplier: 1,
         streakCount: 0,
         winAmount: 0,
         rakeAmount: rake,
+        lostPenalty: extraPenalty,
       });
     }
   };
@@ -5142,8 +5495,44 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           }
         }
 
-        // Check if bot holds real valid melds (41+ pts if unmelded, or any valid meld if already melded)
+        // Check if unmelded bot completed Dopey/Monte (5 pairs + 1 Tris) -> 2x ዶፔይ/ሞንቴ or 3x ጎልደን!
         let oppHasMelded = Boolean(latestOpp.hasMelded);
+        if (!oppHasMelded) {
+          const oppDopey = checkDopey(oppHand, undefined, allowSameRankDopey);
+          if (oppDopey.isDopey) {
+            if (oppHand.length === 14) {
+              const dropIdx = oppDopey.isJokerFinished
+                ? oppHand.findIndex(
+                    (c, idx) =>
+                      (c.isJoker || c.rank === 'JOKER') &&
+                      isExact13CardDopey(oppHand.filter((_, i) => i !== idx), allowSameRankDopey)
+                  )
+                : oppHand.findIndex((_, idx) =>
+                    isExact13CardDopey(oppHand.filter((_, i) => i !== idx), allowSameRankDopey)
+                  );
+              if (dropIdx !== -1) {
+                const [dropped] = oppHand.splice(dropIdx, 1);
+                const nextDiscard = [...discardPileRef.current, dropped];
+                discardPileRef.current = nextDiscard;
+                setDiscardPile(nextDiscard);
+              }
+            }
+            const updatedDopeyOpps = opponentsRef.current.map((o, idx) =>
+              idx === oppIdx ? { ...o, hand: oppHand, cardCount: oppHand.length, hasMelded: oppHasMelded } : o
+            );
+            opponentsRef.current = updatedDopeyOpps;
+            setOpponents(updatedDopeyOpps);
+            triggerRoundWin({
+              winnerId: latestOpp.id,
+              winnerName: latestOpp.name,
+              dopeyMultiplier: oppDopey.isJokerFinished ? 3 : 2,
+              jokerFinish: oppDopey.isJokerFinished,
+            });
+            return;
+          }
+        }
+
+        // Check if bot holds real valid melds (41+ pts if unmelded, or any valid meld if already melded)
         const oppEval = partitionValidMelds(oppHand);
         if (oppEval.melds.length > 0 && (oppHasMelded || oppEval.totalPoints >= 41)) {
           const nextS = meldTurnCounterRef.current + 1;
@@ -5177,10 +5566,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         }
 
         // Discard 1 real non-joker card from bot's actual hand (if cards left)
+        let botDiscardedJoker = false;
         if (oppHand.length > 0) {
           const discardIdx = oppHand.findIndex((c) => !c.isJoker);
           const chosenIdx = discardIdx !== -1 ? discardIdx : 0;
           const [botDiscarded] = oppHand.splice(chosenIdx, 1);
+          if (botDiscarded?.isJoker || botDiscarded?.rank === 'JOKER') {
+            botDiscardedJoker = true;
+          }
           const nextDiscard = [...discardPileRef.current, botDiscarded];
           discardPileRef.current = nextDiscard;
           setDiscardPile(nextDiscard);
@@ -5201,6 +5594,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             winnerId: latestOpp.id,
             winnerName: latestOpp.name,
             dopeyMultiplier: 1,
+            jokerFinish: botDiscardedJoker,
           });
           return;
         }
@@ -6053,7 +6447,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                         </h4>
                         <p className="text-[11px] text-yellow-300 font-semibold mt-0.5">
                           {room.stake} {t.currencyUnit} • {room.current}/{room.max} {t.playersWord} •{' '}
-                          {room.max === 2 ? t.oneDeckShort : t.twoDecksShort}
+                          {t.twoDecksShort}
                         </p>
                       </div>
                     </div>
@@ -6109,13 +6503,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 <span>{t.choosePlayersLabel}</span>
               </div>
               <span className="text-[11px] font-bold text-amber-300">
-                {playerSeatCount === 2 ? t.oneDeckDesc : t.twoDecksDesc}
+                {t.twoDecksDesc}
               </span>
             </div>
 
             <div className="grid grid-cols-4 gap-2">
               {([
-                { count: 2 as const, time: '60s', cards: 54 },
+                { count: 2 as const, time: '60s', cards: 108 },
                 { count: 3 as const, time: '180s', cards: 108 },
                 { count: 4 as const, time: '240s', cards: 108 },
                 { count: 5 as const, time: '300s', cards: 108 },
@@ -6386,7 +6780,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 <div className="flex items-center justify-between text-xs font-black text-gray-200">
                   <span>{t.joinedFriendsHeader(waitingRoomPlayers.length, playerSeatCount)}</span>
                   <span className="text-[11px] text-amber-300">
-                    {playerSeatCount === 2 ? t.oneDeckShort : t.twoDecksShort}
+                    {t.twoDecksShort}
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -6602,6 +6996,180 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 {t.ceremonyRevealing(ceremonyRevealedCount, cutParticipants.length)}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          VIEW 2.5: POST DAY 1-CARD CUT & SEQUENTIAL SEAT SELECTION
+         ======================================================== */}
+      {view === 'postday_pick' && postDaySeatPick && (
+        <div className="flex-1 w-full h-full flex flex-col bg-[#080316] relative overflow-hidden">
+          <header className="w-full px-3 py-1 bg-black/85 border-b border-teal-500/25 flex items-center justify-between z-40 shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-xl bg-teal-500/20 border border-teal-400/40 text-teal-200 font-black text-xs flex items-center gap-1">
+                🪑 {t.postDayBtn.replace('🪑 ', '')}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setIsRulesModalOpen(true)}
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 transition cursor-pointer"
+                title={t.rulesTooltip}
+              >
+                <HelpCircle className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsSettingsModalOpen(true)}
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 transition cursor-pointer"
+                title={t.settingsBtn}
+              >
+                <Settings className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </header>
+
+          <div className="flex-1 flex flex-col items-center justify-center p-2.5 sm:p-4 gap-3 overflow-y-auto">
+            <div className="bg-[#120822] border-2 border-teal-400/60 rounded-full px-4 py-1 shadow-2xl flex items-center gap-2">
+              <h2 className="text-xs sm:text-sm font-black text-teal-300 tracking-wide">
+                {t.postDayPickTitle(postDaySeatPick.entries.length)}
+              </h2>
+            </div>
+
+            {/* 1-Card Cut Row Ordered Highest (#1) -> Lowest (#N) */}
+            <div className="flex items-center justify-center gap-2.5 sm:gap-5 flex-wrap">
+              {postDaySeatPick.entries.map((entry, idx) => {
+                const isRed = entry.card.color === 'red';
+                const isOpen = idx < postDaySeatPick.revealedCount;
+                const allOpened = postDaySeatPick.revealedCount >= postDaySeatPick.entries.length;
+                const isPickingNow =
+                  allOpened && !postDaySeatPick.completed && idx === postDaySeatPick.currentPickerIdx;
+                return (
+                  <div
+                    key={entry.id}
+                    className={`flex flex-col items-center gap-1 transition-all duration-300 ${
+                      isPickingNow ? 'scale-110' : entry.pickedSeat !== null ? 'opacity-75' : ''
+                    }`}
+                  >
+                    <span
+                      className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                        isPickingNow
+                          ? 'bg-amber-400 text-slate-950 border-yellow-200 animate-bounce'
+                          : 'bg-black/60 text-teal-200 border-teal-400/30'
+                      }`}
+                    >
+                      #{entry.rankOrder}
+                    </span>
+                    {!isOpen ? (
+                      <div className="w-14 h-20 sm:w-16 sm:h-24 rounded-xl border-2 border-amber-400 bg-gradient-to-br from-[#1b1035] via-[#0e1730] to-[#050814] shadow-xl p-1 flex flex-col items-center justify-center animate-pulse">
+                        <span className="text-xs">☀️</span>
+                        <span className="text-[8px] font-black text-amber-300">SUN</span>
+                      </div>
+                    ) : (
+                      <div
+                        className={`w-14 h-20 sm:w-16 sm:h-24 rounded-xl bg-white p-1.5 shadow-2xl flex flex-col justify-between font-bold ${
+                          isPickingNow
+                            ? 'border-2 border-yellow-400 ring-4 ring-yellow-400/70'
+                            : 'border border-slate-300'
+                        }`}
+                      >
+                        <span className={`text-xs font-black ${isRed ? 'text-red-600' : 'text-slate-950'}`}>
+                          {entry.card.rank}{entry.card.suit}
+                        </span>
+                        <span className={`text-xl sm:text-2xl text-center ${isRed ? 'text-red-600' : 'text-slate-950'}`}>
+                          {entry.card.suit}
+                        </span>
+                        <span className={`text-xs font-black text-right rotate-180 ${isRed ? 'text-red-600' : 'text-slate-950'}`}>
+                          {entry.card.rank}{entry.card.suit}
+                        </span>
+                      </div>
+                    )}
+                    <span className={`text-[11px] font-black max-w-[82px] truncate ${isPickingNow ? 'text-yellow-300' : 'text-gray-200'}`}>
+                      {entry.name}{entry.isSelf ? ` (${t.yoursTag})` : ''}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Active Turn Banner */}
+            {postDaySeatPick.revealedCount < postDaySeatPick.entries.length ? (
+              <div className="text-xs font-bold text-amber-300 animate-pulse">
+                {t.ceremonyRevealing(postDaySeatPick.revealedCount, postDaySeatPick.entries.length)}
+              </div>
+            ) : postDaySeatPick.completed ? (
+              <div className="bg-emerald-500 text-slate-950 font-black px-4 py-1.5 rounded-full text-xs shadow-xl animate-bounce">
+                {t.postDayPickDone}
+              </div>
+            ) : (
+              <div
+                className={`px-4 py-1.5 rounded-full text-xs font-black shadow-xl border ${
+                  postDaySeatPick.isMyPickTurn
+                    ? 'bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 border-yellow-100 animate-pulse'
+                    : 'bg-teal-950/90 text-teal-200 border-teal-400/50'
+                }`}
+              >
+                {postDaySeatPick.isMyPickTurn
+                  ? t.postDayPickYourTurn
+                  : t.postDayPickOtherTurn(postDaySeatPick.currentPickerName || '')}
+              </div>
+            )}
+
+            {/* Table Seats Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5 max-w-2xl w-full pt-1">
+              {postDaySeatPick.chosenSeats.map((occ, seatIdx) => {
+                const canSelect =
+                  postDaySeatPick.isMyPickTurn &&
+                  !postDaySeatPick.completed &&
+                  postDaySeatPick.revealedCount >= postDaySeatPick.entries.length &&
+                  occ === null;
+                return (
+                  <button
+                    key={seatIdx}
+                    type="button"
+                    disabled={!canSelect}
+                    onClick={() => handlePostDaySeatClick(seatIdx)}
+                    className={`p-2.5 rounded-2xl border-2 flex flex-col items-center justify-center gap-1.5 transition shadow-lg ${
+                      occ
+                        ? occ.isSelf
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-100'
+                          : 'bg-emerald-500/15 border-emerald-400/50 text-emerald-100'
+                        : canSelect
+                        ? 'bg-teal-500/20 hover:bg-teal-400/35 border-teal-400 ring-2 ring-teal-300/60 text-white cursor-pointer active:scale-95 animate-pulse'
+                        : 'bg-white/5 border-white/15 text-gray-400 cursor-default'
+                    }`}
+                  >
+                    <span className="text-[10px] font-black uppercase tracking-wider opacity-80">
+                      {t.postDaySeatLabel(seatIdx + 1)}
+                    </span>
+                    {occ ? (
+                      <>
+                        <div
+                          className={`w-8 h-8 rounded-full ${occ.avatarColor || 'bg-amber-400'} text-slate-950 font-black text-xs flex items-center justify-center shadow`}
+                        >
+                          {occ.avatarLetter}
+                        </div>
+                        <span className="text-xs font-black truncate max-w-full">
+                          {occ.name}{occ.isSelf ? ` (${t.yoursTag})` : ''}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <div className="w-8 h-8 rounded-full bg-white/10 border border-dashed border-white/30 flex items-center justify-center text-sm">
+                          🪑
+                        </div>
+                        <span className="text-[11px] font-bold">
+                          {t.postDayPickOpenSeat}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -7839,7 +8407,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       {/* ========================================================
           WINNER CELEBRATION MODAL (Winner Deals Next Round + Dopey & 3+ Streak Multipliers)
          ======================================================== */}
-      {winnerCelebration?.show && (
+      {winnerCelebration?.show && view !== 'postday_pick' && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100000] flex items-center justify-center p-2 sm:p-4 overflow-hidden">
           <div
             style={{ maxHeight: modalMaxHeightPx ? `${modalMaxHeightPx}px` : '88dvh' }}
@@ -7867,33 +8435,27 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 <span>{t.rakeLabel}</span>
                 <span className="font-mono">-{winnerCelebration.rakeAmount.toFixed(1)} {t.currencyUnit}</span>
               </div>
-              {winnerCelebration.dopeyMultiplier > 1 && (
-                <div className="flex justify-between text-amber-300 font-bold">
+              {winnerCelebration.multiplier >= 3 && (
+                <div className="flex justify-between text-yellow-300 font-black">
+                  <span>{t.goldenMultLabel}</span>
+                  <span>3x (ጎልደን)</span>
+                </div>
+              )}
+              {winnerCelebration.multiplier === 2 && (
+                <div className="flex justify-between text-amber-300 font-black">
                   <span>{t.dopeyMultLabel}</span>
-                  <span>{winnerCelebration.dopeyMultiplier}x</span>
-                </div>
-              )}
-              {winnerCelebration.finishMode === 'joker_finish' && (
-                <div className="flex justify-between text-amber-300 font-bold">
-                  <span>{t.jokerFinishMultLabel}</span>
-                  <span>2x</span>
-                </div>
-              )}
-              {winnerCelebration.finishMode === 'streak_joker' && (
-                <div className="flex justify-between text-yellow-300 font-bold">
-                  <span>{t.streakMultLabel(winnerCelebration.streakCount)}</span>
-                  <span>{t.streakTimes(3)}</span>
-                </div>
-              )}
-              {winnerCelebration.finishMode !== 'streak_joker' && winnerCelebration.streakMultiplier > 1 && (
-                <div className="flex justify-between text-emerald-300 font-bold">
-                  <span>{t.streakMultLabel(winnerCelebration.streakCount)}</span>
-                  <span>{t.streakTimes(winnerCelebration.streakMultiplier)}</span>
+                  <span>2x (ዶፔይ / ሞንቴ)</span>
                 </div>
               )}
               {!winnerCelebration.isOpponentWin && winnerCelebration.streakCount > 0 && winnerCelebration.streakCount < 3 && (
                 <div className="text-[10px] text-sky-300 font-bold pt-0.5">
                   {t.streakProgress(winnerCelebration.streakCount)}
+                </div>
+              )}
+              {winnerCelebration.isOpponentWin && (winnerCelebration.lostPenalty ?? 0) > 0 && (
+                <div className="flex justify-between text-rose-400 font-black border-t border-rose-500/20 pt-1.5">
+                  <span>{t.penaltyDeductedLabel}</span>
+                  <span className="font-mono">-{Number(winnerCelebration.lostPenalty).toFixed(1)} {t.currencyUnit}</span>
                 </div>
               )}
               <div className="flex justify-between text-sm font-black text-emerald-400 border-t border-white/10 pt-2">

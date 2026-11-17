@@ -1002,10 +1002,12 @@ export default function App() {
           if (idx !== 0) return u;
           const nextBalance = Math.max(0, Number((u.balance + delta).toFixed(2)));
           const prevWithdrawable = Math.max(0, Math.min(u.balance, Number(u.withdrawableBalance ?? 0)));
+          const lockedBonus = Math.min(nextBalance, Math.max(0, Number(u.nonWithdrawableBonus ?? u.bonusBalance ?? 0)));
+          const maxCashAllowed = Math.max(0, Number((nextBalance - lockedBonus).toFixed(2)));
           const isWinDelta = delta > 0 && !/refund|revert|cancel/i.test(reason || '');
           const nextWithdrawable = isWinDelta
-            ? Math.min(nextBalance, Number((prevWithdrawable + delta).toFixed(2)))
-            : Math.min(nextBalance, prevWithdrawable);
+            ? maxCashAllowed
+            : Math.min(maxCashAllowed, prevWithdrawable);
           return { ...u, balance: nextBalance, withdrawableBalance: nextWithdrawable };
         })
       );
@@ -1039,12 +1041,25 @@ export default function App() {
           }),
         })
           .then((r) => r.json())
-            .then((data) => {
+          .then((data) => {
             if (data?.ok && data.transaction) {
               setSharedTransactions((prev) => {
                 const filtered = prev.filter((t) => t.id !== tempId && t.id !== data.transaction.id);
                 return [data.transaction as TransactionRecord, ...filtered].slice(0, 600);
               });
+            }
+            if (data?.ok && typeof data.withdrawableBalance === 'number') {
+              setSharedUsers((prev) =>
+                prev.map((u, idx) =>
+                  idx === 0
+                    ? {
+                        ...u,
+                        balance: typeof data.balance === 'number' ? data.balance : u.balance,
+                        withdrawableBalance: data.withdrawableBalance,
+                      }
+                    : u
+                )
+              );
             }
             if (data?.ok && data.accountToken && curUser?.phone) {
               saveSignedAccountToken(curUser.phone, data.accountToken);

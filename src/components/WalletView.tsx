@@ -313,7 +313,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
     if (amt > availableWithdrawable) {
       setFeedbackMsg({
         type: 'err',
-        text: `❌ ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም! (ወጪ ሊደረግ የሚችል: ${availableWithdrawable.toFixed(2)} ETB — ገቢ ያደረጉት ብር ጨዋታ አሸንፈው ብቻ ወጪ ይደረጋል)`,
+        text: `❌ ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም! (ወጪ ሊደረግ የሚችል: ${availableWithdrawable.toFixed(2)} ETB — የተሰጠው ቦነስ ለጨዋታ ብቻ ስለሆነ ወጪ አይደረግም)`,
       });
       return;
     }
@@ -404,10 +404,10 @@ export const WalletView: React.FC<WalletViewProps> = ({
               {currentUser.balance.toFixed(2)} <span className="text-lg">ETB</span>
             </div>
             <p className="text-xs mt-1 text-amber-200 font-bold">
-              💸 ወጪ ሊደረግ የሚችል (ከድል): {availableWithdrawable.toFixed(2)} ETB
+              💸 ወጪ ሊደረግ የሚችል: {availableWithdrawable.toFixed(2)} ETB
             </p>
             <p className="text-xs mt-0.5 text-emerald-200 font-semibold">
-              🎁 {t.bonusBalanceLabel}: {currentUser.bonusBalance.toFixed(2)} ETB · 📱 {t.phoneLabel}: {currentUser.phone}
+              🎁 {t.bonusBalanceLabel} (ለጨዋታ ብቻ): {currentUser.bonusBalance.toFixed(2)} ETB · 📱 {t.phoneLabel}: {currentUser.phone}
             </p>
           </div>
 
@@ -1031,7 +1031,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
 
               <div className="rounded-xl px-3.5 py-2.5 bg-amber-500/10 border border-amber-500/35 text-xs flex flex-wrap items-center justify-between gap-2">
                 <span className="font-bold text-amber-300">
-                  💸 ወጪ ሊደረግ የሚችል (ከጨዋታ ድል የተገኘ)፦
+                  💸 ወጪ ሊደረግ የሚችል፦
                 </span>
                 <span className="font-mono-tabular font-black text-amber-300">
                   {availableWithdrawable.toFixed(2)} ETB
@@ -1070,7 +1070,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
                   if (amt > availableWithdrawable) {
                     setFeedbackMsg({
                       type: 'err',
-                      text: `❌ ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም! (ወጪ ሊደረግ የሚችል: ${availableWithdrawable.toFixed(2)} ETB — ገቢ ያደረጉት ብር ጨዋታ አሸንፈው ብቻ ወጪ ይደረጋል)`,
+                      text: `❌ ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም! (ወጪ ሊደረግ የሚችል: ${availableWithdrawable.toFixed(2)} ETB — የተሰጠው ቦነስ ለጨዋታ ብቻ ስለሆነ ወጪ አይደረግም)`,
                     });
                     return;
                   }
