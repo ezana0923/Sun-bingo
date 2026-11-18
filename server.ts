@@ -1612,6 +1612,19 @@ function buildInlineWelcomeMenuKeyboard(appUrl: string, registeredPhone?: string
           web_app: { url: buildWebAppUrl(appUrl, 'hub', registeredPhone) },
         },
       ],
+      [
+        { text: 'Deposit 💵', callback_data: 'menu_deposit' },
+        { text: 'Withdraw 💸', callback_data: 'menu_withdraw' },
+      ],
+      [
+        { text: 'Check Balance 💰', callback_data: 'menu_balance' },
+        { text: 'Transfer 🔄', callback_data: 'menu_transfer' },
+      ],
+      [
+        { text: 'Invite Friends 👥', callback_data: 'menu_invite' },
+        { text: 'Game Rules 📖', callback_data: 'menu_rules' },
+      ],
+      [{ text: 'Support 📞', callback_data: 'menu_support' }],
     ],
   };
 }
@@ -1774,11 +1787,9 @@ function escapeTelegramMarkdown(val: string): string {
   return String(val || '').replace(/([_*`\[\]])/g, '\\$1');
 }
 
-function buildWelcomeMessageText(firstName = 'Player', registeredPhone?: string, has15Bonus = false) {
+function buildWelcomeMessageText(firstName = 'Player', registeredPhone?: string, _has15Bonus = false) {
   const player = registeredPhone ? playersByPhone.get(registeredPhone) : undefined;
   const cashBal = player ? player.balance : 15.0;
-  const withdrawableBal = player ? getWithdrawableBalance(player) : 0;
-  const bonusBal = player ? player.bonusBalance : 15.0;
   const safeName = escapeTelegramMarkdown(firstName || 'Player');
   const safePhone = registeredPhone ? escapeTelegramMarkdown(registeredPhone) : '';
 
@@ -1786,22 +1797,14 @@ function buildWelcomeMessageText(firstName = 'Player', registeredPhone?: string,
     ? `✅ የተመዘገበ ስልክ፦ *${safePhone}*\n`
     : `📱 *ለመመዝገብ ስልክ ቁጥርዎን ያጋሩ (09********)*\n`;
 
-  const bonusTotal = has15Bonus
-    ? `${bonusBal.toFixed(2)} ETB (+15 ETB Welcome Bonus!)`
-    : `${bonusBal.toFixed(2)} ETB`;
-  const depBonusPct = getActiveDepositBonusPct();
-
   return (
     `☀️ *እንኳን ወደ SUN GAMES በደህና መጡ!*\n` +
     `*(Welcome to SUN GAMES — Live Bingo, Keno & Ramino)*\n\n` +
     `👋 ሰላም *${safeName}*!\n` +
     phoneNotice +
     `\n💰 ጠቅላላ ዋሌት፦ *${cashBal.toFixed(2)} ETB*\n` +
-    `💸 ወጪ ሊደረግ የሚችል፦ *${withdrawableBal.toFixed(2)} ETB*\n` +
-    `🎁 ቦነስ ሂሳብ (ለጨዋታ ብቻ)፦ *${bonusTotal}*\n` +
-    (depBonusPct > 0 ? `🎉 *አሁን ሲያስገቡ +${depBonusPct}% ተጨማሪ ገቢ ቦነስ!*\n` : '') +
     `\n⚡ ፈጣን ገቢ እና ወጪ በ Telebirr, CBE, Abyssinia እና M-Pesa\n` +
-    `👇 ጨዋታ ለመጀመር ከታች ያለውን **🎮 Play SUN GAMES** ቁልፍ ይጫኑ፦`
+    `👇 ከታች ካሉት አዝራሮች አንዱን ይምረጡ ወይም **🎮 Play SUN GAMES** ይጫኑ፦`
   );
 }
 
@@ -11136,6 +11139,7 @@ async function startServer() {
                 type: 'ramino:voice:peers',
                 roomCode,
                 peers: existingPeers,
+                voiceAccessKey: expectedKey || undefined,
               })
             );
           }
@@ -11165,7 +11169,13 @@ async function startServer() {
         } else if (msg.type === 'ramino:voice:audio') {
           const sender = raminoVoicePeers.get(ws);
           if (!sender) return;
-          if (typeof msg.iv !== 'string' || typeof msg.data !== 'string' || msg.data.length === 0 || msg.data.length > 48000) {
+          const encMode = msg.enc === 'xor' ? 'xor' : 'aes';
+          if (
+            typeof msg.data !== 'string' ||
+            msg.data.length === 0 ||
+            msg.data.length > 64000 ||
+            (encMode === 'aes' && typeof msg.iv !== 'string')
+          ) {
             return;
           }
           const audioFwd = JSON.stringify({
@@ -11173,7 +11183,8 @@ async function startServer() {
             roomCode: sender.roomCode,
             fromPeerId: sender.peerId,
             playerName: sender.playerName,
-            iv: msg.iv,
+            enc: encMode,
+            iv: typeof msg.iv === 'string' ? msg.iv : '',
             data: msg.data,
           });
           for (const [peerWs, meta] of raminoVoicePeers.entries()) {

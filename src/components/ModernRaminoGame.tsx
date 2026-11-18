@@ -2248,11 +2248,16 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const activeVoiceRoomCodeRef = useRef<string | null>(null);
   const localMicStreamRef = useRef<MediaStream | null>(null);
   const micCaptureCtxRef = useRef<AudioContext | null>(null);
+  const micSourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const micSilentGainRef = useRef<GainNode | null>(null);
   const playbackAudioCtxRef = useRef<AudioContext | null>(null);
+  const playbackCompressorRef = useRef<DynamicsCompressorNode | null>(null);
   const peerPlaybackMapRef = useRef<Map<string, { nextPlayTime: number; gainNode: GainNode }>>(new Map());
   const voiceAesKeyRef = useRef<CryptoKey | null>(null);
+  const voiceAesKeySecretRef = useRef<string>('');
+  const voiceTxQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const voiceTxPendingCountRef = useRef<number>(0);
   const pttReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMicMutedRef = useRef(isMicMuted);
   isMicMutedRef.current = isMicMuted;
@@ -2263,19 +2268,54 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const playerNameRef = useRef(playerName);
   playerNameRef.current = playerName;
 
+  const syncVoiceAccessKey = (rawKey?: string | null) => {
+    const k = String(rawKey || '').trim();
+    if (!k) return;
+    if (voiceAccessKeyRef.current !== k) {
+      voiceAccessKeyRef.current = k;
+      voiceAesKeyRef.current = null;
+      voiceAesKeySecretRef.current = '';
+      setVoiceAccessKey(k);
+    }
+  };
+
+  const xorVoiceBytes = (bytes: Uint8Array, secret: string): Uint8Array => {
+    const out = new Uint8Array(bytes.length);
+    const keyStr = secret || 'SUN_RAMINO_VOICE_FALLBACK';
+    let h = 2166136261;
+    for (let i = 0; i < keyStr.length; i++) {
+      h ^= keyStr.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    for (let i = 0; i < bytes.length; i++) {
+      h ^= i & 0xff;
+      h = Math.imul(h, 16777619);
+      const mask = ((h >>> 24) ^ (h >>> 16) ^ (h >>> 8) ^ keyStr.charCodeAt(i % keyStr.length)) & 0xff;
+      out[i] = bytes[i] ^ mask;
+    }
+    return out;
+  };
+
   const deriveVoiceAesKey = async (roomCode: string, accessKey: string): Promise<CryptoKey | null> => {
     try {
       if (typeof window === 'undefined' || !window.crypto?.subtle) return null;
+      const secretId = `${roomCode}:${accessKey || roomCode}`;
+      if (voiceAesKeyRef.current && voiceAesKeySecretRef.current === secretId) {
+        return voiceAesKeyRef.current;
+      }
       const enc = new TextEncoder();
       const material = enc.encode(`SUN_RAMINO_VOICE_E2EE_V1:${roomCode}:${accessKey || roomCode}`);
       const digest = await window.crypto.subtle.digest('SHA-256', material);
-      return await window.crypto.subtle.importKey(
+      const imported = await window.crypto.subtle.importKey(
         'raw',
         digest,
         { name: 'AES-GCM' },
         false,
         ['encrypt', 'decrypt']
       );
+      voiceAesKeyRef.current = imported;
+      voiceAesKeySecretRef.current = secretId;
+      return imported;
     } catch {
       return null;
     }
@@ -2300,10 +2340,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   };
 
   const downsampleFloat32ToInt16 = (input: Float32Array, inputRate: number, targetRate = 16000): Int16Array => {
+    const preamp = 1.55;
     if (inputRate <= targetRate) {
       const out = new Int16Array(input.length);
       for (let i = 0; i < input.length; i++) {
-        const s = Math.max(-1, Math.min(1, input[i]));
+        const s = Math.max(-1, Math.min(1, input[i] * preamp));
         out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
       }
       return out;
@@ -2321,7 +2362,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         accum += input[i];
         count++;
       }
-      const avg = count > 0 ? accum / count : 0;
+      const avg = (count > 0 ? accum / count : 0) * preamp;
       const clamped = Math.max(-1, Math.min(1, avg));
       out[offsetResult] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
       offsetResult++;
@@ -2338,8 +2379,22 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!AudioCtx) return null;
       if (!playbackAudioCtxRef.current || playbackAudioCtxRef.current.state === 'closed') {
-        playbackAudioCtxRef.current = new AudioCtx({ latencyHint: 'interactive' });
+        const ctx = new AudioCtx({ latencyHint: 'interactive' });
+        playbackAudioCtxRef.current = ctx;
+        playbackCompressorRef.current = null;
         peerPlaybackMapRef.current.clear();
+        try {
+          const comp = ctx.createDynamicsCompressor();
+          comp.threshold.value = -22;
+          comp.knee.value = 18;
+          comp.ratio.value = 6;
+          comp.attack.value = 0.005;
+          comp.release.value = 0.15;
+          comp.connect(ctx.destination);
+          playbackCompressorRef.current = comp;
+        } catch {
+          playbackCompressorRef.current = null;
+        }
       }
       if (playbackAudioCtxRef.current.state === 'suspended') {
         playbackAudioCtxRef.current.resume().catch(() => {});
@@ -2352,7 +2407,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   const applyRemoteAudioVolumes = () => {
     const shouldDuck = !isMicMutedRef.current && isLocalSpeakingRef.current;
-    const targetVol = shouldDuck ? 0.28 : 0.95;
+    const targetVol = shouldDuck ? 0.35 : 1.35;
     const ctx = playbackAudioCtxRef.current;
     peerPlaybackMapRef.current.forEach((slot, peerId) => {
       const peerMuted = Boolean(mutedPeerIdsRef.current[peerId]);
@@ -2373,6 +2428,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     if (pttReleaseTimerRef.current) {
       clearTimeout(pttReleaseTimerRef.current);
       pttReleaseTimerRef.current = null;
+    }
+    if (micSourceNodeRef.current) {
+      try {
+        micSourceNodeRef.current.disconnect();
+      } catch {}
+      micSourceNodeRef.current = null;
     }
     if (micProcessorRef.current) {
       try {
@@ -2402,6 +2463,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       localMicStreamRef.current = null;
     }
     peerPlaybackMapRef.current.clear();
+    if (playbackCompressorRef.current) {
+      try {
+        playbackCompressorRef.current.disconnect();
+      } catch {}
+      playbackCompressorRef.current = null;
+    }
     if (playbackAudioCtxRef.current) {
       try {
         playbackAudioCtxRef.current.close();
@@ -2421,6 +2488,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     voiceJoinedRef.current = false;
     activeVoiceRoomCodeRef.current = null;
     voiceAesKeyRef.current = null;
+    voiceAesKeySecretRef.current = '';
+    voiceTxPendingCountRef.current = 0;
     setIsLocalSpeaking(false);
     setIsPushToTalkActive(false);
     setSpeakingOpponentId(null);
@@ -2509,9 +2578,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           const ctx = new AudioCtx({ latencyHint: 'interactive' });
           micCaptureCtxRef.current = ctx;
           if (ctx.state === 'suspended') {
-            ctx.resume().catch(() => {});
+            await ctx.resume().catch(() => {});
           }
           const src = ctx.createMediaStreamSource(stream);
+          micSourceNodeRef.current = src;
           const processor = ctx.createScriptProcessor(2048, 1, 1);
           const silentGain = ctx.createGain();
           silentGain.gain.value = 0;
@@ -2546,14 +2616,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             }
             const rms = Math.sqrt(sumSq / inputData.length);
             const now = Date.now();
-            if (rms > 0.015) {
-              speakingHoldUntil = now + 280;
+            if (rms > 0.004) {
+              speakingHoldUntil = now + 320;
             }
-            if (rms > 0.006) {
-              txHoldUntil = now + 320;
+            if (rms > 0.00035) {
+              txHoldUntil = now + 650;
             }
 
-            const speakingNow = rms > 0.015 || now < speakingHoldUntil;
+            const speakingNow = rms > 0.004 || now < speakingHoldUntil;
             if (speakingNow !== prevSpeaking) {
               prevSpeaking = speakingNow;
               setIsLocalSpeaking(speakingNow);
@@ -2564,45 +2634,69 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               }
             }
 
-            const shouldTransmit = rms > 0.006 || now < txHoldUntil;
+            const shouldTransmit = rms > 0.00035 || now < txHoldUntil;
             const roomCode = activeVoiceRoomCodeRef.current || activePrivateRoomCodeRef.current?.trim().toUpperCase();
-            if (!shouldTransmit || !roomCode || !voiceJoinedRef.current) return;
+            if (!shouldTransmit || !roomCode) return;
             if (gameWsRef.current?.readyState !== WebSocket.OPEN) return;
+            if (!voiceJoinedRef.current) {
+              sendVoiceJoinOnSharedWs(roomCode);
+            }
+            if (voiceTxPendingCountRef.current > 3) return;
 
             const pcm16 = downsampleFloat32ToInt16(inputData, ctx.sampleRate, 16000);
             const rawBytes = new Uint8Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength);
+            voiceTxPendingCountRef.current += 1;
 
-            const sendEncrypted = async () => {
-              let aesKey = voiceAesKeyRef.current;
-              if (!aesKey) {
-                aesKey = await deriveVoiceAesKey(roomCode, voiceAccessKeyRef.current || '');
-                voiceAesKeyRef.current = aesKey;
-              }
-              if (!aesKey || gameWsRef.current?.readyState !== WebSocket.OPEN) return;
-              const iv = window.crypto.getRandomValues(new Uint8Array(12));
-              const cipherBuf = await window.crypto.subtle.encrypt(
-                { name: 'AES-GCM', iv: iv as BufferSource },
-                aesKey,
-                rawBytes as BufferSource
-              );
-              if (gameWsRef.current?.readyState === WebSocket.OPEN) {
-                gameWsRef.current.send(
-                  JSON.stringify({
-                    type: 'ramino:voice:audio',
-                    roomCode,
-                    iv: uint8ToBase64(iv),
-                    data: uint8ToBase64(new Uint8Array(cipherBuf)),
-                  })
-                );
-              }
-            };
-            void sendEncrypted();
+            voiceTxQueueRef.current = voiceTxQueueRef.current
+              .then(async () => {
+                if (gameWsRef.current?.readyState !== WebSocket.OPEN) return;
+                const accessSecret = voiceAccessKeyRef.current || '';
+                const aesKey = await deriveVoiceAesKey(roomCode, accessSecret);
+                if (aesKey && typeof window !== 'undefined' && window.crypto?.subtle) {
+                  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+                  const cipherBuf = await window.crypto.subtle.encrypt(
+                    { name: 'AES-GCM', iv: iv as BufferSource },
+                    aesKey,
+                    rawBytes as BufferSource
+                  );
+                  if (gameWsRef.current?.readyState === WebSocket.OPEN) {
+                    gameWsRef.current.send(
+                      JSON.stringify({
+                        type: 'ramino:voice:audio',
+                        roomCode,
+                        enc: 'aes',
+                        iv: uint8ToBase64(iv),
+                        data: uint8ToBase64(new Uint8Array(cipherBuf)),
+                      })
+                    );
+                  }
+                } else {
+                  const masked = xorVoiceBytes(rawBytes, `${roomCode}:${accessSecret}`);
+                  if (gameWsRef.current?.readyState === WebSocket.OPEN) {
+                    gameWsRef.current.send(
+                      JSON.stringify({
+                        type: 'ramino:voice:audio',
+                        roomCode,
+                        enc: 'xor',
+                        iv: '',
+                        data: uint8ToBase64(masked),
+                      })
+                    );
+                  }
+                }
+              })
+              .catch(() => {})
+              .finally(() => {
+                voiceTxPendingCountRef.current = Math.max(0, voiceTxPendingCountRef.current - 1);
+              });
           };
 
           src.connect(processor);
           processor.connect(silentGain);
           silentGain.connect(ctx.destination);
         }
+      } else if (micCaptureCtxRef.current && micCaptureCtxRef.current.state === 'suspended') {
+        await micCaptureCtxRef.current.resume().catch(() => {});
       }
 
       stream.getAudioTracks().forEach((t) => {
@@ -2713,8 +2807,19 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       const sessionPeerId = myVoicePeerIdRef.current;
 
       if (msg.type === 'ramino:voice:error') {
+        const activeR = activeVoiceRoomCodeRef.current || activePrivateRoomCodeRef.current?.trim().toUpperCase();
+        if (activeR && gameWsRef.current?.readyState === WebSocket.OPEN) {
+          setTimeout(() => {
+            if (inPrivateVoiceArenaRef.current) {
+              sendVoiceJoinOnSharedWs(activeR);
+            }
+          }, 700);
+        }
         return;
       } else if (msg.type === 'ramino:voice:peers' && Array.isArray(msg.peers)) {
+        if (typeof msg.voiceAccessKey === 'string' && msg.voiceAccessKey.trim()) {
+          syncVoiceAccessKey(msg.voiceAccessKey);
+        }
         const nextPeers = (msg.peers as { peerId: string; playerName: string; isMuted?: boolean }[])
           .filter((p) => p?.peerId && p.peerId !== sessionPeerId)
           .map((p) => ({
@@ -2752,35 +2857,43 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         const fromPeerId = String(msg.fromPeerId || '');
         if (!fromPeerId || fromPeerId === sessionPeerId) return;
         if (isDeafenedRef.current || Boolean(mutedPeerIdsRef.current[fromPeerId])) return;
-        if (typeof msg.iv !== 'string' || typeof msg.data !== 'string') return;
+        if (typeof msg.data !== 'string' || !msg.data) return;
 
-        let aesKey = voiceAesKeyRef.current;
-        if (!aesKey) {
-          aesKey = await deriveVoiceAesKey(activeRoom, voiceAccessKeyRef.current || '');
-          voiceAesKeyRef.current = aesKey;
+        const accessSecret = voiceAccessKeyRef.current || '';
+        let plainBuf: ArrayBuffer;
+        if (msg.enc === 'xor') {
+          const cipherBytes = base64ToUint8(msg.data);
+          const unmasked = xorVoiceBytes(cipherBytes, `${activeRoom}:${accessSecret}`);
+          plainBuf = unmasked.buffer.slice(unmasked.byteOffset, unmasked.byteOffset + unmasked.byteLength) as ArrayBuffer;
+        } else {
+          if (typeof msg.iv !== 'string' || !msg.iv) return;
+          const aesKey = await deriveVoiceAesKey(activeRoom, accessSecret);
+          if (!aesKey) return;
+          const ivBytes = base64ToUint8(msg.iv);
+          const cipherBytes = base64ToUint8(msg.data);
+          plainBuf = await window.crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: ivBytes as BufferSource },
+            aesKey,
+            cipherBytes as BufferSource
+          );
         }
-        if (!aesKey) return;
-
-        const ivBytes = base64ToUint8(msg.iv);
-        const cipherBytes = base64ToUint8(msg.data);
-        const plainBuf = await window.crypto.subtle.decrypt(
-          { name: 'AES-GCM', iv: ivBytes as BufferSource },
-          aesKey,
-          cipherBytes as BufferSource
-        );
+        if (plainBuf.byteLength < 2) return;
         const int16 = new Int16Array(plainBuf);
         if (int16.length === 0) return;
 
         const ctx = ensurePlaybackAudioCtx();
         if (!ctx) return;
+        if (ctx.state === 'suspended') {
+          await ctx.resume().catch(() => {});
+        }
 
         let slot = peerPlaybackMapRef.current.get(fromPeerId);
         if (!slot) {
           const gainNode = ctx.createGain();
           const shouldDuck = !isMicMutedRef.current && isLocalSpeakingRef.current;
-          gainNode.gain.value = isDeafenedRef.current || mutedPeerIdsRef.current[fromPeerId] ? 0 : shouldDuck ? 0.28 : 0.95;
-          gainNode.connect(ctx.destination);
-          slot = { nextPlayTime: ctx.currentTime + 0.045, gainNode };
+          gainNode.gain.value = isDeafenedRef.current || mutedPeerIdsRef.current[fromPeerId] ? 0 : shouldDuck ? 0.35 : 1.35;
+          gainNode.connect(playbackCompressorRef.current || ctx.destination);
+          slot = { nextPlayTime: ctx.currentTime + 0.055, gainNode };
           peerPlaybackMapRef.current.set(fromPeerId, slot);
         }
 
@@ -2791,8 +2904,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         }
 
         const nowTime = ctx.currentTime;
-        if (slot.nextPlayTime < nowTime + 0.015 || slot.nextPlayTime > nowTime + 0.28) {
-          slot.nextPlayTime = nowTime + 0.045;
+        if (slot.nextPlayTime < nowTime || slot.nextPlayTime > nowTime + 0.45) {
+          slot.nextPlayTime = nowTime + 0.055;
         }
         const source = ctx.createBufferSource();
         source.buffer = audioBuf;
@@ -2890,19 +3003,41 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     const roomCode = activePrivateRoomCode.trim().toUpperCase();
     activeVoiceRoomCodeRef.current = roomCode;
 
-    void deriveVoiceAesKey(roomCode, voiceAccessKeyRef.current || '').then((k) => {
-      if (activeVoiceRoomCodeRef.current === roomCode) {
-        voiceAesKeyRef.current = k;
-      }
-    });
-
+    void deriveVoiceAesKey(roomCode, voiceAccessKeyRef.current || '');
     sendVoiceJoinOnSharedWs(roomCode);
 
+    // Unlock listener AudioContext immediately on ANY user gesture inside the private arena
+    const handleUnlockGesture = () => {
+      unlockRemoteAudioElements();
+    };
+    window.addEventListener('pointerdown', handleUnlockGesture, { passive: true });
+    window.addEventListener('touchstart', handleUnlockGesture, { passive: true });
+    window.addEventListener('click', handleUnlockGesture, { passive: true });
+
+    // Retry voice join shortly in case shared WS was still opening
+    const joinRetryTimer = window.setTimeout(() => {
+      if (inPrivateVoiceArenaRef.current && !voiceJoinedRef.current && gameWsRef.current?.readyState === WebSocket.OPEN) {
+        sendVoiceJoinOnSharedWs(roomCode);
+      }
+    }, 600);
+
     return () => {
+      window.clearTimeout(joinRetryTimer);
+      window.removeEventListener('pointerdown', handleUnlockGesture);
+      window.removeEventListener('touchstart', handleUnlockGesture);
+      window.removeEventListener('click', handleUnlockGesture);
       stopVoiceChatSession();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inPrivateVoiceArena, activePrivateRoomCode]);
+
+  useEffect(() => {
+    if (!inPrivateVoiceArena || !activePrivateRoomCode || !voiceAccessKey) return;
+    const roomCode = activePrivateRoomCode.trim().toUpperCase();
+    void deriveVoiceAesKey(roomCode, voiceAccessKey);
+    sendVoiceJoinOnSharedWs(roomCode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceAccessKey]);
 
   // Lobby Rooms State (Synchronized live across all connected players via /api/ramino/rooms + WS)
   const [openRooms, setOpenRooms] = useState<RaminoRoom[]>([]);
@@ -3181,9 +3316,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     setPlayerSeatCount(seats);
     setIsPrivateRoomGame(Boolean(tbl.isPrivate));
     if (tbl.voiceAccessKey) {
-      const k = String(tbl.voiceAccessKey);
-      voiceAccessKeyRef.current = k;
-      setVoiceAccessKey(k);
+      syncVoiceAccessKey(tbl.voiceAccessKey);
     }
     if (tbl.isPrivate && tbl.roomCode) {
       setActivePrivateRoomCode(String(tbl.roomCode));
@@ -3958,9 +4091,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       const data = await res.json();
       if (data?.ok && data.room) {
         if (data.room.voiceAccessKey) {
-          const k = String(data.room.voiceAccessKey);
-          voiceAccessKeyRef.current = k;
-          setVoiceAccessKey(k);
+          syncVoiceAccessKey(data.room.voiceAccessKey);
         }
         saveLocalPrivateRoom(data.room);
         setPrivateRoomState(data.room);
@@ -4038,9 +4169,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               const stData = await stRes.json();
               if (stData?.ok && stData.table) {
                 if (stData.table.voiceAccessKey) {
-                  const vk = String(stData.table.voiceAccessKey);
-                  voiceAccessKeyRef.current = vk;
-                  setVoiceAccessKey(vk);
+                  syncVoiceAccessKey(stData.table.voiceAccessKey);
                 }
                 applyServerTableSnapshotRef.current(stData.table);
               }
@@ -8220,6 +8349,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
             <button
               onClick={async () => {
+                unlockRemoteAudioElements();
                 const cleanCode = privateCode.trim().toUpperCase();
                 const targetStake = Math.max(10, privateStake);
                 if (balance < targetStake) {
@@ -8323,6 +8453,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
             <button
               onClick={async () => {
+                unlockRemoteAudioElements();
                 const cleanCode = joinCodeInput.trim().toUpperCase();
                 if (!cleanCode) {
                   raminoAudio.playBuzzer();
@@ -8374,9 +8505,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   }
                   const resolvedVoiceKey = data.room?.voiceAccessKey || data.table?.voiceAccessKey;
                   if (resolvedVoiceKey) {
-                    const vk = String(resolvedVoiceKey);
-                    voiceAccessKeyRef.current = vk;
-                    setVoiceAccessKey(vk);
+                    syncVoiceAccessKey(resolvedVoiceKey);
                   }
                   saveLocalPrivateRoom(data.room);
                   heldWaitingStakeRef.current = targetStake;
