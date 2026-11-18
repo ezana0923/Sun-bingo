@@ -417,7 +417,7 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
   const [isRolling, setIsRolling] = useState<boolean>(false);
   const [hasRolledThisTurn, setHasRolledThisTurn] = useState<boolean>(false);
   const [statusBanner, setStatusBanner] = useState<string>(
-    '«ቅዳሜ Games — የሉዶ ማስተር» — ተጫዋቾች ብቻ የሚጫወቱበት ትክክለኛ የሉዶ ውድድር!'
+    '«SUN Games — የሉዶ ማስተር» — ተጫዋቾች ብቻ የሚጫወቱበት ትክክለኛ የሉዶ ውድድር!'
   );
 
   // Winner & Final Standings State (1st place ends game immediately; 2nd, 3rd, 4th ranked)
@@ -593,7 +593,7 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
 
     onAdjustBalance(
       -stakeBirr,
-      `ቅዳሜ Games — የሉዶ ማስተር መደብ (${playerCount} ተጫዋቾች · 👑 ${kingGoal} ካስ)`
+      `SUN Games — የሉዶ ማስተር መደብ (${playerCount} ተጫዋቾች · 👑 ${kingGoal} ካስ)`
     );
 
     const colors = getActiveColorsForCount(playerCount);
@@ -654,7 +654,7 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
 
     onAdjustBalance(
       -room.stakeBirr,
-      `ቅዳሜ LUDO — ክፍል #${room.code} ተቀላቅለዋል (${room.hostName} · ${room.stakeBirr} ETB)`
+      `SUN LUDO — ክፍል #${room.code} ተቀላቅለዋል (${room.hostName} · ${room.stakeBirr} ETB)`
     );
 
     const initialTokens: LudoToken[] = [];
@@ -890,7 +890,7 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-extrabold border border-slate-700 cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>{subScreen !== 'home' ? 'ወደ ሉዶ መነሻ' : 'ወደ ቅዳሜ Games'}</span>
+            <span>{subScreen !== 'home' ? 'ወደ ሉዶ መነሻ' : 'ወደ SUN Games'}</span>
           </button>
 
           <div className="flex items-center gap-3">
@@ -900,7 +900,7 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="px-2 py-0.5 rounded-md bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-400 text-slate-950 text-[10px] font-black uppercase tracking-wider shadow-sm">
-                  ቅዳሜ LUDO
+                  SUN LUDO
                 </span>
                 <span className="text-[11px] text-emerald-400 font-extrabold flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
@@ -908,7 +908,7 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
                 </span>
               </div>
               <h1 className="text-base sm:text-xl font-black tracking-tight text-white flex items-center gap-2 mt-0.5">
-                <span>ቅዳሜ Games — የሉዶ ማስተር</span>
+                <span>SUN Games — የሉዶ ማስተር</span>
               </h1>
               <p className="text-[11px] sm:text-xs text-amber-400 font-bold">
                 ትክክለኛ ተጫዋቾች ብቻ · 20 ሰከንድ ቆጣሪ · በብር (ETB) የሚካሄድ ውድድር · ቦቶች የሉም
@@ -976,7 +976,7 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <div>
                   <h2 className="text-lg sm:text-xl font-black text-white">
-                    ቅዳሜ Games — የሉዶ ማስተር ዋና ማውጫ
+                    SUN Games — የሉዶ ማስተር ዋና ማውጫ
                   </h2>
                   <p className="text-xs text-slate-400">
                     ቦቶች የሉም — ከ2 እስከ 4 ትክክለኛ ተጫዋቾች በ20 ሰከንድ ቆጣሪ ይጫወታሉ
@@ -1227,7 +1227,7 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-black uppercase tracking-wider">
-                      ቅዳሜ LUDO LIVE
+                      SUN LUDO LIVE
                     </span>
                     <span className="text-xs text-emerald-400 font-bold flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
@@ -1385,7 +1385,7 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="px-2 py-0.5 rounded bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 text-[10px] font-black uppercase">
-                  ቅዳሜ LUDO
+                  SUN LUDO
                 </span>
                 <span className="text-xs text-emerald-400 font-bold">ኦፊሴላዊ የክፍሎች ዝርዝር</span>
               </div>
@@ -2234,7 +2234,7 @@ export const LudoMasterGame: React.FC<LudoMasterGameProps> = ({
         <div className="rounded-2xl border border-slate-800 bg-[#091428] p-6 space-y-5 shadow-2xl">
           <h2 className="text-xl font-black text-white flex items-center gap-2">
             <Trophy className="w-5 h-5 text-amber-400" />
-            <span>🏆 የ«ቅዳሜ Games — የሉዶ ማስተር» ከፍተኛ አሸናፊዎች ደረጃ ሰንጠረዥ</span>
+            <span>🏆 የ«SUN Games — የሉዶ ማስተር» ከፍተኛ አሸናፊዎች ደረጃ ሰንጠረዥ</span>
           </h2>
 
           <div className="space-y-2.5">

@@ -19,6 +19,9 @@ import {
   subscribeGameNotifications,
   getSignedAccountToken,
   saveSignedAccountToken,
+  recoverSignedAccountTokenFromCloudStorage,
+  saveLocalTransactionsCache,
+  getLocalTransactionsCache,
   getLocalWalletBalanceByPhone,
   saveLocalWalletBalanceByPhone,
 } from './utils/realtimeRoomClient';
@@ -56,8 +59,9 @@ import {
   Home,
   Edit3,
   Check,
+  History,
+  Plus,
 } from 'lucide-react';
-import homePromoBannerImg from './assets/images/home_promo_banner_1794572556701.jpg';
 import gameTileLudoImg from './assets/images/game_tile_ludo_1794572556916.jpg';
 import gameTileBingoImg from './assets/images/game_tile_bingo_1794572557520.jpg';
 import liyuBingoTileImg from './assets/images/liyu_bingo_tile_1794575305419.jpg';
@@ -143,7 +147,7 @@ const HUB_T: Record<
     walletSummary: (bal, bonus) => `ዋሌት ${bal} ብር • ቦነስ ${bonus} ብር`,
     languageSection: 'ቋንቋ',
     logout: 'ውጣ',
-    chooseGameTitle: 'ጨዋታ ይምረጡ',
+    chooseGameTitle: 'የጨዋታ ምድቦች',
     chooseGameSubtitle: 'የሚፈልጉትን ጨዋታ ነክተው አሁን ይጀምሩ',
     soonBadge: 'በቅርቡ',
     soonNotice: (title) => `⏳ ${title} በቅርብ ቀን ሲጠናቀቅ ይለቀቃል!`,
@@ -159,10 +163,10 @@ const HUB_T: Record<
     noVisibleGames: 'ለጊዜው የሚታዩ ጨዋታዎች የሉም፤ የጥገና ስራ ላይ ነን።',
     defaultSlides: [
       {
-        badge: 'ዋና ማዕከል',
+        badge: 'የዕድል ሳጥን',
         title: 'ሁሉንም ጨዋታዎች በአንድ ቦታ',
-        subtitle: 'ዕድልዎን ዛሬ ይሞክሩ! ፈጣን ድል እና ታላቅ ሽልማት።',
-        cta: 'አሁን ይጫወቱ →',
+        subtitle: 'ፈጣን ድል 2x • ልዩ ሽልማት 3x • የዕድል 5 ጨዋታ ዋሌት ደይ!',
+        cta: 'ራሚኖ እተው →',
         target: 'fast',
       },
       {
@@ -350,7 +354,7 @@ const HUB_T: Record<
     fastTitle: 'Fast Bingo',
     regularTitle: 'Liyu Bingo',
     kenoTitle: 'Keno',
-    raminoTitle: 'Conker Ramino',
+    raminoTitle: 'SUN Ramino',
     damaTitle: 'Dama',
     bannerDefaultBadge: 'Featured',
     bannerDefaultCta: 'Play Now →',
@@ -364,9 +368,9 @@ const HUB_T: Record<
         target: 'fast',
       },
       {
-        badge: 'Conker Ramino',
+        badge: 'SUN Ramino',
         title: 'Private Friend Tables & Live Voice',
-        subtitle: 'Dopey 2x • Joker Dopey 3x • Post Day after 5 rounds!',
+        subtitle: 'Dopey 2x • Golden 3x • Post Day after 5 rounds!',
         cta: 'Enter Ramino →',
         target: 'ramino',
       },
@@ -387,6 +391,107 @@ const HUB_T: Record<
     ],
   },
 };
+
+function SunGamesLogo({ isDark = true }: { isDark?: boolean }) {
+  return (
+    <div className="flex flex-col items-center justify-center select-none">
+      <svg
+        viewBox="0 0 260 112"
+        className="w-44 sm:w-52 h-auto drop-shadow-[0_4px_18px_rgba(34,211,238,0.28)]"
+        aria-label="SUN GAMES"
+      >
+        <defs>
+          <linearGradient id="sgGoldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#FFF3B0" />
+            <stop offset="35%" stopColor="#F5C451" />
+            <stop offset="70%" stopColor="#D4942A" />
+            <stop offset="100%" stopColor="#8C5811" />
+          </linearGradient>
+          <linearGradient id="sgGoldText" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#FFF6C9" />
+            <stop offset="48%" stopColor="#F2C04E" />
+            <stop offset="100%" stopColor="#B87A1E" />
+          </linearGradient>
+          <linearGradient id="sgCyanGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#7DF9FF" />
+            <stop offset="55%" stopColor="#06B6D4" />
+            <stop offset="100%" stopColor="#0E7490" />
+          </linearGradient>
+          <linearGradient id="sgTealSphere" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#0D3B46" />
+            <stop offset="100%" stopColor="#03131A" />
+          </linearGradient>
+          <clipPath id="sgLeftHalf">
+            <rect x="96" y="25" width="34" height="50" />
+          </clipPath>
+          <clipPath id="sgRightHalf">
+            <rect x="130" y="25" width="34" height="50" />
+          </clipPath>
+        </defs>
+
+        {/* 7 Faceted Electric-Cyan Sun Rays */}
+        <g stroke="#67E8F9" strokeWidth="0.7" strokeLinejoin="round">
+          <polygon points="94,45 68,40 89,37" fill="url(#sgCyanGrad)" />
+          <polygon points="98,37 76,22 103,31" fill="url(#sgCyanGrad)" />
+          <polygon points="108,30 96,10 116,27" fill="url(#sgCyanGrad)" />
+          <polygon points="124,26 130,3 136,26" fill="url(#sgCyanGrad)" />
+          <polygon points="144,27 164,10 152,30" fill="url(#sgCyanGrad)" />
+          <polygon points="157,31 184,22 162,37" fill="url(#sgCyanGrad)" />
+          <polygon points="171,37 192,40 166,45" fill="url(#sgCyanGrad)" />
+        </g>
+
+        {/* Outer Glowing Cyan Horizon Ring */}
+        <path
+          d="M 88 53 A 42 42 0 0 1 172 53"
+          fill="none"
+          stroke="#22D3EE"
+          strokeWidth="1.6"
+          opacity="0.85"
+        />
+
+        {/* Sun Sphere: Left Brushed Gold + Right Dark Teal Tech Traces */}
+        <circle cx="130" cy="49" r="22" fill="url(#sgGoldGrad)" clipPath="url(#sgLeftHalf)" />
+        <circle cx="130" cy="49" r="22" fill="url(#sgTealSphere)" clipPath="url(#sgRightHalf)" />
+        <g clipPath="url(#sgRightHalf)" stroke="#22D3EE" strokeWidth="1.25" fill="none" opacity="0.95">
+          <path d="M 130 35 L 138 35 L 143 30" />
+          <path d="M 130 42 L 142 42 L 147 37" />
+          <path d="M 130 49 L 146 49" />
+          <path d="M 130 56 L 139 56 L 144 61" />
+          <circle cx="144" cy="30" r="1.5" fill="#7DF9FF" />
+          <circle cx="148" cy="37" r="1.5" fill="#7DF9FF" />
+          <circle cx="147" cy="49" r="1.5" fill="#7DF9FF" />
+          <circle cx="145" cy="61" r="1.5" fill="#7DF9FF" />
+        </g>
+        <circle cx="130" cy="49" r="22" fill="none" stroke="#F5C451" strokeWidth="1.2" opacity="0.9" />
+
+        {/* Sweeping Horizon Orbital Arc */}
+        <path
+          d="M 55 59 Q 130 43 205 59 Q 130 50 55 59 Z"
+          fill="url(#sgCyanGrad)"
+          opacity="0.92"
+        />
+        <ellipse cx="130" cy="54" rx="58" ry="2.2" fill="#A5F3FC" opacity="0.55" />
+
+        {/* Wordmark: SUN GAMES */}
+        <text
+          x="130"
+          y="96"
+          textAnchor="middle"
+          fontFamily="'Georgia', 'Plus Jakarta Sans', serif"
+          fontWeight="800"
+          fontSize="27"
+          letterSpacing="2"
+          fill={isDark ? 'url(#sgGoldText)' : '#92400E'}
+          stroke={isDark ? '#3B2305' : '#FEF3C7'}
+          strokeWidth="0.9"
+          paintOrder="stroke fill"
+        >
+          SUN GAMES
+        </text>
+      </svg>
+    </div>
+  );
+}
 
 export default function App() {
   const [openSettingsTrigger, setOpenSettingsTrigger] = useState<number>(0);
@@ -475,7 +580,13 @@ export default function App() {
   const [showGameHub, setShowGameHub] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      if (params.has('raminoRoom') || params.get('mode') || params.get('app') || params.get('game')) {
+      const explicitMode = params.get('mode') || params.get('game');
+      if (
+        params.has('raminoRoom') ||
+        params.get('tab') === 'admin' ||
+        params.get('direct') === '1' ||
+        (explicitMode && ['fast', 'regular', 'keno', 'ludo', 'ramino'].includes(explicitMode))
+      ) {
         return false;
       }
     }
@@ -685,7 +796,7 @@ export default function App() {
   const [gameMode, setGameMode] = useState<'fast' | 'regular' | 'keno' | 'ludo' | 'ramino'>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      const mode = params.get('mode') || params.get('app') || params.get('game');
+      const mode = params.get('mode') || params.get('game');
       if (mode === 'ramino' || params.has('raminoRoom')) return 'ramino';
       if (mode === 'keno') return 'keno';
       if (mode === 'ludo') return 'ludo';
@@ -934,7 +1045,12 @@ export default function App() {
     ];
   });
 
-  const [sharedTransactions, setSharedTransactions] = useState<TransactionRecord[]>([]);
+  const [sharedTransactions, setSharedTransactions] = useState<TransactionRecord[]>(() => {
+    if (typeof window !== 'undefined') {
+      return getLocalTransactionsCache() as TransactionRecord[];
+    }
+    return [];
+  });
   const [requireDepositApproval, setRequireDepositApproval] = useState<boolean>(true);
   const [isGlobalWalletOpen, setIsGlobalWalletOpen] = useState<boolean>(false);
   const [globalWalletTab, setGlobalWalletTab] = useState<'deposit' | 'withdraw' | 'transfer' | 'history'>('deposit');
@@ -985,7 +1101,9 @@ export default function App() {
         seen.add(tx.id);
         combined.push(tx);
       }
-      return combined.slice(0, 600);
+      const sliced = combined.slice(0, 600);
+      saveLocalTransactionsCache(sliced);
+      return sliced;
     });
   }, []);
 
@@ -995,7 +1113,7 @@ export default function App() {
       const curUser = sharedUsersRef.current[0];
       const tempId = `gtx-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const txType: 'bet' | 'win' = delta < 0 ? 'bet' : 'win';
-      const methodLabel = game === 'keno' ? 'Fast Keno' : 'Conker Ramino';
+      const methodLabel = game === 'keno' ? 'Fast Keno' : 'SUN Ramino';
 
       setSharedUsers((prev) =>
         prev.map((u, idx) => {
@@ -1109,70 +1227,78 @@ export default function App() {
     const clientId = getDeviceClientId();
     const curPhone = sharedUsersRef.current[0]?.phone || '';
     const curName = sharedUsersRef.current[0]?.name || 'Sun Player';
-    const accountToken = curPhone ? getSignedAccountToken(curPhone) : '';
     const phoneParam = encodeURIComponent(curPhone);
     const nameParam = encodeURIComponent(curName);
+    let isCancelled = false;
 
-    if (curPhone && accountToken) {
-      fetch(buildApiUrl('/api/auth/restore-session'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: curPhone,
-          name: curName,
-          accountToken,
-        }),
-      })
-        .then((r) => r.json())
-        .then((res) => {
-          if (res?.ok && res.player) {
-            if (res.accountToken) {
-              saveSignedAccountToken(res.player.phone, res.accountToken);
-            }
-            saveDevicePlayerIdentity(res.player.name, res.player.phone);
-            if (typeof res.player.balance === 'number') {
-              saveLocalWalletBalanceByPhone(res.player.phone, res.player.balance);
-            }
-            setSharedUsers((prev) =>
-              prev.map((u, idx) =>
-                idx === 0
-                  ? {
-                      ...u,
-                      name: res.player.name || u.name,
-                      phone: res.player.phone || u.phone,
-                      balance:
-                        typeof res.player.balance === 'number' ? res.player.balance : u.balance,
-                      withdrawableBalance:
-                        typeof res.player.withdrawableBalance === 'number'
-                          ? res.player.withdrawableBalance
-                          : u.withdrawableBalance,
-                      bonusBalance:
-                        typeof res.player.bonusBalance === 'number'
-                          ? res.player.bonusBalance
-                          : u.bonusBalance,
-                      isBlocked: !!res.player.isBlocked,
-                    }
-                  : u
-              )
-            );
-          }
-        })
-        .catch(() => {});
-    }
-
-    fetch(
-      buildApiUrl(
-        `/api/live-room/state?mode=fast&phone=${phoneParam}&name=${nameParam}&clientId=${encodeURIComponent(
-          clientId
-        )}${accountToken ? `&accountToken=${encodeURIComponent(accountToken)}` : ''}`
-      ),
-      {
-        headers: accountToken ? { 'x-account-token': accountToken } : undefined,
+    const runInitialSync = async () => {
+      let accountToken = curPhone ? getSignedAccountToken(curPhone) : '';
+      if (!accountToken && curPhone) {
+        accountToken = await recoverSignedAccountTokenFromCloudStorage(curPhone);
       }
-    )
-      .then((r) => r.json())
-      .then((data) => {
-        if (!data?.ok) return;
+      if (isCancelled) return;
+
+      if (curPhone && accountToken) {
+        fetch(buildApiUrl('/api/auth/restore-session'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phone: curPhone,
+            name: curName,
+            accountToken,
+          }),
+        })
+          .then((r) => r.json())
+          .then((res) => {
+            if (isCancelled) return;
+            if (res?.ok && res.player) {
+              if (res.accountToken) {
+                saveSignedAccountToken(res.player.phone, res.accountToken);
+              }
+              saveDevicePlayerIdentity(res.player.name, res.player.phone);
+              if (typeof res.player.balance === 'number') {
+                saveLocalWalletBalanceByPhone(res.player.phone, res.player.balance);
+              }
+              setSharedUsers((prev) =>
+                prev.map((u, idx) =>
+                  idx === 0
+                    ? {
+                        ...u,
+                        name: res.player.name || u.name,
+                        phone: res.player.phone || u.phone,
+                        balance:
+                          typeof res.player.balance === 'number' ? res.player.balance : u.balance,
+                        withdrawableBalance:
+                          typeof res.player.withdrawableBalance === 'number'
+                            ? res.player.withdrawableBalance
+                            : u.withdrawableBalance,
+                        bonusBalance:
+                          typeof res.player.bonusBalance === 'number'
+                            ? res.player.bonusBalance
+                            : u.bonusBalance,
+                        isBlocked: !!res.player.isBlocked,
+                      }
+                    : u
+                )
+              );
+            }
+          })
+          .catch(() => {});
+      }
+
+      fetch(
+        buildApiUrl(
+          `/api/live-room/state?mode=fast&phone=${phoneParam}&name=${nameParam}&clientId=${encodeURIComponent(
+            clientId
+          )}${accountToken ? `&accountToken=${encodeURIComponent(accountToken)}` : ''}`
+        ),
+        {
+          headers: accountToken ? { 'x-account-token': accountToken } : undefined,
+        }
+      )
+        .then((r) => r.json())
+        .then((data) => {
+          if (isCancelled || !data?.ok) return;
         if (data.accountToken && data.player?.phone) {
           saveSignedAccountToken(data.player.phone, data.accountToken);
         }
@@ -1245,6 +1371,9 @@ export default function App() {
         }
       })
       .catch(() => {});
+    };
+
+    void runInitialSync();
 
     const unsubscribe = subscribeRealtimeRoomSync((msg) => {
       if (typeof msg?.requireDepositApproval === 'boolean') {
@@ -1318,7 +1447,10 @@ export default function App() {
         });
       }
     });
-    return () => unsubscribe();
+    return () => {
+      isCancelled = true;
+      unsubscribe();
+    };
   }, [isLoggedIn, mergeGlobalTransactions]);
 
   // Report live player presence heartbeat & poll accurate live counts on Home Hub
@@ -1677,7 +1809,7 @@ export default function App() {
                     ? 'text-amber-400 hover:text-amber-200 hover:bg-slate-800/60'
                     : 'text-amber-600 hover:text-amber-900 hover:bg-slate-300/50'
                 }`}
-                title="EZI Ramino (መቀለ ራሚኖ)"
+                title="SUN Ramino (SUN ራሚኖ)"
               >
                 <span className="text-xs">♠</span>
                 <span>Ramino</span>
@@ -1920,50 +2052,75 @@ export default function App() {
             />
           </div>
         ) : showGameHub ? (
-          /* 3. SUN GAMES HOME HUB (Matches dark gaming hub with hero banner + 3-column game cards) */
+          /* 3. SUN GAMES HOME HUB (Redesigned after IMG_3954: Cosmic Midnight-Teal, Gold Crest, Split Hero Card, 2-Column Game Cards & Bottom Bar) */
           <div
-            className={`flex-1 flex flex-col min-h-screen transition-colors ${
-              isDark ? 'bg-[#0B1120] text-slate-100' : 'bg-slate-100 text-slate-900'
+            className={`flex-1 flex flex-col min-h-screen relative overflow-x-hidden transition-colors ${
+              isDark
+                ? 'bg-[radial-gradient(ellipse_at_top,_#0D303A_0%,_#061820_45%,_#030C11_100%)] text-slate-100'
+                : 'bg-gradient-to-b from-slate-100 via-cyan-50/40 to-slate-100 text-slate-900'
             }`}
           >
-            {/* Top Bar */}
+            {/* Subtle Cosmic Starfield Sparkles */}
+            {isDark && (
+              <div className="pointer-events-none fixed inset-0 overflow-hidden z-0">
+                <span className="absolute top-14 left-8 w-1 h-1 rounded-full bg-amber-300/60 shadow-[0_0_6px_#FCD34D]" />
+                <span className="absolute top-28 right-10 w-1 h-1 rounded-full bg-cyan-300/60 shadow-[0_0_6px_#67E8F9]" />
+                <span className="absolute top-52 left-1/4 w-0.5 h-0.5 rounded-full bg-amber-200/50" />
+                <span className="absolute top-72 right-6 w-1 h-1 rounded-full bg-amber-400/50 shadow-[0_0_6px_#F59E0B]" />
+                <span className="absolute bottom-40 left-6 w-1 h-1 rounded-full bg-cyan-400/40" />
+              </div>
+            )}
+
+            {/* Top Bar: Coins + Balance + "+" on Left | Gold Hamburger on Right */}
             <header
-              className={`sticky top-0 z-40 px-4 py-3 flex items-center justify-between border-b backdrop-blur-md ${
-                isDark
-                  ? 'bg-[#0B1120]/95 border-slate-800/80'
-                  : 'bg-white/95 border-slate-200'
+              className={`sticky top-0 z-40 px-3.5 sm:px-5 pt-3 pb-2 flex items-center justify-between backdrop-blur-md ${
+                isDark ? 'bg-[#05151C]/80' : 'bg-white/90 border-b border-slate-200'
               }`}
             >
-              {/* Left: Wallet Balance -> Opens Unified Global Wallet */}
-              <button
-                type="button"
-                onClick={() => openGlobalWallet('deposit')}
-                className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-sm font-extrabold tabular-nums transition-all cursor-pointer active:scale-95 ${
-                  isDark
-                    ? 'bg-slate-900/90 hover:bg-slate-800 border-slate-700/80 text-white'
-                    : 'bg-slate-50 hover:bg-slate-100 border-slate-300 text-slate-900'
-                }`}
-                title={tHub.walletTitle}
-              >
-                <Wallet className="w-4 h-4 text-sky-400 shrink-0" />
-                <span>{Math.floor(sharedUsers[0]?.balance ?? 500)}</span>
-              </button>
+              {/* Left: Stacked Coins + Balance Pill + "+" Deposit Trigger */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => openGlobalWallet('deposit')}
+                  className={`group flex items-center gap-2 pl-1.5 pr-1.5 py-1 rounded-full border transition-all cursor-pointer active:scale-95 shadow-lg ${
+                    isDark
+                      ? 'bg-[#081D26]/95 border-cyan-400/35 hover:border-amber-400/70 text-white shadow-black/40'
+                      : 'bg-white border-amber-400/60 hover:border-amber-500 text-slate-900 shadow-slate-200'
+                  }`}
+                  title={tHub.walletTitle}
+                >
+                  {/* Gold Coin Stack SVG */}
+                  <svg viewBox="0 0 36 36" className="w-7 h-7 shrink-0 drop-shadow-[0_2px_4px_rgba(245,158,11,0.5)]">
+                    <ellipse cx="14" cy="27" rx="9" ry="3.5" fill="#B45309" />
+                    <ellipse cx="14" cy="25" rx="9" ry="3.5" fill="#F59E0B" stroke="#FEF08A" strokeWidth="0.7" />
+                    <ellipse cx="14" cy="21" rx="9" ry="3.5" fill="#B45309" />
+                    <ellipse cx="14" cy="19" rx="9" ry="3.5" fill="#FBBF24" stroke="#FEF08A" strokeWidth="0.7" />
+                    <ellipse cx="14" cy="15" rx="9" ry="3.5" fill="#B45309" />
+                    <ellipse cx="14" cy="13" rx="9" ry="3.5" fill="#FDE047" stroke="#FFFBEB" strokeWidth="0.8" />
+                    <ellipse cx="24" cy="28" rx="7" ry="2.8" fill="#B45309" />
+                    <ellipse cx="24" cy="26" rx="7" ry="2.8" fill="#FBBF24" stroke="#FEF08A" strokeWidth="0.7" />
+                    <ellipse cx="24" cy="22" rx="7" ry="2.8" fill="#FDE047" stroke="#FFFBEB" strokeWidth="0.7" />
+                  </svg>
 
-              {/* Center: Two-Tone Wordmark */}
-              <div className="font-black text-lg sm:text-xl tracking-wider flex items-center gap-1 select-none whitespace-nowrap">
-                <span className="text-amber-400">SUN</span>
-                <span className="text-sky-400">GAMES</span>
+                  <span className="text-sm sm:text-base font-black tabular-nums tracking-tight px-1">
+                    {Math.floor(sharedUsers[0]?.balance ?? 0)}
+                  </span>
+
+                  <span className="w-6 h-6 rounded-full bg-gradient-to-b from-amber-300 via-amber-500 to-amber-700 text-slate-950 flex items-center justify-center border border-amber-200/80 shadow-[0_0_10px_rgba(245,158,11,0.55)] group-hover:scale-105 transition-transform">
+                    <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                  </span>
+                </button>
               </div>
 
-              {/* Right: Menu Drawer (Notifications / Bell inside Menu; No direct Admin shortcut) */}
+              {/* Right: Gold Hamburger Menu Drawer */}
               <div className="flex items-center gap-2 relative" ref={hubMenuRef}>
                 <button
                   type="button"
                   onClick={() => setHubMenuOpen((prev) => !prev)}
-                  className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                  className={`p-2 rounded-xl border transition-all cursor-pointer active:scale-95 ${
                     isDark
-                      ? 'text-slate-200 hover:text-amber-400 hover:bg-slate-800/70'
-                      : 'text-slate-800 hover:bg-slate-200'
+                      ? 'bg-[#081D26]/90 border-amber-400/35 text-amber-300 hover:border-amber-400 hover:bg-[#0D2B36]'
+                      : 'bg-slate-100 border-slate-300 text-amber-700 hover:bg-slate-200'
                   }`}
                   aria-label="Menu"
                 >
@@ -1974,14 +2131,14 @@ export default function App() {
                   <div
                     className={`absolute right-0 top-12 w-64 rounded-2xl border shadow-2xl p-2.5 z-50 space-y-2 ${
                       isDark
-                        ? 'bg-[#11192E] border-slate-700/80 text-slate-100'
+                        ? 'bg-[#081D26] border-cyan-500/35 text-slate-100 shadow-black/80'
                         : 'bg-white border-slate-200 text-slate-900'
                     }`}
                   >
                     <div
                       className={`px-3 py-2 rounded-xl text-xs border space-y-2 ${
                         isDark
-                          ? 'bg-slate-900/80 border-slate-800 text-slate-300'
+                          ? 'bg-[#051218] border-cyan-500/20 text-slate-300'
                           : 'bg-slate-50 border-slate-200 text-slate-700'
                       }`}
                     >
@@ -2000,7 +2157,7 @@ export default function App() {
                           }}
                           className={`px-2 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 cursor-pointer transition-colors ${
                             isDark
-                              ? 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700'
+                              ? 'bg-[#0D2B36] hover:bg-[#123947] text-amber-300 border border-cyan-500/30'
                               : 'bg-white hover:bg-slate-100 text-amber-700 border border-slate-300'
                           }`}
                           title="ስም አስተካክል"
@@ -2011,7 +2168,7 @@ export default function App() {
                       </div>
 
                       {isEditingHubName && (
-                        <div className="flex items-center gap-1.5 pt-1 border-t border-slate-700/40">
+                        <div className="flex items-center gap-1.5 pt-1 border-t border-cyan-500/20">
                           <input
                             type="text"
                             value={hubNameDraft}
@@ -2023,7 +2180,7 @@ export default function App() {
                             placeholder="አዲስ ስም ያስገቡ..."
                             className={`flex-1 min-w-0 px-2 py-1 rounded-lg text-xs border outline-none ${
                               isDark
-                                ? 'bg-slate-950 border-slate-700 text-white focus:border-amber-400'
+                                ? 'bg-[#030D12] border-cyan-500/30 text-white focus:border-amber-400'
                                 : 'bg-white border-slate-300 text-slate-900 focus:border-amber-500'
                             }`}
                           />
@@ -2047,7 +2204,7 @@ export default function App() {
                         setHubNotice(
                           tHub.helloPlayer(
                             sharedUsers[0]?.name || 'Sun Player',
-                            Math.floor(sharedUsers[0]?.balance ?? 500),
+                            Math.floor(sharedUsers[0]?.balance ?? 0),
                             Math.floor(sharedUsers[0]?.bonusBalance ?? 0)
                           )
                         );
@@ -2064,7 +2221,7 @@ export default function App() {
                         <div className="font-black">{tHub.notificationsTitle}</div>
                         <div className="text-[11px] opacity-80">
                           {tHub.walletSummary(
-                            Math.floor(sharedUsers[0]?.balance ?? 500),
+                            Math.floor(sharedUsers[0]?.balance ?? 0),
                             Math.floor(sharedUsers[0]?.bonusBalance ?? 0)
                           )}
                         </div>
@@ -2087,7 +2244,7 @@ export default function App() {
                             language === l.code
                               ? 'bg-amber-500 text-slate-950 font-black'
                               : isDark
-                              ? 'hover:bg-slate-800 text-slate-300'
+                              ? 'hover:bg-[#0E2F3B] text-slate-300'
                               : 'hover:bg-slate-100 text-slate-700'
                           }`}
                         >
@@ -2103,7 +2260,7 @@ export default function App() {
                         setHubMenuOpen(false);
                       }}
                       className={`w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between cursor-pointer transition-colors ${
-                        isDark ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-800'
+                        isDark ? 'hover:bg-[#0E2F3B] text-slate-200' : 'hover:bg-slate-100 text-slate-800'
                       }`}
                     >
                       <span>{isDark ? tHub.lightTheme : tHub.darkTheme}</span>
@@ -2130,23 +2287,42 @@ export default function App() {
               </div>
             </header>
 
-            <main className="w-full max-w-2xl mx-auto px-3.5 sm:px-5 pt-4 pb-10 space-y-5">
+            <main className="relative z-10 w-full max-w-2xl mx-auto px-3.5 sm:px-5 pt-1 pb-24 space-y-4">
+              {/* Centered Brand Crest + Metallic Gold Section Title */}
+              <div className="flex flex-col items-center text-center space-y-1">
+                <SunGamesLogo isDark={isDark} />
+                <h1
+                  className={`text-xl sm:text-2xl font-black tracking-wide drop-shadow ${
+                    isDark
+                      ? 'bg-gradient-to-b from-amber-100 via-amber-300 to-amber-500 bg-clip-text text-transparent'
+                      : 'text-amber-700'
+                  }`}
+                >
+                  {tHub.chooseGameTitle}
+                </h1>
+              </div>
+
               {/* Inline Status Notice (for Bell / Soon games) */}
               {hubNotice && (
-                <div className="px-4 py-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs sm:text-sm font-bold text-center">
+                <div className="px-4 py-2.5 rounded-xl bg-amber-500/15 border border-amber-400/50 text-amber-300 text-xs sm:text-sm font-bold text-center shadow-lg">
                   {hubNotice}
                 </div>
               )}
 
-              {/* Hero Promotional Carousel Banner (Synced with Admin Ads Creator) */}
+              {/* Split Featured Hero Carousel Card (Synced with Admin Ads Creator) */}
               {(() => {
+                const totalOnline =
+                  liveGameCounts.fast +
+                  liveGameCounts.regular +
+                  liveGameCounts.keno +
+                  liveGameCounts.ramino;
                 const carouselSlides: {
                   id: string;
                   badge: string;
                   title: string;
                   subtitle: string;
                   cta: string;
-                  imageUrl: string;
+                  imageUrl?: string;
                   target: 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none';
                 }[] =
                   activeAdminAds.length > 0
@@ -2156,8 +2332,14 @@ export default function App() {
                         title: ad.title,
                         subtitle: ad.subtitle,
                         cta: ad.ctaText || tHub.bannerDefaultCta,
-                        imageUrl: ad.imageUrl || homePromoBannerImg,
-                        target: (ad.targetGame || 'fast') as 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none',
+                        imageUrl: ad.imageUrl || undefined,
+                        target: (ad.targetGame || 'fast') as
+                          | 'fast'
+                          | 'regular'
+                          | 'keno'
+                          | 'ramino'
+                          | 'ludo'
+                          | 'none',
                       }))
                     : tHub.defaultSlides.map((s, idx) => ({
                         id: `default_${idx}`,
@@ -2165,7 +2347,7 @@ export default function App() {
                         title: s.title,
                         subtitle: s.subtitle,
                         cta: s.cta,
-                        imageUrl: homePromoBannerImg,
+                        imageUrl: undefined,
                         target: s.target,
                       }));
 
@@ -2173,42 +2355,131 @@ export default function App() {
                 const activeSlide = carouselSlides[safeIndex];
                 return (
                   <div className="space-y-2.5">
-                    <button
-                      type="button"
+                    <div
                       onClick={() => {
                         if (activeSlide.target === 'none') return;
                         handleSwitchMode(activeSlide.target);
                       }}
-                      className="relative w-full aspect-[16/8.2] rounded-2xl overflow-hidden border border-sky-500/30 shadow-xl shadow-black/40 group text-left cursor-pointer block"
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if ((e.key === 'Enter' || e.key === ' ') && activeSlide.target !== 'none') {
+                          handleSwitchMode(activeSlide.target);
+                        }
+                      }}
+                      className={`relative w-full rounded-2xl overflow-hidden border transition-all cursor-pointer group ${
+                        isDark
+                          ? 'bg-gradient-to-br from-[#071D26] via-[#041219] to-[#081F29] border-amber-400/50 shadow-[0_12px_36px_rgba(0,0,0,0.6),inset_0_0_24px_rgba(34,211,238,0.12)]'
+                          : 'bg-gradient-to-br from-slate-900 via-[#08202B] to-slate-900 border-amber-500/60 shadow-xl'
+                      }`}
                     >
-                      <img
-                        src={activeSlide.imageUrl}
-                        alt={activeSlide.title}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover object-center transition-transform duration-500 group-hover:scale-[1.03]"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-r from-[#071124]/92 via-[#071124]/55 to-transparent" />
-                      <div className="absolute inset-0 p-4 sm:p-6 flex flex-col justify-between">
-                        <div className="flex items-center gap-1.5">
-                          <span className="px-2 py-0.5 rounded-full bg-amber-400/20 border border-amber-400/40 text-[10px] sm:text-xs font-black uppercase tracking-wider text-amber-300">
-                            {activeSlide.badge}
-                          </span>
-                        </div>
-                        <div className="max-w-[78%] space-y-1">
-                          <h2 className="text-sm sm:text-xl font-black text-white leading-snug drop-shadow">
-                            {activeSlide.title}
-                          </h2>
-                          <p className="text-[11px] sm:text-xs text-slate-200/90 leading-snug line-clamp-2">
-                            {activeSlide.subtitle}
-                          </p>
-                          <div className="pt-1">
-                            <span className="inline-flex items-center px-3 py-1 rounded-lg bg-amber-400 text-slate-950 text-[11px] sm:text-xs font-black shadow">
+                      {/* Top-Left Crimson Ribbon Badge & Top-Right Green Online Count Pill */}
+                      <div className="flex items-center justify-between px-3 pt-2.5 pb-1">
+                        <span className="px-2.5 py-0.5 rounded-br-xl rounded-tl-md bg-gradient-to-r from-rose-700 via-red-600 to-rose-700 border border-amber-300/60 text-[10px] sm:text-xs font-black text-amber-100 shadow-md">
+                          {activeSlide.badge}
+                        </span>
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-400/50 text-[10px] sm:text-xs font-bold text-emerald-300 tabular-nums shadow">
+                          <User className="w-3 h-3 text-emerald-400" />
+                          <span>{totalOnline}</span>
+                        </span>
+                      </div>
+
+                      {/* Split Content: Left Promo Text + Chest/Coin Artwork + CTA | Right Bingo Card Graphic */}
+                      <div className="px-3.5 sm:px-5 pb-4 pt-1 grid grid-cols-12 gap-2.5 items-center">
+                        <div className="col-span-7 flex flex-col justify-between space-y-2">
+                          <div>
+                            <h2 className="text-sm sm:text-lg font-black leading-tight bg-gradient-to-b from-amber-100 via-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow">
+                              {activeSlide.title}
+                            </h2>
+                            <p className="mt-0.5 text-[10px] sm:text-xs text-slate-200/90 leading-snug line-clamp-2">
+                              {activeSlide.subtitle}
+                            </p>
+                          </div>
+
+                          {/* Centerpiece Treasure & Coin Burst or Uploaded Admin Ad Image */}
+                          <div className="flex items-center gap-2">
+                            {activeSlide.imageUrl ? (
+                              <img
+                                src={activeSlide.imageUrl}
+                                alt={activeSlide.title}
+                                referrerPolicy="no-referrer"
+                                className="h-14 w-24 sm:h-16 sm:w-28 rounded-xl object-cover border border-amber-400/50 shadow-md"
+                              />
+                            ) : (
+                              <svg viewBox="0 0 110 62" className="h-14 sm:h-16 w-auto drop-shadow-[0_4px_12px_rgba(245,158,11,0.35)]">
+                                <defs>
+                                  <linearGradient id="chestGold" x1="0" y1="0" x2="1" y2="1">
+                                    <stop offset="0%" stopColor="#FEF08A" />
+                                    <stop offset="50%" stopColor="#F59E0B" />
+                                    <stop offset="100%" stopColor="#92400E" />
+                                  </linearGradient>
+                                </defs>
+                                <ellipse cx="55" cy="54" rx="40" ry="6" fill="#F59E0B" opacity="0.22" />
+                                <path d="M 32 34 L 78 34 L 74 52 L 36 52 Z" fill="#78350F" stroke="url(#chestGold)" strokeWidth="2.2" />
+                                <path d="M 28 34 Q 55 18 82 34 Z" fill="#92400E" stroke="url(#chestGold)" strokeWidth="2.2" />
+                                <ellipse cx="55" cy="33" rx="19" ry="6" fill="#FDE047" opacity="0.85" />
+                                <circle cx="48" cy="32" r="4" fill="#FBBF24" stroke="#FFFBEB" strokeWidth="0.8" />
+                                <circle cx="56" cy="30" r="4.5" fill="#FDE047" stroke="#FFFBEB" strokeWidth="0.8" />
+                                <circle cx="63" cy="33" r="3.8" fill="#F59E0B" stroke="#FFFBEB" strokeWidth="0.8" />
+                                <rect x="51" y="36" width="8" height="9" rx="2" fill="url(#chestGold)" />
+                                <circle cx="24" cy="49" r="3.5" fill="#FBBF24" />
+                                <circle cx="84" cy="50" r="3.5" fill="#FDE047" />
+                                <path d="M 20 22 L 29 14 M 88 22 L 80 14" stroke="#22D3EE" strokeWidth="2" strokeLinecap="round" opacity="0.85" />
+                              </svg>
+                            )}
+                          </div>
+
+                          <div>
+                            <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-rose-700 via-red-600 to-amber-500 border border-amber-300/80 text-white text-[11px] sm:text-xs font-black shadow-[0_4px_14px_rgba(225,29,72,0.45)] group-hover:brightness-110 transition-all">
                               {activeSlide.cta}
                             </span>
                           </div>
                         </div>
+
+                        {/* Right: 5x5 Stylized Bingo Card & 3D 43/41 Balls */}
+                        <div className="col-span-5 flex flex-col items-center justify-center">
+                          <div className="relative w-full max-w-[126px] rounded-xl bg-gradient-to-b from-[#0E3542] to-[#061820] border border-cyan-400/50 p-1.5 shadow-xl">
+                            <div className="text-center text-[10px] font-black tracking-widest text-amber-200 pb-1">
+                              BINGO
+                            </div>
+                            <div className="grid grid-cols-5 gap-0.5 text-[7px] font-bold text-center">
+                              {[
+                                '4', '18', '33', '46', '61',
+                                '11', '22', '43', '51', '68',
+                                '7', '17', '★', '48', '73',
+                                '14', '29', '31', '54', '65',
+                                '2', '24', '39', '58', '70',
+                              ].map((cell, cIdx) => (
+                                <div
+                                  key={cIdx}
+                                  className={`aspect-square rounded-[3px] flex items-center justify-center ${
+                                    cell === '43' || cell === '48' || cell === '★'
+                                      ? 'bg-cyan-400/80 text-slate-950 font-black'
+                                      : 'bg-cyan-950/80 text-cyan-100/85 border border-cyan-500/20'
+                                  }`}
+                                >
+                                  {cell}
+                                </div>
+                              ))}
+                            </div>
+                            {/* Floating 3D Bingo Balls */}
+                            <div className="absolute -bottom-2 -left-2 w-8 h-8 rounded-full bg-[radial-gradient(circle_at_30%_30%,_#93C5FD,_#1D4ED8_65%,_#1E3A8A)] border border-sky-200/80 flex items-center justify-center shadow-lg">
+                              <span className="w-4.5 h-4.5 rounded-full bg-white text-slate-950 text-[8px] font-black flex items-center justify-center">
+                                43
+                              </span>
+                            </div>
+                            <div className="absolute -bottom-2 -right-2 w-8 h-8 rounded-full bg-[radial-gradient(circle_at_30%_30%,_#86EFAC,_#15803D_65%,_#14532D)] border border-emerald-200/80 flex items-center justify-center shadow-lg">
+                              <span className="w-4.5 h-4.5 rounded-full bg-white text-slate-950 text-[8px] font-black flex items-center justify-center">
+                                41
+                              </span>
+                            </div>
+                          </div>
+                          <span className="mt-3 text-xs sm:text-sm font-black text-amber-300 tracking-wide">
+                            {tHub.fastTitle}
+                          </span>
+                        </div>
                       </div>
-                    </button>
+                    </div>
 
                     {/* Carousel Dots */}
                     <div className="flex items-center justify-center gap-1.5">
@@ -2220,7 +2491,7 @@ export default function App() {
                           aria-label={`Slide ${idx + 1}`}
                           className={`h-1.5 rounded-full transition-all cursor-pointer ${
                             safeIndex === idx
-                              ? 'w-5 bg-amber-400'
+                              ? 'w-5 bg-cyan-400 shadow-[0_0_8px_#22D3EE]'
                               : 'w-1.5 bg-slate-600 hover:bg-slate-400'
                           }`}
                         />
@@ -2230,15 +2501,7 @@ export default function App() {
                 );
               })()}
 
-              {/* Section Title */}
-              <div className="text-center pt-1 pb-0.5 space-y-0.5">
-                <h1 className="text-xl sm:text-2xl font-black text-amber-400 tracking-tight">
-                  {tHub.chooseGameTitle}
-                </h1>
-                <p className="text-xs text-slate-400 font-medium">{tHub.chooseGameSubtitle}</p>
-              </div>
-
-              {/* 3-Column Game Artwork Card Grid (Filtered by Admin Visibility Control) */}
+              {/* 2-Column Game Artwork Cards Grid (Filtered by Admin Visibility Control) */}
               {(() => {
                 const allTiles: {
                   key: GameKey;
@@ -2247,11 +2510,11 @@ export default function App() {
                   image?: string;
                   isDamaSvg?: boolean;
                 }[] = [
-                  { key: 'ludo', title: tHub.ludoTitle, players: liveGameCounts.ludo, image: gameTileLudoImg },
                   { key: 'fast', title: tHub.fastTitle, players: liveGameCounts.fast, image: gameTileBingoImg },
                   { key: 'regular', title: tHub.regularTitle, players: liveGameCounts.regular, image: liyuBingoTileImg },
                   { key: 'keno', title: tHub.kenoTitle, players: liveGameCounts.keno, image: gameTileKenoImg },
                   { key: 'ramino', title: tHub.raminoTitle, players: liveGameCounts.ramino, image: gameTileConkerImg },
+                  { key: 'ludo', title: tHub.ludoTitle, players: liveGameCounts.ludo, image: gameTileLudoImg },
                   { key: 'dama', title: tHub.damaTitle, players: liveGameCounts.dama, isDamaSvg: true },
                 ];
 
@@ -2259,14 +2522,14 @@ export default function App() {
 
                 if (visibleTiles.length === 0) {
                   return (
-                    <div className="p-6 rounded-2xl bg-slate-900/70 border border-slate-800 text-center text-xs font-bold text-slate-400">
+                    <div className="p-6 rounded-2xl bg-[#071D26]/80 border border-cyan-500/30 text-center text-xs font-bold text-slate-300">
                       {tHub.noVisibleGames}
                     </div>
                   );
                 }
 
                 return (
-                  <div className="grid grid-cols-3 gap-3 sm:gap-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
                     {visibleTiles.map((item) => {
                       const isSoon = Boolean(gameVisibility[item.key]?.comingSoon);
                       const handleTileClick = () => {
@@ -2281,16 +2544,21 @@ export default function App() {
                           key={item.key}
                           type="button"
                           onClick={handleTileClick}
-                          className="group flex flex-col items-center gap-1.5 cursor-pointer focus:outline-none"
+                          className={`group relative flex flex-col rounded-2xl overflow-hidden border transition-all cursor-pointer focus:outline-none active:scale-[0.98] ${
+                            isDark
+                              ? 'bg-gradient-to-b from-[#081F28] to-[#041117] border-cyan-500/30 hover:border-amber-400/70 shadow-[0_8px_24px_rgba(0,0,0,0.55)]'
+                              : 'bg-white border-slate-300 hover:border-amber-500 shadow-md'
+                          }`}
                         >
-                          <div className="relative w-full aspect-square rounded-2xl overflow-hidden border border-slate-800/90 bg-slate-900 shadow-lg shadow-black/40 group-hover:border-amber-400/70 transition-all">
+                          {/* Top Bar Badges inside Card */}
+                          <div className="relative w-full aspect-[4/3.1] overflow-hidden bg-[#05141B]">
                             {item.isDamaSvg ? (
                               <svg
-                                viewBox="0 0 120 120"
+                                viewBox="0 0 120 100"
                                 className="w-full h-full transition-transform duration-300 group-hover:scale-105 bg-[#1B1410]"
                                 aria-label={item.title}
                               >
-                                {Array.from({ length: 6 }).map((_, r) =>
+                                {Array.from({ length: 5 }).map((_, r) =>
                                   Array.from({ length: 6 }).map((__, c) => (
                                     <rect
                                       key={`${r}-${c}`}
@@ -2317,19 +2585,29 @@ export default function App() {
                                 className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                               />
                             )}
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
+                            <div className="absolute inset-0 bg-gradient-to-t from-[#041117] via-transparent to-black/35" />
+
                             {isSoon && (
-                              <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-black/75 text-amber-400 border border-amber-500/40">
+                              <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/90 text-slate-950 shadow">
                                 {tHub.soonBadge}
                               </span>
                             )}
-                            <span className="absolute bottom-2 inset-x-1.5 text-center text-[11px] sm:text-xs font-black tracking-wide text-white drop-shadow">
-                              {item.title}
+
+                            <span className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-400/50 text-[10px] font-bold text-emerald-300 tabular-nums shadow">
+                              <User className="w-2.5 h-2.5 text-emerald-400" />
+                              <span>{item.players}</span>
                             </span>
                           </div>
-                          <div className="flex items-center gap-1 text-xs font-bold text-slate-300 tabular-nums">
-                            <User className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                            <span>{item.players}</span>
+
+                          {/* Card Bottom Gold Title Plate */}
+                          <div className="w-full py-2 px-2 text-center bg-gradient-to-b from-transparent to-black/30">
+                            <span
+                              className={`block text-xs sm:text-sm font-black tracking-wide truncate ${
+                                isDark ? 'text-amber-300' : 'text-amber-700'
+                              }`}
+                            >
+                              {item.title}
+                            </span>
                           </div>
                         </button>
                       );
@@ -2338,6 +2616,61 @@ export default function App() {
                 );
               })()}
             </main>
+
+            {/* Slim Sticky Bottom Navigation Bar */}
+            <nav
+              className={`fixed bottom-0 inset-x-0 z-40 border-t backdrop-blur-lg pb-[max(0.45rem,env(safe-area-inset-bottom))] pt-1.5 px-2 ${
+                isDark
+                  ? 'bg-[#041219]/95 border-cyan-500/25 text-slate-300'
+                  : 'bg-white/95 border-slate-200 text-slate-600'
+              }`}
+            >
+              <div className="max-w-2xl mx-auto grid grid-cols-5 items-center gap-1 text-[10px] sm:text-xs font-bold">
+                <button
+                  type="button"
+                  onClick={handleReturnToHub}
+                  className="flex flex-col items-center justify-center gap-0.5 py-1 rounded-xl text-amber-400 cursor-pointer"
+                >
+                  <Home className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <span className="truncate">{language === 'en' ? 'Home' : 'ዋና ገጽ'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSwitchMode('fast')}
+                  className="flex flex-col items-center justify-center gap-0.5 py-1 rounded-xl hover:text-amber-300 cursor-pointer transition-colors"
+                >
+                  <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <span className="truncate">{tHub.fastTitle}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openGlobalWallet('deposit')}
+                  className="flex flex-col items-center justify-center gap-0.5 py-1 rounded-xl hover:text-amber-300 cursor-pointer transition-colors"
+                >
+                  <Wallet className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <span className="truncate">{tHub.walletTitle}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openGlobalWallet('history')}
+                  className="flex flex-col items-center justify-center gap-0.5 py-1 rounded-xl hover:text-amber-300 cursor-pointer transition-colors"
+                >
+                  <History className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <span className="truncate">{language === 'en' ? 'History' : 'ታሪክ'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    scrollAppToTop();
+                    setHubMenuOpen((prev) => !prev);
+                  }}
+                  className="flex flex-col items-center justify-center gap-0.5 py-1 rounded-xl hover:text-amber-300 cursor-pointer transition-colors"
+                >
+                  <User className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <span className="truncate">{language === 'en' ? 'Profile' : 'መገለጫ'}</span>
+                </button>
+              </div>
+            </nav>
           </div>
         ) : (
           /* 4. LOGGED-IN GAMEPLAY VIEW (Fast Bingo, Regular Bingo, Fast Keno, Ludo, or Ramino) */
@@ -2460,7 +2793,7 @@ export default function App() {
         )}
       </div>
 
-      {/* Unified Global Wallet Modal (Accessible from Home Hub, Fast Keno, and Conker Ramino) */}
+      {/* Unified Global Wallet Modal (Accessible from Home Hub, Fast Keno, and SUN Ramino) */}
       {isLoggedIn && isGlobalWalletOpen && sharedUsers[0] && (
         <div
           className="fixed inset-0 z-[200000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-hidden overscroll-none"

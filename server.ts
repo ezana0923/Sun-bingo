@@ -45,7 +45,17 @@ const SHARED_APP_URL =
   process.env.RENDER_EXTERNAL_URL ||
   'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
 
-const BOT_STORE_PATH = path.join(__dirname, '.telegram-bots.json');
+const PERSISTENT_DATA_DIR =
+  process.env.PERSISTENT_DATA_DIR ||
+  ['/var/data', '/data', '/opt/render/project/data'].find((d) => {
+    try {
+      return fs.existsSync(d) && fs.statSync(d).isDirectory();
+    } catch {
+      return false;
+    }
+  }) ||
+  __dirname;
+const BOT_STORE_PATH = path.join(PERSISTENT_DATA_DIR, '.telegram-bots.json');
 const BOT_STORE_BACKUP_PATH = '/tmp/sunbingo-bots-backup.json';
 const ACCOUNT_TOKEN_SECRET =
   process.env.SESSION_HMAC_SECRET || 'SunBingo_2026_Secure_Account_Ledger_Key_v1';
@@ -199,7 +209,7 @@ let adminPinConfig = {
   autoNotifyGames: {
     fast: true,
     regular: true,
-    keno: true,
+    keno: false,
     ramino: true,
   },
 };
@@ -361,9 +371,9 @@ const DEFAULT_SERVER_HERO_BANNERS: {
 }[] = [
   {
     id: 'hb-1',
-    title: 'ሁልጊዜ ጨዋታ! በ Ezi Bingo እስከ 50,000 ብር ያሸንፉ!',
+    title: 'ሁልጊዜ ጨዋታ! በ SUN GAMES እስከ 50,000 ብር ያሸንፉ!',
     subtitle: 'ከ 70,000 ካርቴላዎች ይምረጡ · ከ 20 በላይ ካርቴላ ለሚይዙ +5 ካርቴላ ቦነስ በነፃ ይሰጣል!',
-    badgeText: 'Ezi Bingo ልዩ ቦነስ',
+    badgeText: 'SUN GAMES ልዩ ቦነስ',
     accentColor: 'emerald',
     isActive: true,
   },
@@ -1453,7 +1463,7 @@ function loadBotsFromDisk() {
         autoNotifyGames: {
           fast: parsed.adminPinConfig.autoNotifyGames?.fast !== false,
           regular: parsed.adminPinConfig.autoNotifyGames?.regular !== false,
-          keno: parsed.adminPinConfig.autoNotifyGames?.keno !== false,
+          keno: parsed.adminPinConfig.autoNotifyGames?.keno === true,
           ramino: parsed.adminPinConfig.autoNotifyGames?.ramino !== false,
         },
       };
@@ -1492,8 +1502,8 @@ function loadBotsFromDisk() {
           // Auto-start background polling on boot; clear any stale webhook first so getUpdates works immediately
           const shouldAutoPoll = process.env.DISABLE_LOCAL_BOT_POLLING !== 'true';
           activeBots.set(cleanTok, {
-            botUsername: item.botUsername || 'EziBingoBot',
-            botFirstName: item.botFirstName || 'Ezi Bingo',
+            botUsername: item.botUsername || 'Sungamsbot',
+            botFirstName: item.botFirstName || 'SUN GAMES',
             appUrl: resolvedAppUrl,
             offset: typeof item.offset === 'number' ? item.offset : 0,
             isRunning: shouldAutoPoll,
@@ -1515,7 +1525,7 @@ function loadBotsFromDisk() {
         .then(async (meData) => {
           if (meData?.ok && meData?.result?.username) {
             const bUser = meData.result.username;
-            const bName = meData.result.first_name || 'Ezi Bingo';
+            const bName = meData.result.first_name || 'SUN GAMES';
             let resolvedAppUrl = process.env.RENDER_EXTERNAL_URL || SHARED_APP_URL || lastKnownLiveHost;
             if (!resolvedAppUrl || !resolvedAppUrl.startsWith('https://')) {
               resolvedAppUrl = 'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
@@ -1527,8 +1537,7 @@ function loadBotsFromDisk() {
               body: JSON.stringify({
                 commands: [
                   { command: 'start', description: '🚀 Start / ጀምር' },
-                  { command: 'menu', description: '🏠 Main Menu' },
-                  { command: 'play', description: '🎮 Play Live Bingo' },
+                  { command: 'play', description: '🎮 Play SUN GAMES' },
                   { command: 'deposit', description: 'Deposit 💵' },
                   { command: 'withdraw', description: 'Withdraw 💸' },
                   { command: 'balance', description: 'Check Balance 💰' },
@@ -1569,7 +1578,7 @@ setInterval(() => {
 // Row 6: Support 📞 | 🏠 Main Menu
 function buildWebAppUrl(
   appUrl: string,
-  mode: 'fast' | 'regular',
+  mode: 'hub' | 'fast' | 'regular' = 'hub',
   registeredPhone?: string | null,
   tab?: 'deposit' | 'withdraw' | 'transfer'
 ) {
@@ -1581,11 +1590,17 @@ function buildWebAppUrl(
       'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
   }
   const phone = registeredPhone || null;
-  const tabParam = tab ? `&tab=${tab}` : '';
-  if (phone) {
-    return `${cleanUrl}/?app=${mode}&registered=1&phone=${encodeURIComponent(phone)}${tabParam}`;
+  const queryParts: string[] = [];
+  if (mode !== 'hub') {
+    queryParts.push(`mode=${mode}`);
   }
-  return `${cleanUrl}/?app=${mode}${tabParam}`;
+  if (phone) {
+    queryParts.push('registered=1', `phone=${encodeURIComponent(phone)}`);
+  }
+  if (tab) {
+    queryParts.push(`tab=${tab}`);
+  }
+  return queryParts.length > 0 ? `${cleanUrl}/?${queryParts.join('&')}` : `${cleanUrl}/`;
 }
 
 function buildInlineWelcomeMenuKeyboard(appUrl: string, registeredPhone?: string | null) {
@@ -1593,41 +1608,23 @@ function buildInlineWelcomeMenuKeyboard(appUrl: string, registeredPhone?: string
     inline_keyboard: [
       [
         {
-          text: '🎮 Play Live Bingo',
-          web_app: { url: buildWebAppUrl(appUrl, 'fast', registeredPhone) },
+          text: '🎮 Play SUN GAMES',
+          web_app: { url: buildWebAppUrl(appUrl, 'hub', registeredPhone) },
         },
-      ],
-      [
-        { text: 'Deposit 💵', callback_data: 'menu_deposit' },
-        { text: 'Withdraw 💸', callback_data: 'menu_withdraw' },
-      ],
-      [
-        { text: '👥 ጓደኛ ይጋብዙ (+25 ETB)', callback_data: 'menu_invite' },
-        { text: 'Check Balance 💰', callback_data: 'menu_balance' },
-      ],
-      [
-        { text: 'Transfer 🔄', callback_data: 'menu_transfer' },
-        { text: 'Game Rules 📖', callback_data: 'menu_rules' },
-      ],
-      [
-        { text: 'Support 📞', callback_data: 'menu_support' },
-        { text: '🏠 Main Menu', callback_data: 'menu_main' },
       ],
     ],
   };
 }
 
-// Sub-menu inline keyboard with "🏠 Main Menu" + "🎮 Play Live Bingo" so user can return to the main card anytime
 function buildSubMenuInlineKeyboard(appUrl: string, registeredPhone?: string | null) {
   return {
     inline_keyboard: [
       [
         {
-          text: '🎮 Play Live Bingo',
-          web_app: { url: buildWebAppUrl(appUrl, 'fast', registeredPhone) },
+          text: '🎮 Play SUN GAMES',
+          web_app: { url: buildWebAppUrl(appUrl, 'hub', registeredPhone) },
         },
       ],
-      [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
     ],
   };
 }
@@ -1804,7 +1801,7 @@ function buildWelcomeMessageText(firstName = 'Player', registeredPhone?: string,
     `🎁 ቦነስ ሂሳብ (ለጨዋታ ብቻ)፦ *${bonusTotal}*\n` +
     (depBonusPct > 0 ? `🎉 *አሁን ሲያስገቡ +${depBonusPct}% ተጨማሪ ገቢ ቦነስ!*\n` : '') +
     `\n⚡ ፈጣን ገቢ እና ወጪ በ Telebirr, CBE, Abyssinia እና M-Pesa\n` +
-    `👇 ጨዋታ ለመጀመር ወይም ገቢ/ወጪ ለማድረግ ከታች ያሉትን ቁልፎች ይጠቀሙ፦`
+    `👇 ጨዋታ ለመጀመር ከታች ያለውን **🎮 Play SUN GAMES** ቁልፍ ይጫኑ፦`
   );
 }
 
@@ -1895,7 +1892,7 @@ async function sendTelegramMessage(
     }
 
     // Retry 3: Plain text with URL link fallback (in case web_app button is disallowed e.g. group chat)
-    const bareUrl = buildWebAppUrl(appUrl, 'fast', regPhone);
+    const bareUrl = buildWebAppUrl(appUrl, 'hub', regPhone);
     const bareData = await postSend({
       chat_id: chatId,
       text: `${plainText}\n\n🎮 Open App: ${bareUrl}`,
@@ -2043,7 +2040,7 @@ async function handleTelegramMenuAction(
     if (pendingRoomAfterReg) {
       pendingRaminoRoomByChatId.delete(chatId);
       const privRoom = raminoPrivateRooms.get(pendingRoomAfterReg);
-      const baseApp = buildWebAppUrl(appUrl, 'fast').split('/?')[0];
+      const baseApp = buildWebAppUrl(appUrl, 'hub').split('/?')[0].replace(/\/$/, '');
       const joinWebUrl = `${baseApp}/?game=ramino&raminoRoom=${encodeURIComponent(pendingRoomAfterReg)}&registered=1&phone=${encodeURIComponent(normalizedPhone)}`;
       const roomInviteMsg =
         `♠️ *የራሚኖ የግል ክፍል ግብዣ (Ramino Private Room)*\n` +
@@ -2060,7 +2057,6 @@ async function handleTelegramMenuAction(
         {
           inline_keyboard: [
             [{ text: `🎮 ክፍሉን ተቀላቀል (${pendingRoomAfterReg})`, web_app: { url: joinWebUrl } }],
-            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         },
         undefined,
@@ -2113,10 +2109,9 @@ async function handleTelegramMenuAction(
             [
               {
                 text: '🎮 ወደ SUN GAMES ተመለስ (Open App)',
-                web_app: { url: buildWebAppUrl(appUrl, 'fast', targetPhone) },
+                web_app: { url: buildWebAppUrl(appUrl, 'hub', targetPhone) },
               },
             ],
-            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         }
       );
@@ -2184,7 +2179,7 @@ async function handleTelegramMenuAction(
     if (pendingRoomAfterPwd) {
       pendingRaminoRoomByChatId.delete(chatId);
       const privRoom = raminoPrivateRooms.get(pendingRoomAfterPwd);
-      const baseApp = buildWebAppUrl(appUrl, 'fast').split('/?')[0];
+      const baseApp = buildWebAppUrl(appUrl, 'hub').split('/?')[0].replace(/\/$/, '');
       const joinWebUrl = `${baseApp}/?game=ramino&raminoRoom=${encodeURIComponent(pendingRoomAfterPwd)}&registered=1&phone=${encodeURIComponent(regPhone)}`;
       const roomInviteMsg =
         `♠️ *የራሚኖ የግል ክፍል ግብዣ (Ramino Private Room)*\n` +
@@ -2201,7 +2196,6 @@ async function handleTelegramMenuAction(
         {
           inline_keyboard: [
             [{ text: `🎮 ክፍሉን ተቀላቀል (${pendingRoomAfterPwd})`, web_app: { url: joinWebUrl } }],
-            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         },
         undefined,
@@ -2216,7 +2210,7 @@ async function handleTelegramMenuAction(
     const targetRoomCode = pendingRaminoRoomByChatId.get(chatId)!;
     pendingRaminoRoomByChatId.delete(chatId);
     const privRoom = raminoPrivateRooms.get(targetRoomCode);
-    const baseApp = buildWebAppUrl(appUrl, 'fast').split('/?')[0];
+    const baseApp = buildWebAppUrl(appUrl, 'hub').split('/?')[0].replace(/\/$/, '');
     const joinWebUrl = `${baseApp}/?game=ramino&raminoRoom=${encodeURIComponent(targetRoomCode)}&registered=1&phone=${encodeURIComponent(regPhone)}`;
     const roomInviteMsg =
       `♠️ *የራሚኖ የግል ክፍል ግብዣ (Ramino Private Room)*\n` +
@@ -2233,7 +2227,6 @@ async function handleTelegramMenuAction(
       {
         inline_keyboard: [
           [{ text: `🎮 ክፍሉን ተቀላቀል (${targetRoomCode})`, web_app: { url: joinWebUrl } }],
-          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
         ],
       },
       callbackMessageId,
@@ -2254,9 +2247,9 @@ async function handleTelegramMenuAction(
     clean === 'menu_admin' ||
     clean.startsWith('/admin ')
   ) {
-    const baseApp = buildWebAppUrl(appUrl, 'fast').split('/?')[0];
-    const adminFastUrl = `${baseApp}/?app=fast&tab=admin&admin=1#admin`;
-    const adminRegularUrl = `${baseApp}/?app=regular&tab=admin&admin=1#regular-admin`;
+    const baseApp = buildWebAppUrl(appUrl, 'hub').split('/?')[0].replace(/\/$/, '');
+    const adminFastUrl = `${baseApp}/?mode=fast&tab=admin&admin=1#admin`;
+    const adminRegularUrl = `${baseApp}/?mode=regular&tab=admin&admin=1#regular-admin`;
     const adminText =
       `🛡️ *SUN GAMES Control Center (የቁጥጥር ማዕከል)*\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
@@ -2284,11 +2277,10 @@ async function handleTelegramMenuAction(
           ],
           [
             {
-              text: '🎮 Play Live Bingo',
-              web_app: { url: buildWebAppUrl(appUrl, 'fast', regPhone) },
+              text: '🎮 Play SUN GAMES',
+              web_app: { url: buildWebAppUrl(appUrl, 'hub', regPhone) },
             },
           ],
-          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
         ],
       },
       callbackMessageId
@@ -2296,16 +2288,17 @@ async function handleTelegramMenuAction(
     return;
   }
 
-  // 1. Play Live Bingo (/play or button)
+  // 1. Play SUN GAMES (/play or button)
   if (
     clean.includes('play live bingo') ||
+    clean.includes('play sun games') ||
     clean === '/play' ||
     clean === 'play' ||
     clean === 'menu_play'
   ) {
     const playText =
       `🎮 *SUN GAMES Live Games*\n\n` +
-      `Tap **🎮 Play Live Bingo** below to launch the live game directly inside Telegram:`;
+      `Tap **🎮 Play SUN GAMES** below to launch the game hub directly inside Telegram:`;
 
     await sendTelegramMessage(
       token,
@@ -2315,17 +2308,10 @@ async function handleTelegramMenuAction(
         inline_keyboard: [
           [
             {
-              text: '🎮 Play Live Bingo',
-              web_app: { url: buildWebAppUrl(appUrl, 'fast', regPhone) },
+              text: '🎮 Play SUN GAMES',
+              web_app: { url: buildWebAppUrl(appUrl, 'hub', regPhone) },
             },
           ],
-          [
-            {
-              text: '🎲 Classic 16-Rule Bingo (70,000 Cartelas)',
-              web_app: { url: buildWebAppUrl(appUrl, 'regular', regPhone) },
-            },
-          ],
-          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
         ],
       },
       callbackMessageId
@@ -2408,7 +2394,6 @@ async function handleTelegramMenuAction(
     }
     keyboardRows.push([
       { text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_deposit' },
-      { text: '🏠 Main Menu', callback_data: 'menu_main' },
     ]);
 
     await sendTelegramMessage(
@@ -2448,7 +2433,6 @@ async function handleTelegramMenuAction(
             { text: '1,000 ETB', callback_data: 'dep_amt_1000' },
             { text: '2,000 ETB', callback_data: 'dep_amt_2000' },
           ],
-          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
         ],
       },
       callbackMessageId,
@@ -2516,7 +2500,6 @@ async function handleTelegramMenuAction(
           [{ text: `📋 Copy ${acct.shortName} (${acct.accountNumber})`, copy_text: { text: acct.accountNumber } }],
           [
             { text: '← ተመለስ (ባንክ ቀይር)', callback_data: `dep_amt_${amtStr}` },
-            { text: '🏠 Main Menu', callback_data: 'menu_main' },
           ],
         ],
       },
@@ -2549,7 +2532,6 @@ async function handleTelegramMenuAction(
     }
     bankRows.push([
       { text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_withdraw' },
-      { text: '🏠 Main Menu', callback_data: 'menu_main' },
     ]);
 
     await sendTelegramMessage(
@@ -2599,7 +2581,6 @@ async function handleTelegramMenuAction(
               callback_data: `with_amt_pick_${Math.max(50, maxAvail)}`,
             },
           ],
-          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
         ],
       },
       callbackMessageId,
@@ -2619,7 +2600,6 @@ async function handleTelegramMenuAction(
         {
           inline_keyboard: [
             [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
-            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         },
         callbackMessageId,
@@ -2637,7 +2617,6 @@ async function handleTelegramMenuAction(
           inline_keyboard: [
             [{ text: 'Deposit 💵 (ገቢ አድርግ)', callback_data: 'menu_deposit' }],
             [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
-            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         },
         callbackMessageId,
@@ -2677,7 +2656,6 @@ async function handleTelegramMenuAction(
         {
           inline_keyboard: [
             [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
-            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         },
         callbackMessageId,
@@ -2709,7 +2687,6 @@ async function handleTelegramMenuAction(
     }
     inlineRows.push([
       { text: '← ተመለስ (ባንክ ቀይር)', callback_data: `with_amt_pick_${amtStr}` },
-      { text: '🏠 Main Menu', callback_data: 'menu_main' },
     ]);
 
     await sendTelegramMessage(
@@ -2921,7 +2898,6 @@ async function handleTelegramMenuAction(
               copy_text: { text: tgInviteLink },
             },
           ],
-          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
         ],
       },
       callbackMessageId
@@ -3087,7 +3063,7 @@ async function handleTelegramMenuAction(
             token,
             chatId,
             `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${singleNum.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*`,
-            { inline_keyboard: [[{ text: '← ተመለስ', callback_data: 'menu_withdraw' }], [{ text: '🏠 Main Menu', callback_data: 'menu_main' }]] },
+            { inline_keyboard: [[{ text: '← ተመለስ', callback_data: 'menu_withdraw' }]] },
             undefined,
             true
           );
@@ -3189,7 +3165,6 @@ async function handleTelegramMenuAction(
               { text: '500 ETB', callback_data: `with_amt_${method}_500` },
               { text: '1,000 ETB', callback_data: `with_amt_${method}_1000` },
             ],
-            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         }
       );
@@ -3292,9 +3267,7 @@ async function handleTelegramMenuAction(
         token,
         chatId,
         `❌ እባክዎ ከ *${minDep} ETB* እስከ *500,000 ETB* መካከል ትክክለኛ የብር መጠን ያስገቡ፦`,
-        {
-          inline_keyboard: [[{ text: '🏠 Main Menu', callback_data: 'menu_main' }]],
-        },
+        buildSubMenuInlineKeyboard(appUrl, regPhone),
         undefined,
         true
       );
@@ -3403,7 +3376,6 @@ async function handleTelegramMenuAction(
           inline_keyboard: [
             [{ text: `🔁 በ ${parsedSms.amount} ETB ቀጥል`, callback_data: `dep_amt_${parsedSms.amount}` }],
             [{ text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_deposit' }],
-            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         },
         undefined,
@@ -3427,7 +3399,6 @@ async function handleTelegramMenuAction(
         {
           inline_keyboard: [
             [{ text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_deposit' }],
-            [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
           ],
         }
       );
@@ -4002,6 +3973,26 @@ app.post('/api/auth/restore-session', (req, res) => {
     player,
     accountToken: createSignedPlayerToken(player),
     players: Array.from(playersByPhone.values()),
+  });
+});
+
+// 0.1 Fetch Signed Account Snapshot Token for an active player session
+app.get('/api/auth/token', (req, res) => {
+  const rawPhone = String(req.query.phone || '').trim();
+  const cleanPhone = normalizeEthiopianPhone(rawPhone) || rawPhone;
+  if (!cleanPhone) {
+    res.status(400).json({ ok: false, error: 'Phone is required' });
+    return;
+  }
+  const player = playersByPhone.get(cleanPhone);
+  if (!player) {
+    res.status(404).json({ ok: false, error: 'Player not found' });
+    return;
+  }
+  res.json({
+    ok: true,
+    player,
+    accountToken: createSignedPlayerToken(player),
   });
 });
 
@@ -5615,7 +5606,7 @@ app.post('/api/live-room/action', (req, res) => {
         id: String(b?.id || `hb-${Date.now()}-${idx}`),
         title: String(b?.title || '').trim(),
         subtitle: String(b?.subtitle || '').trim(),
-        badgeText: String(b?.badgeText || 'Ezi Bingo').trim(),
+        badgeText: String(b?.badgeText || 'SUN GAMES').trim(),
         accentColor: (['blue', 'emerald', 'amber', 'rose'].includes(String(b?.accentColor))
           ? String(b?.accentColor)
           : 'emerald') as 'blue' | 'emerald' | 'amber' | 'rose',
@@ -6051,6 +6042,7 @@ app.post('/api/transactions/submit', (req, res) => {
           alreadyCredited: true,
           message: 'ይህ ክፍያ በባንክ SMS በራሱ ቀድሞ ገቢ ተደርጓል!',
           balance: player.balance,
+          accountToken: createSignedPlayerToken(player),
           transactions: serverTransactions,
         });
         return;
@@ -6142,6 +6134,7 @@ app.post('/api/transactions/submit', (req, res) => {
       webhookVerified: true,
       message: 'ይህ ክፍያ በባንክ SMS Webhook በራሱ ቀድሞ ገቢ ተደርጓል!',
       balance: player.balance,
+      accountToken: createSignedPlayerToken(player),
       transactions: serverTransactions,
     });
     return;
@@ -6306,6 +6299,7 @@ app.post('/api/transactions/submit', (req, res) => {
     isPending,
     webhookVerified: isWebhookVerifiedDeposit,
     balance: player.balance,
+    accountToken: createSignedPlayerToken(player),
     recipientBalance: recipientRecord?.balance,
     recipientName: recipientRecord?.name,
     recipientPhone: cleanRecipientPhone,
@@ -7184,6 +7178,187 @@ app.get('/api/admin/settings', (req, res) => {
   });
 });
 
+// Full State Backup & Restore for Zero-Loss Deployments (Players, Wallets, Txs, Banks, Ads, Visibility, Bot)
+function isAuthorizedBackupPin(pinValue: unknown): boolean {
+  const cleanPin = String(pinValue || '').trim();
+  return (
+    cleanPin === '7788' ||
+    cleanPin === '1234' ||
+    cleanPin === adminPinConfig.pinCode ||
+    cleanPin === adminPinConfig.passwordHash
+  );
+}
+
+app.get('/api/admin/state-backup', (req, res) => {
+  const pin = req.headers['x-admin-pin'] || req.query.pin;
+  if (!isAuthorizedBackupPin(pin)) {
+    res.status(401).json({ ok: false, error: 'Unauthorized PIN' });
+    return;
+  }
+  const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+  const activeTokenList = Array.from(activeBots.entries()).map(([token, info]) => ({
+    token,
+    botUsername: info.botUsername,
+    botFirstName: info.botFirstName,
+    appUrl: info.appUrl,
+    offset: info.offset,
+  }));
+  res.json({
+    ok: true,
+    exportedAt: new Date().toISOString(),
+    backup: {
+      players: Array.from(playersByPhone.values()),
+      transactions: serverTransactions,
+      registeredPhones: Array.from(registeredChatPhones.entries()),
+      bonusClaimed: Array.from(chatWelcomeBonusClaimed.values()),
+      persistedBankAccounts,
+      homeHeroAds: persistedHomeHeroAds,
+      gameVisibility: persistedGameVisibility,
+      adminPinConfig,
+      fastGameHistory: fastRoomsByStake[10]?.gameHistory || [],
+      regularGameHistory: regularLiveRoomState?.gameHistory || [],
+      fastRoomsByStake: roomsObj,
+      fastLockedCartelasByStake: lockedObj,
+      regularRoomState: regularLiveRoomState,
+      globalWalletBalance,
+      globalBonusBalance,
+      tokens: activeTokenList.length > 0 ? activeTokenList : persistedBotTokensCache,
+    },
+  });
+});
+
+app.post('/api/admin/state-restore', (req, res) => {
+  const pin = req.headers['x-admin-pin'] || req.query.pin || req.body?.pin;
+  if (!isAuthorizedBackupPin(pin)) {
+    res.status(401).json({ ok: false, error: 'Unauthorized PIN' });
+    return;
+  }
+  const b = (req.body?.backup || req.body || {}) as Partial<PersistedBotData>;
+
+  if (Array.isArray(b.players)) {
+    for (const p of b.players) {
+      if (!p?.phone) continue;
+      const cleanPh = normalizeEthiopianPhone(p.phone) || p.phone;
+      const existing = playersByPhone.get(cleanPh);
+      if (!existing) {
+        playersByPhone.set(cleanPh, {
+          ...p,
+          phone: cleanPh,
+          balance: Number(p.balance || 0),
+          withdrawableBalance: typeof p.withdrawableBalance === 'number' ? p.withdrawableBalance : 0,
+          bonusBalance: Number(p.bonusBalance ?? 0),
+          nonWithdrawableBonus:
+            typeof p.nonWithdrawableBonus === 'number'
+              ? p.nonWithdrawableBonus
+              : Math.min(Number(p.balance || 0), Number(p.bonusBalance ?? 0)),
+          referralEarnings: Number(p.referralEarnings || 0),
+          referredCount: Number(p.referredCount || 0),
+          isBlocked: Boolean(p.isBlocked),
+          updatedAt: p.updatedAt || new Date().toLocaleString(),
+        });
+      } else {
+        // Preserve non-placeholder names, higher/valid balances, and chat links
+        if (p.name && (!existing.name || existing.name.startsWith('Player_'))) existing.name = p.name;
+        if (typeof p.balance === 'number' && Number.isFinite(p.balance)) existing.balance = p.balance;
+        if (typeof p.withdrawableBalance === 'number') existing.withdrawableBalance = p.withdrawableBalance;
+        if (typeof p.bonusBalance === 'number') existing.bonusBalance = p.bonusBalance;
+        if (typeof p.nonWithdrawableBonus === 'number') existing.nonWithdrawableBonus = p.nonWithdrawableBonus;
+        if (p.passwordHash && p.passwordHash !== '****') existing.passwordHash = p.passwordHash;
+        if (p.chatId && !existing.chatId) existing.chatId = p.chatId;
+        existing.isBlocked = Boolean(p.isBlocked);
+        existing.referredCount = Math.max(existing.referredCount || 0, p.referredCount || 0);
+        existing.referralEarnings = Math.max(existing.referralEarnings || 0, p.referralEarnings || 0);
+      }
+    }
+  }
+
+  if (Array.isArray(b.transactions)) {
+    const existingIds = new Set(serverTransactions.map((t) => t.id));
+    const mergedTxs = [...serverTransactions];
+    for (const tx of b.transactions) {
+      if (tx?.id && !existingIds.has(tx.id)) {
+        existingIds.add(tx.id);
+        mergedTxs.push(tx);
+      }
+    }
+    serverTransactions = mergedTxs.slice(0, 600);
+  }
+
+  if (Array.isArray(b.registeredPhones)) {
+    for (const [cid, ph] of b.registeredPhones) {
+      if (cid && ph) {
+        registeredChatPhones.set(Number(cid), String(ph));
+        ensurePlayerRecord(String(ph), undefined, Number(cid));
+      }
+    }
+  }
+
+  if (Array.isArray(b.bonusClaimed)) {
+    for (const cid of b.bonusClaimed) {
+      chatWelcomeBonusClaimed.add(Number(cid));
+    }
+  }
+
+  if (Array.isArray(b.persistedBankAccounts) && b.persistedBankAccounts.length > 0) {
+    persistedBankAccounts = b.persistedBankAccounts.map((bk) => ({
+      ...bk,
+      isActive: bk.isActive !== false,
+    }));
+    for (const stk of FAST_STAKE_TIERS) {
+      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].bankAccounts = [...persistedBankAccounts];
+    }
+    if (regularLiveRoomState) regularLiveRoomState.bankAccounts = [...persistedBankAccounts];
+  }
+
+  if (Array.isArray(b.homeHeroAds)) {
+    persistedHomeHeroAds = b.homeHeroAds.slice(0, 25);
+  }
+
+  if (b.gameVisibility && typeof b.gameVisibility === 'object') {
+    persistedGameVisibility = {
+      ...persistedGameVisibility,
+      ...b.gameVisibility,
+    } as typeof persistedGameVisibility;
+  }
+
+  if (b.adminPinConfig && typeof b.adminPinConfig === 'object') {
+    adminPinConfig = {
+      ...adminPinConfig,
+      ...b.adminPinConfig,
+      autoNotifyGames: {
+        ...adminPinConfig.autoNotifyGames,
+        ...(b.adminPinConfig.autoNotifyGames || {}),
+        keno: b.adminPinConfig.autoNotifyGames?.keno === true,
+      },
+    };
+  }
+
+  if (Array.isArray(b.fastGameHistory) && fastRoomsByStake[10]) {
+    fastRoomsByStake[10].gameHistory = b.fastGameHistory.slice(0, 100);
+  }
+  if (Array.isArray(b.regularGameHistory) && regularLiveRoomState) {
+    regularLiveRoomState.gameHistory = b.regularGameHistory.slice(0, 100);
+  }
+  if (typeof b.globalWalletBalance === 'number' && Number.isFinite(b.globalWalletBalance)) {
+    globalWalletBalance = b.globalWalletBalance;
+  }
+  if (typeof b.globalBonusBalance === 'number' && Number.isFinite(b.globalBonusBalance)) {
+    globalBonusBalance = b.globalBonusBalance;
+  }
+
+  saveBotsToDisk();
+  broadcastRealtimeSync('both');
+
+  res.json({
+    ok: true,
+    restoredPlayers: playersByPhone.size,
+    restoredTransactions: serverTransactions.length,
+    restoredBankAccounts: persistedBankAccounts.length,
+    restoredHomeAds: persistedHomeHeroAds.length,
+    gameVisibility: persistedGameVisibility,
+  });
+});
+
 // Admin Broadcast Message to In-App Banner/Toast AND Telegram Users
 app.post('/api/admin/broadcast', async (req, res) => {
   const { targetType, specificUser, message, title } = req.body as {
@@ -7324,8 +7499,7 @@ app.post('/api/telegram/connect', async (req, res) => {
       body: JSON.stringify({
         commands: [
           { command: 'start', description: '🚀 Start / ጀምር' },
-          { command: 'menu', description: '🏠 Main Menu' },
-          { command: 'play', description: '🎮 Play Live Bingo' },
+          { command: 'play', description: '🎮 Play SUN GAMES' },
           { command: 'deposit', description: 'Deposit 💵' },
           { command: 'withdraw', description: 'Withdraw 💸' },
           { command: 'balance', description: 'Check Balance 💰' },
@@ -7593,12 +7767,6 @@ function startKenoServerLoop() {
         kenoLiveState.currentRevealedIndex = -1;
         kenoLiveState.roundHash = makeKenoRoundHash(kenoLiveState.roundNumber, balls);
         broadcastKenoLiveState();
-        emitGameNotification({
-          game: 'keno',
-          title: `🎱 ፈጣን ኬኖ (Fast Keno) ዙር #${kenoLiveState.roundNumber} ተጀምሯል!`,
-          message: `20 ኳሶች መውጣት ጀምረዋል! ቀጣዩን ዙር ይቀላቀሉ።`,
-          throttleMs: 90000,
-        });
       }
       return;
     }
@@ -8957,7 +9125,7 @@ function finishServerRaminoRound(
             userName: lp.name,
             userPhone: lp.phone,
             type: 'bet',
-            method: 'Conker Ramino',
+            method: 'SUN Ramino',
             amount: debitAmt,
             referenceNumber:
               totalMultiplier >= 3
@@ -9648,7 +9816,7 @@ function startRaminoServerLoop() {
                   userName: pl.name,
                   userPhone: pl.phone,
                   type: 'win',
-                  method: 'Conker Ramino',
+                  method: 'SUN Ramino',
                   amount: rm.stake,
                   referenceNumber: `Room Refund ${rm.name}`,
                   status: 'approved',
@@ -9816,7 +9984,7 @@ app.post('/api/wallet/game-tx', (req, res) => {
   let createdTx: ServerTransactionRecord | null = null;
   if (delta !== 0) {
     const methodLabel =
-      game === 'keno' ? 'Fast Keno' : game === 'ramino' ? 'Conker Ramino' : game;
+      game === 'keno' ? 'Fast Keno' : game === 'ramino' ? 'SUN Ramino' : game;
     const txType: 'bet' | 'win' = delta < 0 ? 'bet' : 'win';
     createdTx = {
       id: `gtx-${Date.now()}-${Math.floor(Math.random() * 10000)}`,

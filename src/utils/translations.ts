@@ -408,7 +408,7 @@ export const TRANSLATIONS: Record<Language, TranslationStrings> = {
     winnersLabel: 'ተዓወትቲ:',
     inspectBtn: 'መርምር',
     heroBadge75Ball: '75-ኩዕሶ ቀጥታ ቢንጎ',
-    heroTitleLive: 'ኢዚ ቢንጎ ቀጥታ...',
+    heroTitleLive: 'Sun Bingo ቀጥታ...',
     heroSubLive: 'ቀጥታ ዕጫ ኩዕሶ፣ ቅልጡፍ ናይ ብር ሽልማትን 24/7...',
     currencyBirr: 'ብር',
     stakeTierTitle: 'በዓል',

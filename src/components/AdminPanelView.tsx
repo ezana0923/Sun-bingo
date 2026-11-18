@@ -1415,7 +1415,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               SUN GAMES Admin Control Center
             </h2>
             <p className="text-[11px] text-slate-400">
-              Fast Bingo • ልዩ ቢንጎ • Keno • Conker Ramino (Unified Wallet & Voice Monitor)
+              Fast Bingo • ልዩ ቢንጎ • Keno • SUN Ramino (Unified Wallet & Voice Monitor)
             </p>
           </div>
         </div>
@@ -3034,7 +3034,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                     <option value="fast">Fast Bingo</option>
                     <option value="regular">ልዩ ቢንጎ</option>
                     <option value="keno">Fast Keno</option>
-                    <option value="ramino">Conker Ramino</option>
+                    <option value="ramino">SUN Ramino</option>
                     <option value="none">ማስታወቂያ ብቻ (No Redirect)</option>
                   </select>
                 </div>

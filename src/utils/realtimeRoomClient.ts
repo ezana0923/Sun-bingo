@@ -237,6 +237,24 @@ export function normalizePhoneKey(phone?: string): string {
   return digits || String(phone || '').trim();
 }
 
+interface TgCloudStorageLike {
+  setItem?: (key: string, value: string, cb?: (err: unknown, stored?: boolean) => void) => void;
+  getItem?: (key: string, cb: (err: unknown, value?: string) => void) => void;
+}
+
+function getTgCloudStorage(): TgCloudStorageLike | null {
+  try {
+    const cs = (
+      window as unknown as {
+        Telegram?: { WebApp?: { CloudStorage?: TgCloudStorageLike } };
+      }
+    )?.Telegram?.WebApp?.CloudStorage;
+    return cs || null;
+  } catch {
+    return null;
+  }
+}
+
 export function saveSignedAccountToken(phone?: string, token?: string): void {
   if (typeof window === 'undefined' || !phone || !token) return;
   const key = normalizePhoneKey(phone);
@@ -245,7 +263,9 @@ export function saveSignedAccountToken(phone?: string, token?: string): void {
     const raw = localStorage.getItem('sun_account_tokens_v1');
     const map = raw ? (JSON.parse(raw) as Record<string, string>) : {};
     map[key] = token;
-    localStorage.setItem('sun_account_tokens_v1', JSON.stringify(map));
+    const serialized = JSON.stringify(map);
+    localStorage.setItem('sun_account_tokens_v1', serialized);
+    getTgCloudStorage()?.setItem?.(`sun_tok_${key}`, token);
   } catch {
     // ignore
   }
@@ -263,6 +283,40 @@ export function getSignedAccountToken(phone?: string): string | null {
   } catch {
     return null;
   }
+}
+
+export function recoverSignedAccountTokenFromCloudStorage(phone?: string): Promise<string | null> {
+  if (typeof window === 'undefined' || !phone) return Promise.resolve(null);
+  const existing = getSignedAccountToken(phone);
+  if (existing) return Promise.resolve(existing);
+  const key = normalizePhoneKey(phone);
+  const cs = getTgCloudStorage();
+  if (!key || !cs?.getItem) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    }, 1500);
+    try {
+      cs.getItem!(`sun_tok_${key}`, (_err, val) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        if (typeof val === 'string' && val.includes('.')) {
+          saveSignedAccountToken(key, val);
+          resolve(val);
+        } else {
+          resolve(null);
+        }
+      });
+    } catch {
+      window.clearTimeout(timer);
+      resolve(null);
+    }
+  });
 }
 
 export function saveLocalWalletBalanceByPhone(phone?: string, balance?: number): void {
@@ -298,6 +352,27 @@ export function getLocalWalletBalanceByPhone(phone?: string): number | null {
     // ignore
   }
   return null;
+}
+
+export function saveLocalTransactionsCache(txs: TransactionRecord[]): void {
+  if (typeof window === 'undefined' || !Array.isArray(txs) || txs.length === 0) return;
+  try {
+    localStorage.setItem('sun_cached_transactions_v1', JSON.stringify(txs.slice(0, 250)));
+  } catch {
+    // ignore
+  }
+}
+
+export function getLocalTransactionsCache(): TransactionRecord[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem('sun_cached_transactions_v1');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as TransactionRecord[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 export function buildApiUrl(path: string): string {
