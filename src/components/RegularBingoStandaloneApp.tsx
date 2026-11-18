@@ -120,6 +120,10 @@ interface RegularBingoStandaloneAppProps {
   onAddBankAccount?: (bank: BankPaymentAccount) => void;
   onUpdateBankAccount?: (bank: BankPaymentAccount) => void;
   onRemoveBankAccount?: (id: string) => void;
+  heroBanners?: HeroBannerAd[];
+  onAddHeroBanner?: (banner: Omit<HeroBannerAd, 'id'>) => void;
+  onUpdateHeroBanner?: (banner: HeroBannerAd) => void;
+  onRemoveHeroBanner?: (id: string) => void;
 }
 
 export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps> = ({
@@ -142,6 +146,10 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
   onAddBankAccount: externalOnAddBankAccount,
   onUpdateBankAccount: externalOnUpdateBankAccount,
   onRemoveBankAccount: externalOnRemoveBankAccount,
+  heroBanners: externalHeroBanners,
+  onAddHeroBanner: externalOnAddHeroBanner,
+  onUpdateHeroBanner: externalOnUpdateHeroBanner,
+  onRemoveHeroBanner: externalOnRemoveHeroBanner,
 }) => {
   const [activeTab, setActiveTab] = useState<
     'home' | 'play' | 'history' | 'leaderboard' | 'wallet' | 'profile' | 'admin'
@@ -565,7 +573,7 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
     (gameFinishedAt !== null && bingoCountdown === 0)
   );
 
-  const [heroBanners, setHeroBanners] = useState<HeroBannerAd[]>([
+  const [localHeroBanners, setLocalHeroBanners] = useState<HeroBannerAd[]>([
     {
       id: 'hb-reg-1',
       title: 'Sun Bingo — መደበኛ ቢንጎ ከአሸናፊ ቅጦች ጋር!',
@@ -575,6 +583,8 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
       isActive: true,
     },
   ]);
+  const heroBanners = externalHeroBanners ?? localHeroBanners;
+  const setHeroBanners = setLocalHeroBanners;
   const [localBankAccounts, setLocalBankAccounts] = useState<BankPaymentAccount[]>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -2023,15 +2033,51 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
             onResetGame={handleResetGame}
             heroBanners={heroBanners}
             bankAccounts={bankAccounts}
-            onAddHeroBanner={(b) =>
-              setHeroBanners((prev) => [{ ...b, id: `hb-${Date.now()}` }, ...prev])
-            }
-            onUpdateHeroBanner={(b) =>
-              setHeroBanners((prev) => prev.map((x) => (x.id === b.id ? b : x)))
-            }
-            onRemoveHeroBanner={(id) =>
-              setHeroBanners((prev) => prev.filter((x) => x.id !== id))
-            }
+            onAddHeroBanner={(b) => {
+              if (externalOnAddHeroBanner) {
+                externalOnAddHeroBanner(b);
+                return;
+              }
+              setHeroBanners((prev) => {
+                const next = [{ ...b, id: `hb-${Date.now()}` }, ...prev];
+                fetch(buildApiUrl('/api/home-ads'), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ heroBanners: next }),
+                }).catch(() => {});
+                return next;
+              });
+            }}
+            onUpdateHeroBanner={(b) => {
+              if (externalOnUpdateHeroBanner) {
+                externalOnUpdateHeroBanner(b);
+                return;
+              }
+              setHeroBanners((prev) => {
+                const next = prev.map((x) => (x.id === b.id ? b : x));
+                fetch(buildApiUrl('/api/home-ads'), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ heroBanners: next }),
+                }).catch(() => {});
+                return next;
+              });
+            }}
+            onRemoveHeroBanner={(id) => {
+              if (externalOnRemoveHeroBanner) {
+                externalOnRemoveHeroBanner(id);
+                return;
+              }
+              setHeroBanners((prev) => {
+                const next = prev.filter((x) => x.id !== id);
+                fetch(buildApiUrl('/api/home-ads'), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ heroBanners: next }),
+                }).catch(() => {});
+                return next;
+              });
+            }}
             onAddBankAccount={(acc) => {
               if (externalOnAddBankAccount) {
                 externalOnAddBankAccount(acc);

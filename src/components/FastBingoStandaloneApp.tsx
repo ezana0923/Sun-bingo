@@ -143,6 +143,10 @@ interface FastBingoStandaloneAppProps {
   onAddBankAccount?: (bank: BankPaymentAccount) => void;
   onUpdateBankAccount?: (bank: BankPaymentAccount) => void;
   onRemoveBankAccount?: (id: string) => void;
+  heroBanners?: HeroBannerAd[];
+  onAddHeroBanner?: (banner: Omit<HeroBannerAd, 'id'>) => void;
+  onUpdateHeroBanner?: (banner: HeroBannerAd) => void;
+  onRemoveHeroBanner?: (id: string) => void;
 }
 
 const BINGO_LETTERS = [
@@ -174,6 +178,10 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
   onAddBankAccount: externalOnAddBankAccount,
   onUpdateBankAccount: externalOnUpdateBankAccount,
   onRemoveBankAccount: externalOnRemoveBankAccount,
+  heroBanners: externalHeroBanners,
+  onAddHeroBanner: externalOnAddHeroBanner,
+  onUpdateHeroBanner: externalOnUpdateHeroBanner,
+  onRemoveHeroBanner: externalOnRemoveHeroBanner,
 }) => {
   const [activeTab, setActiveTab] = useState<'game' | 'history' | 'leaderboard' | 'wallet' | 'profile' | 'admin'>(() => {
     if (typeof window !== 'undefined') {
@@ -762,7 +770,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
 
   const currentUser = users[0];
 
-  const [heroBanners, setHeroBanners] = useState<HeroBannerAd[]>(() => {
+  const [localHeroBanners, setLocalHeroBanners] = useState<HeroBannerAd[]>(() => {
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem('ezi_hero_banners_v2');
@@ -794,6 +802,8 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
       },
     ];
   });
+  const heroBanners = externalHeroBanners ?? localHeroBanners;
+  const setHeroBanners = setLocalHeroBanners;
 
   const [localBankAccounts, setLocalBankAccounts] = useState<BankPaymentAccount[]>(() => {
     if (typeof window !== 'undefined') {
@@ -3924,8 +3934,17 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
             heroBanners={heroBanners}
             bankAccounts={bankAccounts}
             onAddHeroBanner={(banner) => {
+              if (externalOnAddHeroBanner) {
+                externalOnAddHeroBanner(banner);
+                return;
+              }
               setHeroBanners((prev) => {
                 const next = [{ ...banner, id: `hb-${Date.now()}` }, ...prev];
+                fetch(buildApiUrl('/api/home-ads'), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ heroBanners: next }),
+                }).catch(() => {});
                 dispatchServerRoomAction({
                   mode: 'fast',
                   stakeAmount: activeStakeTier,
@@ -3936,8 +3955,17 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
               });
             }}
             onUpdateHeroBanner={(updated) => {
+              if (externalOnUpdateHeroBanner) {
+                externalOnUpdateHeroBanner(updated);
+                return;
+              }
               setHeroBanners((prev) => {
                 const next = prev.map((b) => (b.id === updated.id ? updated : b));
+                fetch(buildApiUrl('/api/home-ads'), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ heroBanners: next }),
+                }).catch(() => {});
                 dispatchServerRoomAction({
                   mode: 'fast',
                   stakeAmount: activeStakeTier,
@@ -3948,8 +3976,17 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
               });
             }}
             onRemoveHeroBanner={(id) => {
+              if (externalOnRemoveHeroBanner) {
+                externalOnRemoveHeroBanner(id);
+                return;
+              }
               setHeroBanners((prev) => {
                 const next = prev.filter((b) => b.id !== id);
+                fetch(buildApiUrl('/api/home-ads'), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ heroBanners: next }),
+                }).catch(() => {});
                 dispatchServerRoomAction({
                   mode: 'fast',
                   stakeAmount: activeStakeTier,

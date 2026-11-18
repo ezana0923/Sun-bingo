@@ -635,6 +635,8 @@ export default function App() {
     return [];
   });
 
+  const lastHomeAdsWriteAtRef = useRef<number>(0);
+
   useEffect(() => {
     const fetchVisibility = () => {
       fetch(buildApiUrl('/api/games/visibility'))
@@ -652,9 +654,11 @@ export default function App() {
     };
 
     const fetchHomeAds = () => {
+      const reqStartedAt = Date.now();
       fetch(buildApiUrl('/api/home-ads'))
         .then((r) => r.json())
         .then((data) => {
+          if (lastHomeAdsWriteAtRef.current > reqStartedAt) return;
           const incomingAds = Array.isArray(data?.heroBanners)
             ? data.heroBanners
             : Array.isArray(data?.ads)
@@ -675,11 +679,12 @@ export default function App() {
     const syncTimer = window.setInterval(() => {
       fetchVisibility();
       fetchHomeAds();
-    }, 5000);
+    }, 4000);
     return () => window.clearInterval(syncTimer);
   }, []);
 
   const persistHomeAdsToServer = useCallback((nextAds: HeroBannerAd[]) => {
+    lastHomeAdsWriteAtRef.current = Date.now();
     setHeroBanners(nextAds);
     try {
       localStorage.setItem('sun_home_ads_v1', JSON.stringify(nextAds));
@@ -688,7 +693,17 @@ export default function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ heroBanners: nextAds }),
-    }).catch(() => {});
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.ok && Array.isArray(data.heroBanners)) {
+          setHeroBanners(data.heroBanners);
+          try {
+            localStorage.setItem('sun_home_ads_v1', JSON.stringify(data.heroBanners));
+          } catch {}
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const handleAddHeroBanner = useCallback(
@@ -2373,112 +2388,146 @@ export default function App() {
                           : 'bg-gradient-to-br from-slate-900 via-[#08202B] to-slate-900 border-amber-500/60 shadow-xl'
                       }`}
                     >
-                      {/* Top-Left Crimson Ribbon Badge & Top-Right Green Online Count Pill */}
-                      <div className="flex items-center justify-between px-3 pt-2.5 pb-1">
-                        <span className="px-2.5 py-0.5 rounded-br-xl rounded-tl-md bg-gradient-to-r from-rose-700 via-red-600 to-rose-700 border border-amber-300/60 text-[10px] sm:text-xs font-black text-amber-100 shadow-md">
-                          {activeSlide.badge}
-                        </span>
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-400/50 text-[10px] sm:text-xs font-bold text-emerald-300 tabular-nums shadow">
-                          <User className="w-3 h-3 text-emerald-400" />
-                          <span>{totalOnline}</span>
-                        </span>
-                      </div>
+                      {activeSlide.imageUrl ? (
+                        /* Admin-Posted Full Artwork Ad Showcase */
+                        <div className="relative min-h-[188px] sm:min-h-[210px] flex flex-col justify-between">
+                          <img
+                            src={activeSlide.imageUrl}
+                            alt={activeSlide.title}
+                            referrerPolicy="no-referrer"
+                            className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-r from-[#030F15]/95 via-[#051822]/75 to-black/30" />
 
-                      {/* Split Content: Left Promo Text + Chest/Coin Artwork + CTA | Right Bingo Card Graphic */}
-                      <div className="px-3.5 sm:px-5 pb-4 pt-1 grid grid-cols-12 gap-2.5 items-center">
-                        <div className="col-span-7 flex flex-col justify-between space-y-2">
-                          <div>
-                            <h2 className="text-sm sm:text-lg font-black leading-tight bg-gradient-to-b from-amber-100 via-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow">
-                              {activeSlide.title}
-                            </h2>
-                            <p className="mt-0.5 text-[10px] sm:text-xs text-slate-200/90 leading-snug line-clamp-2">
-                              {activeSlide.subtitle}
-                            </p>
-                          </div>
-
-                          {/* Centerpiece Treasure & Coin Burst or Uploaded Admin Ad Image */}
-                          <div className="flex items-center gap-2">
-                            {activeSlide.imageUrl ? (
-                              <img
-                                src={activeSlide.imageUrl}
-                                alt={activeSlide.title}
-                                referrerPolicy="no-referrer"
-                                className="h-14 w-24 sm:h-16 sm:w-28 rounded-xl object-cover border border-amber-400/50 shadow-md"
-                              />
-                            ) : (
-                              <svg viewBox="0 0 110 62" className="h-14 sm:h-16 w-auto drop-shadow-[0_4px_12px_rgba(245,158,11,0.35)]">
-                                <defs>
-                                  <linearGradient id="chestGold" x1="0" y1="0" x2="1" y2="1">
-                                    <stop offset="0%" stopColor="#FEF08A" />
-                                    <stop offset="50%" stopColor="#F59E0B" />
-                                    <stop offset="100%" stopColor="#92400E" />
-                                  </linearGradient>
-                                </defs>
-                                <ellipse cx="55" cy="54" rx="40" ry="6" fill="#F59E0B" opacity="0.22" />
-                                <path d="M 32 34 L 78 34 L 74 52 L 36 52 Z" fill="#78350F" stroke="url(#chestGold)" strokeWidth="2.2" />
-                                <path d="M 28 34 Q 55 18 82 34 Z" fill="#92400E" stroke="url(#chestGold)" strokeWidth="2.2" />
-                                <ellipse cx="55" cy="33" rx="19" ry="6" fill="#FDE047" opacity="0.85" />
-                                <circle cx="48" cy="32" r="4" fill="#FBBF24" stroke="#FFFBEB" strokeWidth="0.8" />
-                                <circle cx="56" cy="30" r="4.5" fill="#FDE047" stroke="#FFFBEB" strokeWidth="0.8" />
-                                <circle cx="63" cy="33" r="3.8" fill="#F59E0B" stroke="#FFFBEB" strokeWidth="0.8" />
-                                <rect x="51" y="36" width="8" height="9" rx="2" fill="url(#chestGold)" />
-                                <circle cx="24" cy="49" r="3.5" fill="#FBBF24" />
-                                <circle cx="84" cy="50" r="3.5" fill="#FDE047" />
-                                <path d="M 20 22 L 29 14 M 88 22 L 80 14" stroke="#22D3EE" strokeWidth="2" strokeLinecap="round" opacity="0.85" />
-                              </svg>
-                            )}
-                          </div>
-
-                          <div>
-                            <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-rose-700 via-red-600 to-amber-500 border border-amber-300/80 text-white text-[11px] sm:text-xs font-black shadow-[0_4px_14px_rgba(225,29,72,0.45)] group-hover:brightness-110 transition-all">
-                              {activeSlide.cta}
+                          {/* Top Badges */}
+                          <div className="relative z-10 flex items-center justify-between px-3 pt-2.5">
+                            <span className="px-2.5 py-0.5 rounded-br-xl rounded-tl-md bg-gradient-to-r from-rose-700 via-red-600 to-rose-700 border border-amber-300/60 text-[10px] sm:text-xs font-black text-amber-100 shadow-md">
+                              {activeSlide.badge}
+                            </span>
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-400/50 text-[10px] sm:text-xs font-bold text-emerald-300 tabular-nums shadow">
+                              <User className="w-3 h-3 text-emerald-400" />
+                              <span>{totalOnline}</span>
                             </span>
                           </div>
-                        </div>
 
-                        {/* Right: 5x5 Stylized Bingo Card & 3D 43/41 Balls */}
-                        <div className="col-span-5 flex flex-col items-center justify-center">
-                          <div className="relative w-full max-w-[126px] rounded-xl bg-gradient-to-b from-[#0E3542] to-[#061820] border border-cyan-400/50 p-1.5 shadow-xl">
-                            <div className="text-center text-[10px] font-black tracking-widest text-amber-200 pb-1">
-                              BINGO
+                          {/* Ad Copy & CTA Overlay */}
+                          <div className="relative z-10 px-3.5 sm:px-5 py-3.5 space-y-2 max-w-[78%]">
+                            <h2 className="text-base sm:text-xl font-black leading-tight bg-gradient-to-b from-amber-100 via-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow">
+                              {activeSlide.title}
+                            </h2>
+                            <p className="text-[11px] sm:text-xs text-slate-100/95 leading-snug line-clamp-2 drop-shadow">
+                              {activeSlide.subtitle}
+                            </p>
+                            {activeSlide.target !== 'none' && (
+                              <div className="pt-0.5">
+                                <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-rose-700 via-red-600 to-amber-500 border border-amber-300/80 text-white text-[11px] sm:text-xs font-black shadow-[0_4px_14px_rgba(225,29,72,0.45)] group-hover:brightness-110 transition-all">
+                                  {activeSlide.cta}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {/* Top-Left Crimson Ribbon Badge & Top-Right Green Online Count Pill */}
+                          <div className="flex items-center justify-between px-3 pt-2.5 pb-1">
+                            <span className="px-2.5 py-0.5 rounded-br-xl rounded-tl-md bg-gradient-to-r from-rose-700 via-red-600 to-rose-700 border border-amber-300/60 text-[10px] sm:text-xs font-black text-amber-100 shadow-md">
+                              {activeSlide.badge}
+                            </span>
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-400/50 text-[10px] sm:text-xs font-bold text-emerald-300 tabular-nums shadow">
+                              <User className="w-3 h-3 text-emerald-400" />
+                              <span>{totalOnline}</span>
+                            </span>
+                          </div>
+
+                          {/* Split Content: Left Promo Text + Chest/Coin Artwork + CTA | Right Bingo Card Graphic */}
+                          <div className="px-3.5 sm:px-5 pb-4 pt-1 grid grid-cols-12 gap-2.5 items-center">
+                            <div className="col-span-7 flex flex-col justify-between space-y-2">
+                              <div>
+                                <h2 className="text-sm sm:text-lg font-black leading-tight bg-gradient-to-b from-amber-100 via-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow">
+                                  {activeSlide.title}
+                                </h2>
+                                <p className="mt-0.5 text-[10px] sm:text-xs text-slate-200/90 leading-snug line-clamp-2">
+                                  {activeSlide.subtitle}
+                                </p>
+                              </div>
+
+                              {/* Centerpiece Treasure & Coin Burst */}
+                              <div className="flex items-center gap-2">
+                                <svg viewBox="0 0 110 62" className="h-14 sm:h-16 w-auto drop-shadow-[0_4px_12px_rgba(245,158,11,0.35)]">
+                                  <defs>
+                                    <linearGradient id="chestGold" x1="0" y1="0" x2="1" y2="1">
+                                      <stop offset="0%" stopColor="#FEF08A" />
+                                      <stop offset="50%" stopColor="#F59E0B" />
+                                      <stop offset="100%" stopColor="#92400E" />
+                                    </linearGradient>
+                                  </defs>
+                                  <ellipse cx="55" cy="54" rx="40" ry="6" fill="#F59E0B" opacity="0.22" />
+                                  <path d="M 32 34 L 78 34 L 74 52 L 36 52 Z" fill="#78350F" stroke="url(#chestGold)" strokeWidth="2.2" />
+                                  <path d="M 28 34 Q 55 18 82 34 Z" fill="#92400E" stroke="url(#chestGold)" strokeWidth="2.2" />
+                                  <ellipse cx="55" cy="33" rx="19" ry="6" fill="#FDE047" opacity="0.85" />
+                                  <circle cx="48" cy="32" r="4" fill="#FBBF24" stroke="#FFFBEB" strokeWidth="0.8" />
+                                  <circle cx="56" cy="30" r="4.5" fill="#FDE047" stroke="#FFFBEB" strokeWidth="0.8" />
+                                  <circle cx="63" cy="33" r="3.8" fill="#F59E0B" stroke="#FFFBEB" strokeWidth="0.8" />
+                                  <rect x="51" y="36" width="8" height="9" rx="2" fill="url(#chestGold)" />
+                                  <circle cx="24" cy="49" r="3.5" fill="#FBBF24" />
+                                  <circle cx="84" cy="50" r="3.5" fill="#FDE047" />
+                                  <path d="M 20 22 L 29 14 M 88 22 L 80 14" stroke="#22D3EE" strokeWidth="2" strokeLinecap="round" opacity="0.85" />
+                                </svg>
+                              </div>
+
+                              <div>
+                                <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-rose-700 via-red-600 to-amber-500 border border-amber-300/80 text-white text-[11px] sm:text-xs font-black shadow-[0_4px_14px_rgba(225,29,72,0.45)] group-hover:brightness-110 transition-all">
+                                  {activeSlide.cta}
+                                </span>
+                              </div>
                             </div>
-                            <div className="grid grid-cols-5 gap-0.5 text-[7px] font-bold text-center">
-                              {[
-                                '4', '18', '33', '46', '61',
-                                '11', '22', '43', '51', '68',
-                                '7', '17', '★', '48', '73',
-                                '14', '29', '31', '54', '65',
-                                '2', '24', '39', '58', '70',
-                              ].map((cell, cIdx) => (
-                                <div
-                                  key={cIdx}
-                                  className={`aspect-square rounded-[3px] flex items-center justify-center ${
-                                    cell === '43' || cell === '48' || cell === '★'
-                                      ? 'bg-cyan-400/80 text-slate-950 font-black'
-                                      : 'bg-cyan-950/80 text-cyan-100/85 border border-cyan-500/20'
-                                  }`}
-                                >
-                                  {cell}
+
+                            {/* Right: 5x5 Stylized Bingo Card & 3D 43/41 Balls */}
+                            <div className="col-span-5 flex flex-col items-center justify-center">
+                              <div className="relative w-full max-w-[126px] rounded-xl bg-gradient-to-b from-[#0E3542] to-[#061820] border border-cyan-400/50 p-1.5 shadow-xl">
+                                <div className="text-center text-[10px] font-black tracking-widest text-amber-200 pb-1">
+                                  BINGO
                                 </div>
-                              ))}
-                            </div>
-                            {/* Floating 3D Bingo Balls */}
-                            <div className="absolute -bottom-2 -left-2 w-8 h-8 rounded-full bg-[radial-gradient(circle_at_30%_30%,_#93C5FD,_#1D4ED8_65%,_#1E3A8A)] border border-sky-200/80 flex items-center justify-center shadow-lg">
-                              <span className="w-4.5 h-4.5 rounded-full bg-white text-slate-950 text-[8px] font-black flex items-center justify-center">
-                                43
-                              </span>
-                            </div>
-                            <div className="absolute -bottom-2 -right-2 w-8 h-8 rounded-full bg-[radial-gradient(circle_at_30%_30%,_#86EFAC,_#15803D_65%,_#14532D)] border border-emerald-200/80 flex items-center justify-center shadow-lg">
-                              <span className="w-4.5 h-4.5 rounded-full bg-white text-slate-950 text-[8px] font-black flex items-center justify-center">
-                                41
+                                <div className="grid grid-cols-5 gap-0.5 text-[7px] font-bold text-center">
+                                  {[
+                                    '4', '18', '33', '46', '61',
+                                    '11', '22', '43', '51', '68',
+                                    '7', '17', '★', '48', '73',
+                                    '14', '29', '31', '54', '65',
+                                    '2', '24', '39', '58', '70',
+                                  ].map((cell, cIdx) => (
+                                    <div
+                                      key={cIdx}
+                                      className={`aspect-square rounded-[3px] flex items-center justify-center ${
+                                        cell === '43' || cell === '48' || cell === '★'
+                                          ? 'bg-cyan-400/80 text-slate-950 font-black'
+                                          : 'bg-cyan-950/80 text-cyan-100/85 border border-cyan-500/20'
+                                      }`}
+                                    >
+                                      {cell}
+                                    </div>
+                                  ))}
+                                </div>
+                                {/* Floating 3D Bingo Balls */}
+                                <div className="absolute -bottom-2 -left-2 w-8 h-8 rounded-full bg-[radial-gradient(circle_at_30%_30%,_#93C5FD,_#1D4ED8_65%,_#1E3A8A)] border border-sky-200/80 flex items-center justify-center shadow-lg">
+                                  <span className="w-4.5 h-4.5 rounded-full bg-white text-slate-950 text-[8px] font-black flex items-center justify-center">
+                                    43
+                                  </span>
+                                </div>
+                                <div className="absolute -bottom-2 -right-2 w-8 h-8 rounded-full bg-[radial-gradient(circle_at_30%_30%,_#86EFAC,_#15803D_65%,_#14532D)] border border-emerald-200/80 flex items-center justify-center shadow-lg">
+                                  <span className="w-4.5 h-4.5 rounded-full bg-white text-slate-950 text-[8px] font-black flex items-center justify-center">
+                                    41
+                                  </span>
+                                </div>
+                              </div>
+                              <span className="mt-3 text-xs sm:text-sm font-black text-amber-300 tracking-wide">
+                                {tHub.fastTitle}
                               </span>
                             </div>
                           </div>
-                          <span className="mt-3 text-xs sm:text-sm font-black text-amber-300 tracking-wide">
-                            {tHub.fastTitle}
-                          </span>
-                        </div>
-                      </div>
+                        </>
+                      )}
                     </div>
 
                     {/* Carousel Dots */}
@@ -2701,6 +2750,10 @@ export default function App() {
               onAddBankAccount={handleAddBankAccount}
               onUpdateBankAccount={handleUpdateBankAccount}
               onRemoveBankAccount={handleRemoveBankAccount}
+              heroBanners={heroBanners}
+              onAddHeroBanner={handleAddHeroBanner}
+              onUpdateHeroBanner={handleUpdateHeroBanner}
+              onRemoveHeroBanner={handleRemoveHeroBanner}
             />
           ) : gameMode === 'regular' ? (
             <RegularBingoStandaloneApp
@@ -2729,6 +2782,10 @@ export default function App() {
               onAddBankAccount={handleAddBankAccount}
               onUpdateBankAccount={handleUpdateBankAccount}
               onRemoveBankAccount={handleRemoveBankAccount}
+              heroBanners={heroBanners}
+              onAddHeroBanner={handleAddHeroBanner}
+              onUpdateHeroBanner={handleUpdateHeroBanner}
+              onRemoveHeroBanner={handleRemoveHeroBanner}
             />
           ) : gameMode === 'keno' ? (
             <div data-scroll-reset="true" className="flex-1 w-full flex flex-col items-center justify-start overflow-y-auto overscroll-y-contain">

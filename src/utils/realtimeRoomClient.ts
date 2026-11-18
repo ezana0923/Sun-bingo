@@ -526,11 +526,28 @@ function connectEventSource() {
         const parsed = JSON.parse(event.data) as {
           type?: string;
           notification?: GameStartNotificationEvent;
+          heroBanners?: HeroBannerAd[];
+          ads?: HeroBannerAd[];
         };
         if (parsed && parsed.type === 'room:sync') {
           isSseConnected = true;
           isWsConnected = true;
           notifyListeners(parsed as unknown as RealtimeRoomSyncMessage, true);
+        } else if (parsed && parsed.type === 'home:ads:sync') {
+          const adsList = Array.isArray(parsed.heroBanners)
+            ? parsed.heroBanners
+            : Array.isArray(parsed.ads)
+            ? parsed.ads
+            : null;
+          if (adsList && lastSyncMessage) {
+            notifyListeners({ ...lastSyncMessage, homeHeroAds: adsList, timestamp: Date.now() }, true);
+          } else if (adsList) {
+            listeners.forEach((cb) => {
+              try {
+                cb({ type: 'room:sync', homeHeroAds: adsList, timestamp: Date.now() } as RealtimeRoomSyncMessage, true);
+              } catch {}
+            });
+          }
         } else if (parsed && parsed.type === 'game:notify' && parsed.notification) {
           emitGameNotifyToListeners(parsed.notification);
         }
@@ -594,6 +611,7 @@ function startPollingBackup() {
               regularLockedCartelas: data.regularLockedCartelas || [],
               transactions: data.transactions,
               players: data.players,
+              homeHeroAds: data.homeHeroAds,
               requireDepositApproval: data.requireDepositApproval,
               timestamp: Date.now(),
             },
@@ -639,10 +657,27 @@ function connectWebSocket() {
         const parsed = JSON.parse(event.data) as {
           type?: string;
           notification?: GameStartNotificationEvent;
+          heroBanners?: HeroBannerAd[];
+          ads?: HeroBannerAd[];
         };
         if (parsed && parsed.type === 'room:sync') {
           isWsConnected = true;
           notifyListeners(parsed as unknown as RealtimeRoomSyncMessage, true);
+        } else if (parsed && parsed.type === 'home:ads:sync') {
+          const adsList = Array.isArray(parsed.heroBanners)
+            ? parsed.heroBanners
+            : Array.isArray(parsed.ads)
+            ? parsed.ads
+            : null;
+          if (adsList && lastSyncMessage) {
+            notifyListeners({ ...lastSyncMessage, homeHeroAds: adsList, timestamp: Date.now() }, true);
+          } else if (adsList) {
+            listeners.forEach((cb) => {
+              try {
+                cb({ type: 'room:sync', homeHeroAds: adsList, timestamp: Date.now() } as RealtimeRoomSyncMessage, true);
+              } catch {}
+            });
+          }
         } else if (parsed && parsed.type === 'game:notify' && parsed.notification) {
           emitGameNotifyToListeners(parsed.notification);
         }

@@ -15,9 +15,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.text({ type: 'text/plain' }));
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+app.use(express.text({ type: 'text/plain', limit: '25mb' }));
 let lastKnownLiveHost =
   process.env.SHARED_APP_URL ||
   'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
@@ -1313,6 +1313,12 @@ function loadBotsFromDisk() {
     }
     if (Array.isArray(parsed.homeHeroAds)) {
       persistedHomeHeroAds = parsed.homeHeroAds;
+      if (persistedHomeHeroAds.length > 0) {
+        for (const stk of FAST_STAKE_TIERS) {
+          if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [...persistedHomeHeroAds];
+        }
+        if (regularLiveRoomState) regularLiveRoomState.heroBanners = [...persistedHomeHeroAds];
+      }
     }
     if (
       typeof parsed.globalWalletBalance === 'number' &&
@@ -5605,7 +5611,7 @@ app.post('/api/live-room/action', (req, res) => {
   } else if (action === 'set_hero_banners') {
     const rawBanners = (req.body as { heroBanners?: unknown }).heroBanners;
     if (Array.isArray(rawBanners)) {
-      const sanitized = rawBanners.map((b: Record<string, unknown>, idx: number) => ({
+      const sanitized = rawBanners.slice(0, 25).map((b: Record<string, unknown>, idx: number) => ({
         id: String(b?.id || `hb-${Date.now()}-${idx}`),
         title: String(b?.title || '').trim(),
         subtitle: String(b?.subtitle || '').trim(),
@@ -5614,12 +5620,37 @@ app.post('/api/live-room/action', (req, res) => {
           ? String(b?.accentColor)
           : 'emerald') as 'blue' | 'emerald' | 'amber' | 'rose',
         imageUrl: b?.imageUrl ? String(b.imageUrl) : undefined,
+        targetGame: (['fast', 'regular', 'keno', 'ramino', 'ludo', 'none'].includes(String(b?.targetGame))
+          ? String(b?.targetGame)
+          : 'fast') as 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none',
+        ctaText: b?.ctaText ? String(b.ctaText).trim() : 'አሁን ይጫወቱ →',
         isActive: b?.isActive !== false,
       }));
+      persistedHomeHeroAds = sanitized;
       for (const stk of FAST_STAKE_TIERS) {
         fastRoomsByStake[stk].heroBanners = sanitized;
       }
       regularLiveRoomState.heroBanners = sanitized;
+      saveBotsToDisk();
+      const adsPayload = JSON.stringify({
+        type: 'home:ads:sync',
+        heroBanners: persistedHomeHeroAds,
+        ads: persistedHomeHeroAds,
+      });
+      for (const wsClient of wsClients) {
+        if (wsClient.readyState === WebSocket.OPEN) {
+          try {
+            wsClient.send(adsPayload);
+          } catch {}
+        }
+      }
+      for (const sseRes of sseClients) {
+        try {
+          sseRes.write(`data: ${adsPayload}\n\n`);
+        } catch {
+          sseClients.delete(sseRes);
+        }
+      }
       broadcastRealtimeSync('both');
     }
   } else if (action === 'set_bank_accounts') {
@@ -7315,6 +7346,10 @@ app.post('/api/admin/state-restore', (req, res) => {
 
   if (Array.isArray(b.homeHeroAds)) {
     persistedHomeHeroAds = b.homeHeroAds.slice(0, 25);
+    for (const stk of FAST_STAKE_TIERS) {
+      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [...persistedHomeHeroAds];
+    }
+    if (regularLiveRoomState) regularLiveRoomState.heroBanners = [...persistedHomeHeroAds];
   }
 
   if (b.gameVisibility && typeof b.gameVisibility === 'object') {
@@ -10667,7 +10702,28 @@ app.post('/api/home-ads', (req, res) => {
     ? req.body.ads
     : null;
   if (incomingAds) {
-    persistedHomeHeroAds = incomingAds.slice(0, 25);
+    const sanitized = (incomingAds as Record<string, unknown>[])
+      .slice(0, 25)
+      .map((b, idx) => ({
+        id: String(b?.id || `ad_${Date.now()}_${idx}`),
+        title: String(b?.title || '').trim(),
+        subtitle: String(b?.subtitle || '').trim(),
+        badgeText: String(b?.badgeText || 'SUN GAMES').trim(),
+        accentColor: (['blue', 'emerald', 'amber', 'rose'].includes(String(b?.accentColor))
+          ? String(b?.accentColor)
+          : 'emerald') as 'blue' | 'emerald' | 'amber' | 'rose',
+        imageUrl: b?.imageUrl ? String(b.imageUrl) : undefined,
+        targetGame: (['fast', 'regular', 'keno', 'ramino', 'ludo', 'none'].includes(String(b?.targetGame))
+          ? String(b?.targetGame)
+          : 'fast') as 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none',
+        ctaText: b?.ctaText ? String(b.ctaText).trim() : 'አሁን ይጫወቱ →',
+        isActive: b?.isActive !== false,
+      }));
+    persistedHomeHeroAds = sanitized;
+    for (const stk of FAST_STAKE_TIERS) {
+      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = sanitized;
+    }
+    if (regularLiveRoomState) regularLiveRoomState.heroBanners = sanitized;
     saveBotsToDisk();
     const payload = JSON.stringify({
       type: 'home:ads:sync',
@@ -10688,7 +10744,7 @@ app.post('/api/home-ads', (req, res) => {
         sseClients.delete(sseRes);
       }
     }
-    broadcastRealtimeSync();
+    broadcastRealtimeSync('both');
   }
   res.json({ ok: true, heroBanners: persistedHomeHeroAds, ads: persistedHomeHeroAds });
 });

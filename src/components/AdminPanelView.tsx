@@ -2943,12 +2943,14 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!bannerTitle.trim()) {
-                  showToast('❌ እባክዎ የማስታወቂያውን ዋና ርዕስ (Title) ይፃፉ!');
+                const effectiveTitle =
+                  bannerTitle.trim() || (bannerImageUrl.trim() ? 'SUN GAMES ልዩ ማስታወቂያ' : '');
+                if (!effectiveTitle) {
+                  showToast('❌ እባክዎ የማስታወቂያውን ዋና ርዕስ (Title) ይፃፉ ወይም ምስል ይምረጡ!');
                   return;
                 }
                 const payload: Omit<HeroBannerAd, 'id'> = {
-                  title: bannerTitle.trim(),
+                  title: effectiveTitle,
                   subtitle: bannerSubtitle.trim() || 'ዕድልዎን ዛሬ ይሞክሩ! ፈጣን ድል እና ታላቅ ሽልማት።',
                   badgeText: bannerBadge.trim() || 'SUN GAMES',
                   accentColor: bannerColor,
@@ -3063,7 +3065,6 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 </label>
                 <input
                   type="text"
-                  required
                   value={bannerTitle}
                   onChange={(e) => setBannerTitle(e.target.value)}
                   placeholder="ለምሳሌ፦ ሁልጊዜ ጨዋታ! በ Sun Bingo እስከ 50,000 ብር ያሸንፉ!"
@@ -3117,10 +3118,40 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                         if (!file) return;
                         const reader = new FileReader();
                         reader.onload = () => {
-                          if (typeof reader.result === 'string') {
-                            setBannerImageUrl(reader.result);
-                            showToast('🖼️ ምስሉ ተመርጧል! አሁን Save / ለጥፍ የሚለውን ይጫኑ።');
+                          const rawDataUrl = typeof reader.result === 'string' ? reader.result : '';
+                          if (!rawDataUrl) return;
+                          if (file.size <= 120 * 1024) {
+                            setBannerImageUrl(rawDataUrl);
+                            showToast('🖼️ ምስሉ ተመርጧል! አሁን «📢 አዲስ ማስታወቂያ ለጥፍ» የሚለውን ይጫኑ።');
+                            return;
                           }
+                          const img = new Image();
+                          img.onload = () => {
+                            try {
+                              const maxW = 960;
+                              const maxH = 540;
+                              const scale = Math.min(1, maxW / img.width, maxH / img.height);
+                              const canvas = document.createElement('canvas');
+                              canvas.width = Math.max(1, Math.round(img.width * scale));
+                              canvas.height = Math.max(1, Math.round(img.height * scale));
+                              const ctx = canvas.getContext('2d');
+                              if (ctx) {
+                                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                                const compressed = canvas.toDataURL('image/jpeg', 0.82);
+                                setBannerImageUrl(compressed.length < rawDataUrl.length ? compressed : rawDataUrl);
+                              } else {
+                                setBannerImageUrl(rawDataUrl);
+                              }
+                            } catch {
+                              setBannerImageUrl(rawDataUrl);
+                            }
+                            showToast('🖼️ ምስሉ ተመርጧል! አሁን «📢 አዲስ ማስታወቂያ ለጥፍ» የሚለውን ይጫኑ።');
+                          };
+                          img.onerror = () => {
+                            setBannerImageUrl(rawDataUrl);
+                            showToast('🖼️ ምስሉ ተመርጧል! አሁን «📢 አዲስ ማስታወቂያ ለጥፍ» የሚለውን ይጫኑ።');
+                          };
+                          img.src = rawDataUrl;
                         };
                         reader.readAsDataURL(file);
                       }}
