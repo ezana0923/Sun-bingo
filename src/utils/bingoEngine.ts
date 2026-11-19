@@ -527,7 +527,7 @@ export function verifyCartelaBingo(
       winningCells: [],
       missingNumbers: missing.slice(0, needed),
       lastBallIncluded: false,
-      reasonAm: `የተሳሳተ ቢንጎ! ግማሽ ቤት 15 ካስ መጥቆር አለበት፤ እስካሁን ${count} ካስ ብቻ ነው የጠቆረው (${needed} ቁጥሮች ይቀራሉ)።`,
+      reasonAm: `የተሳሳተ ቢንጎ! የግማሽ ቤት ቅጥ አልተሟላም (${needed} ቁጥሮች ይቀራሉ)።`,
     };
   }
 

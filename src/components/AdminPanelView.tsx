@@ -197,7 +197,7 @@ export const ADMIN_PATTERN_CATEGORIES: AdminPatternCategory[] = [
       { code: 'FH', label: 'Full house (25 cells)', ruleId: 16 },
       { code: '3Sq', label: '3 Squares (no corners)', ruleId: 10 },
       { code: '2PL', label: '2 Parallel lines', ruleId: 22 },
-      { code: '2Tr', label: '2 Triangles (3x3)', ruleId: 26 },
+      { code: '2Tr', label: '2 Triangles', ruleId: 26 },
       { code: '3T', label: '3 Small T shapes', ruleId: 27 },
       { code: '5L', label: '5 Lines (any)', ruleId: 7 },
       { code: '6L', label: '6 Lines (any)', ruleId: 8 },
@@ -583,7 +583,18 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [broadcastSpecificUser, setBroadcastSpecificUser] = useState('');
   const [broadcastTitle, setBroadcastTitle] = useState('');
   const [broadcastMessage, setBroadcastMessage] = useState('');
+  const [boardInfoMessage, setBoardInfoMessage] = useState(() => {
+    return allFastRoomsByStake[activeStakeTier]?.adminRoomMessage || '';
+  });
+  const [isBoardInfoDirty, setIsBoardInfoDirty] = useState(false);
   const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
+
+  React.useEffect(() => {
+    const serverMsg = allFastRoomsByStake[activeStakeTier]?.adminRoomMessage;
+    if (!isBoardInfoDirty && typeof serverMsg === 'string') {
+      setBoardInfoMessage(serverMsg);
+    }
+  }, [allFastRoomsByStake, activeStakeTier, isBoardInfoDirty]);
   const [autoNotifyGames, setAutoNotifyGames] = useState<AutoNotifyGamesConfig>({
     fast: true,
     regular: true,
@@ -2661,20 +2672,26 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
             {/* Admin Live Board Message (Appears when players click Show More on the 75-Ball Board) */}
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
-                dispatchServerRoomAction({
+                const cleanMsg = boardInfoMessage.trim();
+                const res = await dispatchServerRoomAction({
                   mode: selectedAdminGame === 'fast' ? 'fast' : 'regular',
                   stakeAmount: activeStakeTier,
                   action: 'set_admin_message',
-                  adminMessage: broadcastMessage.trim(),
+                  adminMessage: cleanMsg,
                   applyAllRooms: true,
                 });
-                showToast(
-                  broadcastMessage.trim()
-                    ? '📢 መልእክቱ በጨዋታ ቦርዱ (Show More) ላይ ለሁሉም ተጫዋቾች ወጥቷል!'
-                    : '🧹 በጨዋታ ቦርዱ ላይ የነበረው መልእክት ጠፍቷል!'
-                );
+                setIsBoardInfoDirty(false);
+                if (res?.ok) {
+                  showToast(
+                    cleanMsg
+                      ? '📢 መልእክቱ በጨዋታ ቦርዱ (Show More) ላይ ለሁሉም ተጫዋቾች ወጥቷል!'
+                      : '🧹 በጨዋታ ቦርዱ ላይ የነበረው መልእክት ጠፍቷል!'
+                  );
+                } else {
+                  showToast('⚠️ መልእክቱን ወደ ሰርቨር መላክ አልተሳካም፤ እንደገና ይሞክሩ።');
+                }
               }}
               className="pt-3 border-t border-slate-800/70 space-y-2"
             >
@@ -2684,8 +2701,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="text"
-                  value={broadcastMessage}
-                  onChange={(e) => setBroadcastMessage(e.target.value)}
+                  value={boardInfoMessage}
+                  onChange={(e) => {
+                    setIsBoardInfoDirty(true);
+                    setBoardInfoMessage(e.target.value);
+                  }}
                   placeholder="ለምሳሌ፦ እንኳን ደህና መጡ! ዛሬ ልዩ ቦነስ አለ..."
                   className={`flex-1 px-3.5 py-2 rounded-xl text-xs font-bold border ${
                     isDark ? 'bg-[#14141d] border-slate-800 text-white' : 'bg-slate-50 border-slate-300'
@@ -2700,9 +2720,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setBroadcastMessage('');
-                      dispatchServerRoomAction({
+                    onClick={async () => {
+                      setBoardInfoMessage('');
+                      setIsBoardInfoDirty(false);
+                      await dispatchServerRoomAction({
                         mode: selectedAdminGame === 'fast' ? 'fast' : 'regular',
                         stakeAmount: activeStakeTier,
                         action: 'set_admin_message',
@@ -2717,6 +2738,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   </button>
                 </div>
               </div>
+              {allFastRoomsByStake[activeStakeTier]?.adminRoomMessage && (
+                <div className="text-[11px] font-bold text-emerald-400">
+                  ✅ አሁን በ Show More ላይ የሚታይ መልእክት፦ {allFastRoomsByStake[activeStakeTier]?.adminRoomMessage}
+                </div>
+              )}
             </form>
 
             {/* Admin Configurable Bonus Cartelas for Players Holding > 20 Cartelas */}

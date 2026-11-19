@@ -109,7 +109,7 @@ export function generateRule27Variations(): GeneratedVariation[] {
         variations.push({
           id: `27-opt-${optIndex}`,
           label: `አማራጭ ${optIndex}`,
-          description: `3 የማይደራረቡ 3×3 T ቅርጾች (አማራጭ ${optIndex} ከ 56)`,
+          description: `3 የማይደራረቡ T ቅርጾች (አማራጭ ${optIndex} ከ 56)`,
           grid,
           shapeGroups: [
             { nameAm: 'T ቅርጽ 1', nameEn: 'T-Shape 1', color: 'purple', cells: t1Coords },
@@ -173,7 +173,7 @@ export function generateRule26Variations(): GeneratedVariation[] {
         variations.push({
           id: `26-opt-${optIndex}`,
           label: `አማራጭ ${optIndex}`,
-          description: `3 የማይደራረቡ 3×3 U ቅርጾች (አማራጭ ${optIndex} ከ 36)`,
+          description: `3 የማይደራረቡ U ቅርጾች (አማራጭ ${optIndex} ከ 36)`,
           grid,
           shapeGroups: [
             { nameAm: 'U ቅርጽ 1', nameEn: 'U-Shape 1', color: 'purple', cells: u1Coords },
@@ -220,7 +220,7 @@ export function generateRule1Variations(): GeneratedVariation[] {
       variations.push({
         id: `1-opt-${optIndex}`,
         label: `አማራጭ ${optIndex}`,
-        description: `4 ራሳቸውን የቻሉ 2x2 ስኴሮች ያለ መደራረብ (አማራጭ ${optIndex} ከ 9)`,
+        description: `4 ራሳቸውን የቻሉ ስኴሮች ያለ መደራረብ (አማራጭ ${optIndex} ከ 9)`,
         grid,
         shapeGroups: [
           { nameAm: 'ስኴር 1', nameEn: 'Square 1', color: 'purple', cells: sq1 },
@@ -281,7 +281,7 @@ export function generateRule2Variations(): GeneratedVariation[] {
       variations.push({
         id: `2-opt-${optIndex}`,
         label: `አማራጭ ${optIndex}`,
-        description: `2 ራሳቸውን የቻሉ 2x3/3x2 ሬክታንግሎች ያለ መደራረብ (አማራጭ ${optIndex} ከ 18)`,
+        description: `2 ራሳቸውን የቻሉ ሬክታንግሎች ያለ መደራረብ (አማራጭ ${optIndex} ከ 18)`,
         grid,
         shapeGroups: [
           { nameAm: 'ሬክታንግል 1', nameEn: 'Rectangle 1', color: 'purple', cells: r1 },
@@ -392,7 +392,7 @@ export function generateRule5Variations(): GeneratedVariation[] {
   const directions: { labelAm: string; descAm: string; cells: [number, number][] }[] = [
     {
       labelAm: 'የላይኛው ግማሽ (Rows 1, 2, 3)',
-      descAm: 'የላይኛው 3 ረድፎች ከነፃ F ጋር (15 ካስ)',
+      descAm: 'የላይኛው 3 ረድፎች ከነፃ F ጋር',
       cells: [
         [0, 0], [0, 1], [0, 2], [0, 3], [0, 4],
         [1, 0], [1, 1], [1, 2], [1, 3], [1, 4],
@@ -401,7 +401,7 @@ export function generateRule5Variations(): GeneratedVariation[] {
     },
     {
       labelAm: 'የታችኛው ግማሽ (Rows 3, 4, 5)',
-      descAm: 'የታችኛው 3 ረድፎች ከነፃ F ጋር (15 ካስ)',
+      descAm: 'የታችኛው 3 ረድፎች ከነፃ F ጋር',
       cells: [
         [2, 0], [2, 1], [2, 2], [2, 3], [2, 4],
         [3, 0], [3, 1], [3, 2], [3, 3], [3, 4],
@@ -410,7 +410,7 @@ export function generateRule5Variations(): GeneratedVariation[] {
     },
     {
       labelAm: 'የግራ ግማሽ (Cols B, I, N)',
-      descAm: 'የግራ 3 አምዶች ከነፃ F ጋር (15 ካስ)',
+      descAm: 'የግራ 3 አምዶች ከነፃ F ጋር',
       cells: [
         [0, 0], [0, 1], [0, 2],
         [1, 0], [1, 1], [1, 2],
@@ -421,7 +421,7 @@ export function generateRule5Variations(): GeneratedVariation[] {
     },
     {
       labelAm: 'የቀኝ ግማሽ (Cols N, G, O)',
-      descAm: 'የቀኝ 3 አምዶች ከነፃ F ጋር (15 ካስ)',
+      descAm: 'የቀኝ 3 አምዶች ከነፃ F ጋር',
       cells: [
         [0, 2], [0, 3], [0, 4],
         [1, 2], [1, 3], [1, 4],
@@ -432,7 +432,7 @@ export function generateRule5Variations(): GeneratedVariation[] {
     },
     {
       labelAm: 'የላይ ግራ ትሪያንግል ግማሽ',
-      descAm: 'ከላይ ግራ ዲያጎናል በታች ያሉ 15 ካሶች ከ F ጋር',
+      descAm: 'ከላይ ግራ ዲያጎናል በታች ያሉ ከ F ጋር',
       cells: [
         [0, 0], [0, 1], [0, 2], [0, 3], [0, 4],
         [1, 0], [1, 1], [1, 2], [1, 3],
@@ -443,7 +443,7 @@ export function generateRule5Variations(): GeneratedVariation[] {
     },
     {
       labelAm: 'የታች ቀኝ ትሪያንግል ግማሽ',
-      descAm: 'ከታች ቀኝ ዲያጎናል በላይ ያሉ 15 ካሶች ከ F ጋር',
+      descAm: 'ከታች ቀኝ ዲያጎናል በላይ ያሉ ከ F ጋር',
       cells: [
         [0, 4],
         [1, 3], [1, 4],
@@ -454,7 +454,7 @@ export function generateRule5Variations(): GeneratedVariation[] {
     },
     {
       labelAm: 'የላይ ቀኝ ትሪያንግል ግማሽ',
-      descAm: 'ከላይ ቀኝ ዲያጎናል በታች ያሉ 15 ካሶች ከ F ጋር',
+      descAm: 'ከላይ ቀኝ ዲያጎናል በታች ያሉ ከ F ጋር',
       cells: [
         [0, 0], [0, 1], [0, 2], [0, 3], [0, 4],
         [1, 1], [1, 2], [1, 3], [1, 4],
@@ -465,7 +465,7 @@ export function generateRule5Variations(): GeneratedVariation[] {
     },
     {
       labelAm: 'የታች ግራ ትሪያንግል ግማሽ',
-      descAm: 'ከታች ግራ ዲያጎናል በላይ ያሉ 15 ካሶች ከ F ጋር',
+      descAm: 'ከታች ግራ ዲያጎናል በላይ ያሉ ከ F ጋር',
       cells: [
         [0, 0],
         [1, 0], [1, 1],
@@ -485,7 +485,7 @@ export function generateRule5Variations(): GeneratedVariation[] {
       description: d.descAm,
       grid,
       shapeGroups: [
-        { nameAm: 'ግማሽ ቤት 15 ካስ', nameEn: 'Half House (15)', color: 'emerald', cells: d.cells },
+        { nameAm: 'ግማሽ ቤት', nameEn: 'Half House', color: 'emerald', cells: d.cells },
         { nameAm: 'F ነፃ ካስ', nameEn: 'Free Center', color: 'amber', cells: [[2, 2]] },
       ],
     };
@@ -621,7 +621,7 @@ export function generateRule10Variations(): GeneratedVariation[] {
     variations.push({
       id: `10-opt-${idx + 1}`,
       label: `አማራጭ ${idx + 1}`,
-      description: `3 ራሳቸውን የቻሉ 2x2 ስኴሮች እና 3 የማዕዘን ካሶች - አማራጭ ${idx + 1} ከ 12`,
+      description: `3 ራሳቸውን የቻሉ ስኴሮች እና 3 የማዕዘን ካሶች - አማራጭ ${idx + 1} ከ 12`,
       grid,
       shapeGroups: [
         { nameAm: 'ስኴር 1', nameEn: 'Square 1', color: 'sky', cells: sq1 },
@@ -644,7 +644,7 @@ export function generateRule10Variations(): GeneratedVariation[] {
     variations.push({
       id: `10-opt-${i}`,
       label: `አማራጭ ${i}`,
-      description: `3 ራሳቸውን የቻሉ 2x2 ስኴሮች እና 3 የማዕዘን ካሶች - አማራጭ ${i} ከ 12`,
+      description: `3 ራሳቸውን የቻሉ ስኴሮች እና 3 የማዕዘን ካሶች - አማራጭ ${i} ከ 12`,
       grid,
       shapeGroups: [
         { nameAm: 'ስኴር 1', nameEn: 'Square 1', color: 'sky', cells: sq1 },
@@ -670,7 +670,7 @@ export function generateRule11Variations(): GeneratedVariation[] {
       grid: [
         [false, false, true, false, false],
         [false, false, true, false, false],
-        [true,  true,  true, true,  true],
+        [true, true, true, true, true],
         [false, false, true, false, false],
         [false, false, true, false, false],
       ],
@@ -694,7 +694,7 @@ export function generateRule12Variations(): GeneratedVariation[] {
       grid: [
         [true, false, false, false, true],
         [true, false, false, false, true],
-        [true, true,  true,  true,  true],
+        [true, true, true, true, true],
         [true, false, false, false, true],
         [true, false, false, false, true],
       ],
@@ -708,11 +708,11 @@ export function generateRule12Variations(): GeneratedVariation[] {
       label: 'አግድም H (Horizontal H)',
       description: 'የላይ እና የታች ረድፎች በመካከለኛው አምድ N የተገናኙ',
       grid: [
-        [true,  true,  true,  true,  true],
-        [false, false, true,  false, false],
-        [false, false, true,  false, false],
-        [false, false, true,  false, false],
-        [true,  true,  true,  true,  true],
+        [true, true, true, true, true],
+        [false, false, true, false, false],
+        [false, false, true, false, false],
+        [false, false, true, false, false],
+        [true, true, true, true, true],
       ],
       shapeGroups: [
         { nameAm: 'አግድም H ፊደል', nameEn: 'Horizontal H', color: 'sky', cells: [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [4, 0], [4, 1], [4, 2], [4, 3], [4, 4], [1, 2], [2, 2], [3, 2]] },
@@ -748,7 +748,7 @@ export function generateRule13Variations(): GeneratedVariation[] {
     {
       id: '13-opt-2',
       label: 'አማራጭ 2 (የውስጥ ፍሬም 8 ካስ + 4 ማዕዘናት)',
-      description: 'የውስጥ 3x3 ፍሬም እና 4ቱ የውጭ ማዕዘናት ከ F ጋር',
+      description: 'የውስጥ ፍሬም እና 4ቱ የውጭ ማዕዘናት ከ F ጋር',
       grid: coordsToGrid([...innerCells, [0, 0], [0, 4], [4, 0], [4, 4]]),
       shapeGroups: [
         { nameAm: 'የውስጥ ፍሬም', nameEn: 'Inner Frame', color: 'sky', cells: innerCells },
@@ -791,11 +791,11 @@ export function generateRule14Variations(): GeneratedVariation[] {
       label: 'ዋና ዲያጎናል X (Main X)',
       description: 'ሁለቱም ዋና ዲያጎናል መስመሮች ተገናኝተው X ሲሰሩ',
       grid: [
-        [true,  false, false, false, true],
-        [false, true,  false, true,  false],
-        [false, false, true,  false, false],
-        [false, true,  false, true,  false],
-        [true,  false, false, false, true],
+        [true, false, false, false, true],
+        [false, true, false, true, false],
+        [false, false, true, false, false],
+        [false, true, false, true, false],
+        [true, false, false, false, true],
       ],
       shapeGroups: [
         { nameAm: 'ዲያጎናል 1', nameEn: 'Diagonal 1', color: 'sky', cells: d1 },
@@ -915,7 +915,7 @@ export function generateRule17Variations(): GeneratedVariation[] {
       // Disjoint corner pairs
       const freeCorners = cornerCells.filter(
         ([cr, cc]) => !cCross1.some(([r, c]) => r === cr && c === cc) && !cCross2.some(([r, c]) => r === cr && c === cc)
-      );
+);
 
       const cornerPair = freeCorners.slice(0, 2);
       const grid = coordsToGrid([...cCross1, ...cCross2, ...cornerPair]);
@@ -980,7 +980,7 @@ export function generateRule18Variations(): GeneratedVariation[] {
       variations.push({
         id: `18-opt-${optIdx}`,
         label: `አማራጭ ${optIdx} (H ${hPos.name})`,
-        description: `ትንሽ H እና ሁለት 2x2 ስኴሮች - አማራጭ ${optIdx} ከ 24`,
+        description: `ትንሽ H እና ሁለት ስኴሮች - አማራጭ ${optIdx} ከ 24`,
         grid,
         shapeGroups: [
           { nameAm: 'ትንሽ H', nameEn: 'Small H', color: 'sky', cells: hPos.cells },
@@ -1090,11 +1090,11 @@ export function generateRule20Variations(): GeneratedVariation[] {
       variations.push({
         id: `20-opt-${optIdx}`,
         label: `አማራጭ ${optIdx} (ስኴር ${sq.name})`,
-        description: `ትልቁ Y (${y.name}) እና 2x2 ስኴር (${sq.name}) - አማራጭ ${optIdx} ከ 16`,
+        description: `ትልቁ Y (${y.name}) እና ስኴር (${sq.name}) - አማራጭ ${optIdx} ከ 16`,
         grid,
         shapeGroups: [
           { nameAm: 'ትልቁ Y', nameEn: 'Big Y', color: 'sky', cells: y.cells },
-          { nameAm: '2x2 ስኴር', nameEn: '2x2 Square', color: 'amber', cells: sq.cells },
+          { nameAm: 'ስኴር', nameEn: 'Square', color: 'amber', cells: sq.cells },
           { nameAm: 'F ነፃ ካስ', nameEn: 'Free Center', color: 'emerald', cells: [[2, 2]] },
         ],
       });
@@ -1135,11 +1135,11 @@ export function generateRule21Variations(): GeneratedVariation[] {
     variations.push({
       id: `21-opt-${i}`,
       label: `አማራጭ ${i}`,
-      description: `ትንሽ H፣ 2x2 ስኴር እና 3x3 ትንሽ T - አማራጭ ${i} ከ 32`,
+      description: `ትንሽ H፣ ስኴር እና ትንሽ T - አማራጭ ${i} ከ 32`,
       grid,
       shapeGroups: [
         { nameAm: 'ትንሽ H', nameEn: 'Small H', color: 'sky', cells: hCells },
-        { nameAm: '2x2 ስኴር', nameEn: '2x2 Square', color: 'amber', cells: sqCells },
+        { nameAm: 'ስኴር', nameEn: 'Square', color: 'amber', cells: sqCells },
         { nameAm: 'ትንሽ T', nameEn: 'Small T', color: 'rose', cells: tCells },
         { nameAm: 'F ነፃ ካስ', nameEn: 'Free Center', color: 'emerald', cells: [[2, 2]] },
       ],
@@ -1255,11 +1255,11 @@ export function generateRule23Variations(): GeneratedVariation[] {
     variations.push({
       id: `23-opt-${i}`,
       label: `አማራጭ ${i}`,
-      description: `ትንሽ H እና 3x2 ሬክታንግል ያለ መደራረብ - አማራጭ ${i} ከ 20`,
+      description: `ትንሽ H እና ሬክታንግል ያለ መደራረብ - አማራጭ ${i} ከ 20`,
       grid,
       shapeGroups: [
         { nameAm: 'ትንሽ H', nameEn: 'Small H', color: 'sky', cells: hCells },
-        { nameAm: '3x2 ሬክታንግል', nameEn: 'Rectangle', color: 'amber', cells: rectCells },
+        { nameAm: 'ሬክታንግል', nameEn: 'Rectangle', color: 'amber', cells: rectCells },
         { nameAm: 'F ነፃ ካስ', nameEn: 'Free Center', color: 'emerald', cells: [[2, 2]] },
       ],
     });
@@ -1298,10 +1298,10 @@ export function generateRule24Variations(): GeneratedVariation[] {
     variations.push({
       id: `24-opt-${i}`,
       label: `አማራጭ ${i}`,
-      description: `3x3 ትርያንግል፣ ትንሽ T እና የማዕዘን ካስ - አማራጭ ${i} ከ 24`,
+      description: `ትርያንግል፣ ትንሽ T እና የማዕዘን ካስ - አማራጭ ${i} ከ 24`,
       grid,
       shapeGroups: [
-        { nameAm: '3x3 ትርያንግል', nameEn: 'Triangle', color: 'sky', cells: triCells },
+        { nameAm: 'ትርያንግል', nameEn: 'Triangle', color: 'sky', cells: triCells },
         { nameAm: 'ትንሽ T', nameEn: 'Small T', color: 'amber', cells: tCells },
         { nameAm: 'የማዕዘን ካስ', nameEn: 'Corner', color: 'rose', cells: [corner] },
         { nameAm: 'F ነፃ ካስ', nameEn: 'Free Center', color: 'emerald', cells: [[2, 2]] },
@@ -1348,10 +1348,10 @@ export function generateRule25Variations(): GeneratedVariation[] {
     variations.push({
       id: `25-opt-${i}`,
       label: `አማራጭ ${i}`,
-      description: `ትንሽ መስቀል፣ ትንሽ T እና 3x3 ትርያንግል - አማራጭ ${i} ከ 24`,
+      description: `ትንሽ መስቀል፣ ትንሽ T እና ትርያንግል - አማራጭ ${i} ከ 24`,
       grid,
       shapeGroups: [
-        { nameAm: '3x3 ትርያንግል', nameEn: 'Triangle', color: 'sky', cells: triCells },
+        { nameAm: 'ትርያንግል', nameEn: 'Triangle', color: 'sky', cells: triCells },
         { nameAm: 'ትንሽ መስቀል', nameEn: 'Cross', color: 'amber', cells: crossCells },
         { nameAm: 'ትንሽ T', nameEn: 'Small T', color: 'rose', cells: tCells },
         { nameAm: 'F ነፃ ካስ', nameEn: 'Free Center', color: 'emerald', cells: [[2, 2]] },

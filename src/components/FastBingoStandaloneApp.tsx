@@ -381,7 +381,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
   const [sortMode, setSortMode] = useState<FastSortMode>(() => {
     if (typeof window !== 'undefined') {
       const s = localStorage.getItem('ezi_pref_fast_sort_mode') as FastSortMode;
-      if (s) return s;
+      if (s === 'default' || s === 'by_fast_win') return s;
     }
     return 'by_fast_win';
   });
@@ -3081,6 +3081,20 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                       blockedCartelaIds={blockedCartelaIds}
                       bingoCountdown={bingoCountdown}
                       onUpdateAdminRoomMessage={(msgText) => {
+                        const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        setAllFastRoomsByStake((prev) => {
+                          const next = { ...prev };
+                          ([10, 20, 50, 100] as const).forEach((stk) => {
+                            if (next[stk]) {
+                              next[stk] = {
+                                ...next[stk],
+                                adminRoomMessage: msgText,
+                                adminRoomMessageAt: msgText ? nowTime : '',
+                              };
+                            }
+                          });
+                          return next;
+                        });
                         dispatchServerRoomAction({
                           mode: 'fast',
                           stakeAmount: activeStakeTier,
@@ -4690,15 +4704,17 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
               <div className="flex flex-wrap gap-1.5">
                 {(
                   [
-                    { id: 'by_square', label: 'በስኴር (2በ2)' },
-                    { id: 'by_rect', label: 'በሬክታንግል (3በ2/2በ3)' },
-                    { id: 'by_cross', label: 'በ + (3በ3 መስቀል)' },
-                    { id: 'by_t', label: 'በ T (3በ3)' },
-                    { id: 'by_fast_win', label: t.sortFastWin },
-                    { id: 'by_corners', label: t.sortCorners },
-                    { id: 'by_lines', label: t.sortLines },
-                    { id: 'by_called', label: t.sortCalled },
-                    { id: 'default', label: t.sortDefault },
+                    {
+                      id: 'by_fast_win',
+                      label:
+                        language === 'ti'
+                          ? 'ብሕጉ መሰረት'
+                          : language === 'om'
+                          ? 'Akka Seeraatti'
+                          : language === 'en'
+                          ? 'According to Rule'
+                          : 'በህጉ መሰረት',
+                    },
                   ] as const
                 ).map((s) => (
                   <button

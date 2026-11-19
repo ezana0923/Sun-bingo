@@ -205,10 +205,12 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
   const [sortMode, setSortMode] = useState<CartelaSortMode>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('ezi_pref_regular_sort_mode');
-      if (saved) return saved as CartelaSortMode;
+      if (saved === 'auto_by_rule' || saved === 'default') return saved;
     }
     return 'auto_by_rule';
   });
+  const [adminRoomMessage, setAdminRoomMessage] = useState<string>('');
+  const [adminRoomMessageAt, setAdminRoomMessageAt] = useState<string>('');
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -661,6 +663,12 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
       }
       if (room.gameMatchId) {
         setGameMatchId(room.gameMatchId);
+      }
+      if (typeof room.adminRoomMessage === 'string') {
+        setAdminRoomMessage(room.adminRoomMessage);
+      }
+      if (typeof room.adminRoomMessageAt === 'string') {
+        setAdminRoomMessageAt(room.adminRoomMessageAt);
       }
       if (Array.isArray(room.gameHistory) && room.gameHistory.length > 0) {
         setGameHistory((prev) => {
@@ -1443,6 +1451,9 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
                 isAdminMode={isAdminAuthenticated}
                 language={language}
                 isDark={isDark}
+                currentUserName={currentUser?.name}
+                adminRoomMessage={adminRoomMessage}
+                adminRoomMessageAt={adminRoomMessageAt}
                 gamePatternName={localizedPatternName}
                 gameMatchId={gameMatchId}
                 stakeAmount={stakeAmount}
@@ -1454,6 +1465,17 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
                 winningCartelaIds={winnersList.map((w) => w.cartelaId)}
                 blockedCartelaIds={blockedCartelaIds}
                 bingoCountdown={bingoCountdown}
+                onUpdateAdminRoomMessage={(msgText) => {
+                  const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                  setAdminRoomMessage(msgText);
+                  setAdminRoomMessageAt(msgText ? nowTime : '');
+                  dispatchServerRoomAction({
+                    mode: 'regular',
+                    action: 'set_admin_message',
+                    adminMessage: msgText,
+                    applyAllRooms: true,
+                  });
+                }}
                 onInspectWinnerCartela={(cid) => {
                   const found = winnersList.find((w) => w.cartelaId === cid);
                   if (found) {
@@ -2198,16 +2220,7 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
 
       {/* Bottom Navigation Bar */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-800 bg-slate-900/95 backdrop-blur-md text-slate-400">
-        <div className="max-w-xl mx-auto grid grid-cols-6 items-center h-16">
-          <button
-            onClick={() => setActiveTab('home')}
-            className={`flex flex-col items-center justify-center h-full cursor-pointer ${
-              activeTab === 'home' ? 'text-emerald-400 font-extrabold' : ''
-            }`}
-          >
-            <Home className="w-5 h-5" />
-            <span className="text-[10px] mt-1">{t.home}</span>
-          </button>
+        <div className="max-w-xl mx-auto grid grid-cols-5 items-center h-16">
           <button
             onClick={() => setActiveTab('play')}
             className={`flex flex-col items-center justify-center h-full cursor-pointer ${

@@ -110,15 +110,17 @@ export const GameSettingsModal: React.FC<GameSettingsModalProps> = ({
   const allSelected = totalCartelas > 0 && selectedCartelaIds.length === totalCartelas;
 
   const sortOptions: { id: CartelaSortMode; label: string }[] = [
-    { id: 'auto_by_rule', label: 'በራሱ ህግ (Auto by Rule)' },
-    { id: 'by_square', label: 'በስኴር (2በ2)' },
-    { id: 'by_rect', label: 'በሬክታንግል (3በ2/2በ3)' },
-    { id: 'by_cross', label: 'በ + (3በ3 መስቀል)' },
-    { id: 'by_t', label: 'በ T (3በ3)' },
-    { id: 'by_lines', label: t.sortLines },
-    { id: 'by_called', label: t.sortCalled },
-    { id: 'by_squares', label: t.sortCorners },
-    { id: 'default', label: t.sortDefault },
+    {
+      id: 'auto_by_rule',
+      label:
+        language === 'ti'
+          ? 'ብሕጉ መሰረት'
+          : language === 'om'
+          ? 'Akka Seeraatti'
+          : language === 'en'
+          ? 'According to Rule'
+          : 'በህጉ መሰረት',
+    },
   ];
 
   return (

@@ -148,6 +148,7 @@ export const MasterBoard75: React.FC<MasterBoard75Props> = ({
   const [showFullBoard, setShowFullBoard] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [adminDraftMessage, setAdminDraftMessage] = useState('');
+  const [adminMsgSavedNotice, setAdminMsgSavedNotice] = useState<string>('');
 
   const t = TRANSLATIONS[language];
   const calledSet = new Set(calledBalls);
@@ -169,7 +170,11 @@ export const MasterBoard75: React.FC<MasterBoard75Props> = ({
     }
     if (clean) {
       setAdminDraftMessage('');
+      setAdminMsgSavedNotice('✅ መልእክቱ በShow More ላይ ወጥቷል!');
+    } else {
+      setAdminMsgSavedNotice('🧹 መልእክቱ ጠፍቷል!');
     }
+    setTimeout(() => setAdminMsgSavedNotice(''), 3000);
   };
 
   const get3DBallGradient = (ball: number) => {
@@ -447,47 +452,52 @@ export const MasterBoard75: React.FC<MasterBoard75Props> = ({
 
                 {/* Admin-Only Quick Edit for Info Message */}
                 {isAdminMode && (
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (adminDraftMessage.trim()) {
-                        handlePostAdminMessage(adminDraftMessage);
-                      }
-                    }}
-                    className={`flex items-center gap-1.5 pt-2 border-t ${
-                      isDark ? 'border-slate-800' : 'border-slate-200'
-                    }`}
-                  >
-                    <input
-                      type="text"
-                      value={adminDraftMessage}
-                      onChange={(e) => setAdminDraftMessage(e.target.value)}
-                      placeholder="መረጃ መልእክት እዚህ ይፃፉ..."
-                      className={`flex-1 px-2.5 py-1.5 rounded-xl text-xs font-bold border focus:outline-none ${
-                        isDark
-                          ? 'bg-slate-900 border-slate-700 text-white placeholder:text-slate-500 focus:border-amber-400'
-                          : 'bg-slate-50 border-slate-300 text-slate-900 placeholder:text-slate-400 focus:border-amber-500'
-                      }`}
-                    />
-                    <button
-                      type="submit"
-                      disabled={!adminDraftMessage.trim()}
-                      className="px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1 cursor-pointer disabled:opacity-45 shrink-0"
+                  <div className={`space-y-1.5 pt-2 border-t ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (adminDraftMessage.trim()) {
+                          handlePostAdminMessage(adminDraftMessage);
+                        }
+                      }}
+                      className="flex items-center gap-1.5"
                     >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>ለጥፍ</span>
-                    </button>
-                    {adminRoomMessage && (
+                      <input
+                        type="text"
+                        value={adminDraftMessage}
+                        onChange={(e) => setAdminDraftMessage(e.target.value)}
+                        placeholder="በ Show More የሚታይ መረጃ እዚህ ይፃፉ..."
+                        className={`flex-1 px-2.5 py-1.5 rounded-xl text-xs font-bold border focus:outline-none ${
+                          isDark
+                            ? 'bg-slate-900 border-slate-700 text-white placeholder:text-slate-500 focus:border-amber-400'
+                            : 'bg-slate-50 border-slate-300 text-slate-900 placeholder:text-slate-400 focus:border-amber-500'
+                        }`}
+                      />
                       <button
-                        type="button"
-                        onClick={() => handlePostAdminMessage('')}
-                        title="መልእክቱን አጥፋ"
-                        className="p-1.5 rounded-xl bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white cursor-pointer shrink-0 transition-colors"
+                        type="submit"
+                        disabled={!adminDraftMessage.trim()}
+                        className="px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1 cursor-pointer disabled:opacity-45 shrink-0"
                       >
-                        <X className="w-3.5 h-3.5" />
+                        <Send className="w-3.5 h-3.5" />
+                        <span>ለጥፍ</span>
                       </button>
+                      {adminRoomMessage && (
+                        <button
+                          type="button"
+                          onClick={() => handlePostAdminMessage('')}
+                          title="መልእክቱን አጥፋ"
+                          className="p-1.5 rounded-xl bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white cursor-pointer shrink-0 transition-colors"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </form>
+                    {adminMsgSavedNotice && (
+                      <div className="text-[11px] font-extrabold text-emerald-400">
+                        {adminMsgSavedNotice}
+                      </div>
                     )}
-                  </form>
+                  </div>
                 )}
 
                 {/* Row 3: ኮድ: | ሰዓት: | የአሁን ቁጥር | ጨዋታ ተጠናቋል */}
@@ -558,6 +568,78 @@ export const MasterBoard75: React.FC<MasterBoard75Props> = ({
                 </div>
               </div>
             </>
+          )}
+
+          {isFastBingoMode && (Boolean(adminRoomMessage) || isAdminMode) && (
+            <div
+              className={`rounded-2xl border p-3 space-y-2 shadow-sm ${
+                isDark
+                  ? 'bg-slate-950/90 border-slate-800 text-slate-100'
+                  : 'bg-white border-slate-200/90 text-slate-800'
+              }`}
+            >
+              {adminRoomMessage && (
+                <div className="flex items-start gap-2 text-xs sm:text-sm leading-relaxed">
+                  <AlignLeft className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="min-w-0 flex-1">
+                    <span className={`${isDark ? 'text-amber-400' : 'text-amber-700'} font-bold mr-1.5`}>
+                      {t.infoLabel}
+                    </span>
+                    <span className="font-semibold break-words whitespace-pre-line">
+                      {adminRoomMessage}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {isAdminMode && (
+                <div className={`space-y-1.5 ${adminRoomMessage ? 'pt-2 border-t border-slate-800' : ''}`}>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (adminDraftMessage.trim()) {
+                        handlePostAdminMessage(adminDraftMessage);
+                      }
+                    }}
+                    className="flex items-center gap-1.5"
+                  >
+                    <input
+                      type="text"
+                      value={adminDraftMessage}
+                      onChange={(e) => setAdminDraftMessage(e.target.value)}
+                      placeholder="በ Show More የሚታይ መረጃ እዚህ ይፃፉ..."
+                      className={`flex-1 px-2.5 py-1.5 rounded-xl text-xs font-bold border focus:outline-none ${
+                        isDark
+                          ? 'bg-slate-900 border-slate-700 text-white placeholder:text-slate-500 focus:border-amber-400'
+                          : 'bg-slate-50 border-slate-300 text-slate-900 placeholder:text-slate-400 focus:border-amber-500'
+                      }`}
+                    />
+                    <button
+                      type="submit"
+                      disabled={!adminDraftMessage.trim()}
+                      className="px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1 cursor-pointer disabled:opacity-45 shrink-0"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>ለጥፍ</span>
+                    </button>
+                    {adminRoomMessage && (
+                      <button
+                        type="button"
+                        onClick={() => handlePostAdminMessage('')}
+                        title="መልእክቱን አጥፋ"
+                        className="p-1.5 rounded-xl bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white cursor-pointer shrink-0 transition-colors"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </form>
+                  {adminMsgSavedNotice && (
+                    <div className="text-[11px] font-extrabold text-emerald-400">
+                      {adminMsgSavedNotice}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           )}
 
           {/* Admin Quick Caller Controls */}

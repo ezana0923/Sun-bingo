@@ -1230,6 +1230,8 @@ function saveBotsToDisk() {
         blockedCartelaIds: fastRoomsByStake[10].blockedCartelaIds,
         winnersList: fastRoomsByStake[10].winnersList,
         lastVerifiedWinnerBanner: fastRoomsByStake[10].lastVerifiedWinnerBanner,
+        adminRoomMessage: fastRoomsByStake[10].adminRoomMessage || '',
+        adminRoomMessageAt: fastRoomsByStake[10].adminRoomMessageAt || '',
         sha256Hash: fastRoomsByStake[10].sha256Hash,
         seq: fastRoomsByStake[10].seq,
       },
@@ -1253,6 +1255,8 @@ function saveBotsToDisk() {
         blockedCartelaIds: regularLiveRoomState.blockedCartelaIds,
         winnersList: regularLiveRoomState.winnersList,
         lastVerifiedWinnerBanner: regularLiveRoomState.lastVerifiedWinnerBanner,
+        adminRoomMessage: regularLiveRoomState.adminRoomMessage || '',
+        adminRoomMessageAt: regularLiveRoomState.adminRoomMessageAt || '',
         sha256Hash: regularLiveRoomState.sha256Hash,
         seq: regularLiveRoomState.seq,
       },
@@ -5594,10 +5598,12 @@ app.post('/api/live-room/action', (req, res) => {
       }
       regularLiveRoomState.adminRoomMessage = msgText;
       regularLiveRoomState.adminRoomMessageAt = msgText ? nowTime : '';
+      saveBotsToDisk();
       broadcastRealtimeSync('both');
     } else {
       room.adminRoomMessage = msgText;
       room.adminRoomMessageAt = msgText ? nowTime : '';
+      saveBotsToDisk();
       broadcastRealtimeSync(mode);
     }
   } else if (action === 'set_bonus_over_20') {
@@ -7467,6 +7473,7 @@ app.post('/api/admin/broadcast', async (req, res) => {
   }
   regularLiveRoomState.adminRoomMessage = cleanMsg;
   regularLiveRoomState.adminRoomMessageAt = nowTime;
+  saveBotsToDisk();
   broadcastRealtimeSync('both');
   emitGameNotification({
     game: 'admin',
