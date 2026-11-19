@@ -77,6 +77,14 @@ const activeBots = new Map<
 
 // Dedup processed Telegram update_ids so NO message is ever sent twice!
 const processedUpdateIds = new Set<string>();
+function trackProcessedUpdateId(key: string) {
+  processedUpdateIds.add(key);
+  while (processedUpdateIds.size > 2000) {
+    const firstKey = processedUpdateIds.values().next().value;
+    if (!firstKey) break;
+    processedUpdateIds.delete(firstKey);
+  }
+}
 // Per-chat action debounce so tapping an inline button or command never sends duplicate messages
 const lastChatActionByChatId = new Map<number, { action: string; timestamp: number }>();
 // Track the last active menu message_id per chatId so when the user taps a button, the old message is deleted and the new one arrives cleanly at the bottom without stacking!
@@ -505,8 +513,15 @@ function serializeFastRoomsSnapshot() {
 
 function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
   const now = Date.now();
-  const activeWsCount =
-    Array.from(wsClients).filter((c) => c.readyState === WebSocket.OPEN).length + sseClients.size;
+  const openWsClients: WebSocket[] = [];
+  for (const c of wsClients) {
+    if (c.readyState === WebSocket.OPEN) {
+      openWsClients.push(c);
+    } else if (c.readyState === WebSocket.CLOSED || c.readyState === WebSocket.CLOSING) {
+      wsClients.delete(c);
+    }
+  }
+  const activeWsCount = openWsClients.length + sseClients.size;
 
   if (changedMode === 'fast' || changedMode === 'both' || !changedMode) {
     for (const stk of FAST_STAKE_TIERS) {
@@ -532,6 +547,10 @@ function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
   }
 
   fastLiveRoomState = fastRoomsByStake[10];
+  if (openWsClients.length === 0 && sseClients.size === 0) {
+    return;
+  }
+
   const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
 
   const payload = JSON.stringify({
@@ -555,12 +574,12 @@ function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
     timestamp: now,
   });
 
-  for (const client of wsClients) {
+  for (const client of openWsClients) {
     if (client.readyState === WebSocket.OPEN) {
       try {
         client.send(payload);
       } catch {
-        // ignore broken socket
+        wsClients.delete(client);
       }
     }
   }
@@ -1178,6 +1197,7 @@ let persistedBotTokensCache: {
   offset?: number;
 }[] = [];
 let isExplicitBotDisconnect = false;
+let lastSavedStateHash = '';
 
 function saveBotsToDisk() {
   try {
@@ -1271,7 +1291,11 @@ function saveBotsToDisk() {
       gameVisibility: persistedGameVisibility,
       homeHeroAds: persistedHomeHeroAds.slice(0, 25),
     };
-    const serialized = JSON.stringify(payload, null, 2);
+    const serialized = JSON.stringify(payload);
+    const nextHash = crypto.createHash('md5').update(serialized).digest('hex');
+    if (nextHash === lastSavedStateHash) {
+      return;
+    }
     const tmpMain = `${BOT_STORE_PATH}.tmp`;
     fs.writeFileSync(tmpMain, serialized, 'utf-8');
     fs.renameSync(tmpMain, BOT_STORE_PATH);
@@ -1282,6 +1306,7 @@ function saveBotsToDisk() {
     } catch {
       // ignore backup write errors
     }
+    lastSavedStateHash = nextHash;
   } catch {
     // ignore disk write errors
   }
@@ -1574,10 +1599,36 @@ function loadBotsFromDisk() {
   }
 }
 
-// Auto-save full server state to disk every 2 seconds so nothing ever reverts on restart
+// Auto-save full server state every 15s (hash-checked to skip unchanged writes) and prune transient in-memory caches to keep RAM low on Render Free tier
 setInterval(() => {
+  const now = Date.now();
+  for (const client of wsClients) {
+    if (client.readyState === WebSocket.CLOSED || client.readyState === WebSocket.CLOSING) {
+      wsClients.delete(client);
+    }
+  }
+  for (const [phone, entry] of pendingOtpByPhone.entries()) {
+    if (now > entry.expiresAt) {
+      pendingOtpByPhone.delete(phone);
+    }
+  }
+  for (const [chatId, entry] of lastOutgoingMsgByChatId.entries()) {
+    if (now - entry.timestamp > 3600000) {
+      lastOutgoingMsgByChatId.delete(chatId);
+    }
+  }
+  for (const [chatId, entry] of lastChatActionByChatId.entries()) {
+    if (now - entry.timestamp > 3600000) {
+      lastChatActionByChatId.delete(chatId);
+    }
+  }
+  for (const [k, ts] of lastGameNotifySentAt.entries()) {
+    if (now - ts > 3600000) {
+      lastGameNotifySentAt.delete(k);
+    }
+  }
   saveBotsToDisk();
-}, 2000);
+}, 15000);
 
 // Build the exact InlineKeyboardMarkup attached directly under the bot's message (like IMG_3500.jpeg):
 // Row 1: 🎮 Play Live Bingo (web_app -> has the little square icon ❐ in top-right and opens inside Telegram!)
@@ -3597,11 +3648,7 @@ async function processTelegramUpdate(token: string, update: any) {
     if (processedUpdateIds.has(uniqueKey)) {
       return;
     }
-    processedUpdateIds.add(uniqueKey);
-    if (processedUpdateIds.size > 2000) {
-      const firstKey = processedUpdateIds.values().next().value;
-      if (firstKey) processedUpdateIds.delete(firstKey);
-    }
+    trackProcessedUpdateId(uniqueKey);
   }
 
   if (update.callback_query) {
@@ -3610,7 +3657,7 @@ async function processTelegramUpdate(token: string, update: any) {
     if (processedUpdateIds.has(cbIdKey)) {
       return;
     }
-    processedUpdateIds.add(cbIdKey);
+    trackProcessedUpdateId(cbIdKey);
 
     const chatId = cb.message?.chat?.id;
     const cbMsgId = cb.message?.message_id;
@@ -3639,7 +3686,7 @@ async function processTelegramUpdate(token: string, update: any) {
     if (processedUpdateIds.has(msgKey)) {
       return;
     }
-    processedUpdateIds.add(msgKey);
+    trackProcessedUpdateId(msgKey);
     const firstName = msg.from?.first_name || msg.chat?.first_name || 'King';
 
     // Handle shared phone contact from Telegram's "📱 Share Phone Number" button (accepts ANY phone number format!)

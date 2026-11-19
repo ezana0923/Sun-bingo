@@ -6,13 +6,15 @@ services:
     branch: main
     autoDeploy: true
     healthCheckPath: /api/health
-    buildCommand: npm install --legacy-peer-deps --include=dev && npm run build
-    startCommand: node server.js
+    buildCommand: NODE_OPTIONS="--max-old-space-size=384" npm install --legacy-peer-deps --include=dev && NODE_OPTIONS="--max-old-space-size=384" npm run build
+    startCommand: node --max-old-space-size=360 server.js
     envVars:
       - key: NODE_VERSION
         value: 22.23.4
       - key: NODE_ENV
         value: production
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
       - key: SHARED_APP_URL
         value: https://sunbingo.onrender.com
       - key: ADMIN_SECRET_PIN

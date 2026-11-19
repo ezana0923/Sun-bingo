@@ -157,18 +157,6 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
     if (typeof window !== 'undefined') {
       const p = new URLSearchParams(window.location.search);
       const t = p.get('tab');
-      const hash = window.location.hash.toLowerCase();
-      if (
-        t === 'admin' ||
-        p.get('admin') === '1' ||
-        p.get('admin') === 'true' ||
-        hash === '#admin' ||
-        hash === '#/admin' ||
-        hash === '#regular-admin' ||
-        hash.includes('admin')
-      ) {
-        return 'admin';
-      }
       if (t === 'history') return 'history';
       if (t === 'wallet') return 'wallet';
       if (t === 'leaderboard') return 'leaderboard';
@@ -227,9 +215,10 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
 
   const [isAdminAuthenticatedLocal, setIsAdminAuthenticatedLocal] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('ezi_admin_authenticated_v2');
-      if (saved === 'true') return true;
-      return false; // Default to false so players do not see admin tools
+      try {
+        localStorage.removeItem('ezi_admin_authenticated_v2');
+        return sessionStorage.getItem('ezi_admin_session_v3') === 'true';
+      } catch {}
     }
     return false;
   });
@@ -246,55 +235,33 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
       onToggleAdminAuthenticated(nextVal);
     }
     try {
-      localStorage.setItem('ezi_admin_authenticated_v2', String(nextVal));
+      localStorage.removeItem('ezi_admin_authenticated_v2');
+      if (nextVal) {
+        sessionStorage.setItem('ezi_admin_session_v3', 'true');
+      } else {
+        sessionStorage.removeItem('ezi_admin_session_v3');
+      }
     } catch {
       // ignore
     }
   };
 
+  // Require PIN modal instead of auto-authenticating via URL hash or Ctrl+Shift+A
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    try {
-      localStorage.setItem('ezi_admin_authenticated_v2', String(isAdminAuthenticated));
-    } catch {
-      // ignore
-    }
-  }, [isAdminAuthenticated]);
-
-  // Listen for #admin URL hash or Ctrl+Shift+A keyboard shortcut
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const handleHash = () => {
-      const h = window.location.hash.toLowerCase();
-      const p = new URLSearchParams(window.location.search);
-      if (
-        h === '#admin' ||
-        h === '#/admin' ||
-        h === '#regular-admin' ||
-        h.includes('admin') ||
-        p.get('tab') === 'admin' ||
-        p.get('admin') === '1' ||
-        p.get('admin') === 'true'
-      ) {
-        setIsAdminAuthenticated(true);
-        setActiveTab('admin');
-      }
-    };
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
         e.preventDefault();
-        setIsAdminAuthenticated(true);
-        setActiveTab('admin');
+        if (onOpenAdminPortal) {
+          onOpenAdminPortal();
+        }
       }
     };
-    handleHash();
-    window.addEventListener('hashchange', handleHash);
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      window.removeEventListener('hashchange', handleHash);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, []);
+  }, [onOpenAdminPortal]);
 
   // Modals
   const [isRulesModalOpen, setIsRulesModalOpen] = useState<boolean>(false);
@@ -1959,7 +1926,10 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
               try {
                 localStorage.setItem('ezi_phone_registered_v2', 'false');
                 localStorage.removeItem('ezi_player_auth_session');
+                localStorage.removeItem('ezi_admin_authenticated_v2');
+                sessionStorage.removeItem('ezi_admin_session_v3');
               } catch {}
+              setIsAdminAuthenticated(false);
               if (onLogout) onLogout();
             }}
             onOpenGameHistory={() => setActiveTab('history')}

@@ -6,6 +6,7 @@ import { LudoMasterGame } from './components/LudoMasterGame';
 import { ModernRaminoGame } from './components/ModernRaminoGame';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AdminPanelView } from './components/AdminPanelView';
+import { RulesAndPatternsModal } from './components/RulesAndPatternsModal';
 import { PlayerAuthScreen, AuthenticatedPlayerPayload } from './components/PlayerAuthScreen';
 import { WalletView } from './components/WalletView';
 import {
@@ -559,21 +560,40 @@ export default function App() {
   });
 
   // 2. Dedicated Admin Authentication & View Mode Separation
-  // Defaults strictly to false so regular players never see admin controls!
+  // Never trust persistent localStorage in Chrome/browsers so regular players never see admin controls!
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('ezi_admin_authenticated_v2');
-      return saved === 'true';
+      try {
+        localStorage.removeItem('ezi_admin_authenticated_v2');
+      } catch {}
+      const path = window.location.pathname.toLowerCase();
+      const h = window.location.hash.toLowerCase();
+      const isSecretAdminRoute =
+        path.includes('/admin0923') ||
+        path.endsWith('admin0923') ||
+        h.includes('admin0923');
+      if (isSecretAdminRoute) {
+        try {
+          return sessionStorage.getItem('ezi_admin_session_v3') === 'true';
+        } catch {}
+      }
     }
     return false;
   });
 
   const [viewMode, setViewMode] = useState<'game' | 'admin'>('game');
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [isAdminRulesModalOpen, setIsAdminRulesModalOpen] = useState(false);
+  const [adminActivePatternId, setAdminActivePatternId] = useState<number>(5);
 
   useEffect(() => {
     try {
-      localStorage.setItem('ezi_admin_authenticated_v2', String(isAdminAuthenticated));
+      localStorage.removeItem('ezi_admin_authenticated_v2');
+      if (isAdminAuthenticated) {
+        sessionStorage.setItem('ezi_admin_session_v3', 'true');
+      } else {
+        sessionStorage.removeItem('ezi_admin_session_v3');
+      }
     } catch {}
   }, [isAdminAuthenticated]);
 
@@ -1011,8 +1031,8 @@ export default function App() {
         h.includes('admin0923');
 
       if (isSecretAdminRoute) {
-        const saved = localStorage.getItem('ezi_admin_authenticated_v2');
-        if (saved === 'true') {
+        const savedSession = sessionStorage.getItem('ezi_admin_session_v3');
+        if (savedSession === 'true') {
           setIsAdminAuthenticated(true);
           setViewMode('admin');
         } else {
@@ -1518,7 +1538,10 @@ export default function App() {
     try {
       localStorage.setItem('ezi_phone_registered_v2', 'false');
       localStorage.removeItem('ezi_player_auth_session');
+      localStorage.removeItem('ezi_admin_authenticated_v2');
+      sessionStorage.removeItem('ezi_admin_session_v3');
     } catch {}
+    setIsAdminAuthenticated(false);
     setIsLoggedIn(false);
     setViewMode('game');
   };
@@ -1923,8 +1946,10 @@ export default function App() {
                 setIsAdminAuthenticated(false);
                 setViewMode('game');
                 try {
-                  localStorage.setItem('ezi_admin_authenticated_v2', 'false');
+                  localStorage.removeItem('ezi_admin_authenticated_v2');
+                  sessionStorage.removeItem('ezi_admin_session_v3');
                 } catch {}
+                window.location.hash = '';
               }}
               className="px-2.5 py-1 rounded-xl text-xs font-black bg-rose-500/20 border border-rose-500/40 text-rose-400 hover:bg-rose-500 hover:text-white flex items-center gap-1 cursor-pointer transition-colors"
               title={tHub.adminLogout}
@@ -1981,7 +2006,18 @@ export default function App() {
 
             <AdminPanelView
               isAdminAuthenticated={isAdminAuthenticated}
+              onAdminLogout={() => {
+                setIsAdminAuthenticated(false);
+                setViewMode('game');
+                try {
+                  localStorage.removeItem('ezi_admin_authenticated_v2');
+                  sessionStorage.removeItem('ezi_admin_session_v3');
+                } catch {}
+                window.location.hash = '';
+              }}
+              onOpenAll16RulesModal={() => setIsAdminRulesModalOpen(true)}
               isFastMode={gameMode === 'fast'}
+              activePatternId={adminActivePatternId}
               stakeAmount={10}
               prizeAmount={80}
               blockedCartelaIds={[]}
@@ -2733,7 +2769,7 @@ export default function App() {
               onUpdateSharedUsers={setSharedUsers}
               sharedTransactions={sharedTransactions}
               onUpdateSharedTransactions={setSharedTransactions}
-              isAdminAuthenticated={isAdminAuthenticated}
+              isAdminAuthenticated={false}
               onToggleAdminAuthenticated={setIsAdminAuthenticated}
               openSettingsTrigger={openSettingsTrigger}
               isDark={isDark}
@@ -2765,7 +2801,7 @@ export default function App() {
               onUpdateSharedUsers={setSharedUsers}
               sharedTransactions={sharedTransactions}
               onUpdateSharedTransactions={setSharedTransactions}
-              isAdminAuthenticated={isAdminAuthenticated}
+              isAdminAuthenticated={false}
               onToggleAdminAuthenticated={setIsAdminAuthenticated}
               openSettingsTrigger={openSettingsTrigger}
               isDark={isDark}
@@ -3102,7 +3138,8 @@ export default function App() {
           setIsAdminAuthenticated(true);
           setViewMode('admin');
           try {
-            localStorage.setItem('ezi_admin_authenticated_v2', 'true');
+            localStorage.removeItem('ezi_admin_authenticated_v2');
+            sessionStorage.setItem('ezi_admin_session_v3', 'true');
           } catch {}
           window.location.hash = '#admin0923';
         }}
@@ -3110,11 +3147,42 @@ export default function App() {
           setIsAdminAuthenticated(false);
           setViewMode('game');
           try {
-            localStorage.setItem('ezi_admin_authenticated_v2', 'false');
+            localStorage.removeItem('ezi_admin_authenticated_v2');
+            sessionStorage.removeItem('ezi_admin_session_v3');
           } catch {}
           window.location.hash = '';
         }}
       />
+
+      {/* Admin-Only 27 Rules & Registration Countdown Modal inside /admin0923 */}
+      {isAdminAuthenticated && viewMode === 'admin' && (
+        <RulesAndPatternsModal
+          isOpen={isAdminRulesModalOpen}
+          onClose={() => setIsAdminRulesModalOpen(false)}
+          activePatternId={adminActivePatternId}
+          isAdminAuthenticated={true}
+          onSelectPattern={(patternId) => {
+            setAdminActivePatternId(patternId);
+            dispatchServerRoomAction({
+              mode: 'regular',
+              action: 'update_settings',
+              activePatternId: patternId,
+            });
+          }}
+          onSetRegistrationMinutes={(minutes) => {
+            const totalSecs = minutes > 0 ? Math.round(minutes * 60) : null;
+            dispatchServerRoomAction({
+              mode: 'regular',
+              action: 'update_settings',
+              countdownSeconds: totalSecs !== null ? totalSecs : undefined,
+              preGameCountdown: totalSecs,
+              isPlaying: false,
+            });
+          }}
+          language={language}
+          isDark={isDark}
+        />
+      )}
 
       {/* Global Real-time Game Start / Admin Broadcast Toast */}
       {isLoggedIn && activeGameNotification && (
