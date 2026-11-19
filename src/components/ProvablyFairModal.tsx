@@ -6,10 +6,8 @@ import {
   Unlock,
   Copy,
   Check,
-  RefreshCw,
   CheckCircle2,
   Hash,
-  KeyRound,
   Sparkles,
   Eye,
 } from 'lucide-react';
@@ -43,14 +41,11 @@ export const ProvablyFairModal: React.FC<ProvablyFairModalProps> = ({
   isPlaying,
   calledBalls,
   hasWinnerOrEnded,
-  clientSeed,
-  onChangeClientSeed,
   roundFairData,
   history = [],
 }) => {
   const [activeTab, setActiveTab] = useState<'current' | 'verifier' | 'history'>('current');
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [customClientSeedInput, setCustomClientSeedInput] = useState(clientSeed);
 
   // Verifier tab state
   const [verifyRoundId, setVerifyRoundId] = useState<number>(roundId);
@@ -63,10 +58,6 @@ export const ProvablyFairModal: React.FC<ProvablyFairModalProps> = ({
     isMatch: boolean;
     balls: number[];
   } | null>(null);
-
-  useEffect(() => {
-    setCustomClientSeedInput(clientSeed);
-  }, [clientSeed]);
 
   useEffect(() => {
     setVerifyRoundId(roundFairData.roundId);
@@ -272,60 +263,7 @@ export const ProvablyFairModal: React.FC<ProvablyFairModalProps> = ({
                 </div>
               </div>
 
-              {/* 2. Client Seed (Public / Player Customizable before round starts) */}
-              <div
-                className={`rounded-2xl border p-3.5 space-y-2 ${
-                  isDark ? 'bg-slate-800/70 border-slate-700' : 'bg-slate-50 border-slate-200'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-extrabold text-amber-400 flex items-center gap-1.5">
-                    <KeyRound className="w-3.5 h-3.5" />
-                    <span>2. የተጫዋች ሲድ (Client Seed & Round Nonce #{roundId})</span>
-                  </span>
-                  {!isPlaying && calledBalls.length === 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const randomSeed = `EZI-SEED-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-                        setCustomClientSeedInput(randomSeed);
-                        onChangeClientSeed(randomSeed);
-                      }}
-                      className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 text-[11px] font-extrabold flex items-center gap-1 cursor-pointer"
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      <span>አዲስ Seed ቀይር</span>
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={customClientSeedInput}
-                    disabled={isPlaying || calledBalls.length > 0}
-                    onChange={(e) => setCustomClientSeedInput(e.target.value)}
-                    className={`flex-1 px-3 py-2 rounded-xl text-xs font-mono-tabular border ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-700 text-white'
-                        : 'bg-white border-slate-300 text-slate-900'
-                    } disabled:opacity-60`}
-                  />
-                  {!isPlaying &&
-                    calledBalls.length === 0 &&
-                    customClientSeedInput.trim() !== clientSeed && (
-                      <button
-                        type="button"
-                        onClick={() => onChangeClientSeed(customClientSeedInput.trim())}
-                        className="px-3 py-2 rounded-xl bg-blue-600 text-white text-xs font-extrabold cursor-pointer"
-                      >
-                        አስቀምጥ
-                      </button>
-                    )}
-                </div>
-              </div>
-
-              {/* 3. Server Seed & Predetermined 75 Balls (Locked during game, Revealed when round ends) */}
+              {/* 2. Server Seed & Predetermined 75 Balls (Locked during game, Revealed when round ends) */}
               <div
                 className={`rounded-2xl border p-3.5 space-y-2.5 ${
                   isDark ? 'bg-slate-800/70 border-slate-700' : 'bg-slate-50 border-slate-200'
@@ -339,7 +277,7 @@ export const ProvablyFairModal: React.FC<ProvablyFairModalProps> = ({
                       <Lock className="w-3.5 h-3.5 text-amber-400" />
                     )}
                     <span>
-                      3. ሰርቨር ሲድ (Server Seed) እና የ75 ኳሶች ቅደም ተከተል
+                      2. ሰርቨር ሲድ (Server Seed) እና የ75 ኳሶች ቅደም ተከተል
                     </span>
                   </span>
 
@@ -467,33 +405,18 @@ export const ProvablyFairModal: React.FC<ProvablyFairModalProps> = ({
                   <span>SHA-256 Cryptographic Verifier (የፍትሃዊነት ማረጋገጫ ካልኩሌተር)</span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block text-[11px] font-bold mb-1">ዙር ቁጥር (Round Nonce):</label>
-                    <input
-                      type="number"
-                      value={verifyRoundId}
-                      onChange={(e) => setVerifyRoundId(Number(e.target.value))}
-                      className={`w-full px-3 py-2 rounded-xl text-xs font-mono-tabular border ${
-                        isDark
-                          ? 'bg-slate-950 border-slate-700 text-white'
-                          : 'bg-white border-slate-300'
-                      }`}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold mb-1">Client Seed:</label>
-                    <input
-                      type="text"
-                      value={verifyClientSeed}
-                      onChange={(e) => setVerifyClientSeed(e.target.value)}
-                      className={`w-full px-3 py-2 rounded-xl text-xs font-mono-tabular border ${
-                        isDark
-                          ? 'bg-slate-950 border-slate-700 text-white'
-                          : 'bg-white border-slate-300'
-                      }`}
-                    />
-                  </div>
+                <div>
+                  <label className="block text-[11px] font-bold mb-1">ዙር ቁጥር (Round ID):</label>
+                  <input
+                    type="number"
+                    value={verifyRoundId}
+                    onChange={(e) => setVerifyRoundId(Number(e.target.value))}
+                    className={`w-full px-3 py-2 rounded-xl text-xs font-mono-tabular border ${
+                      isDark
+                        ? 'bg-slate-950 border-slate-700 text-white'
+                        : 'bg-white border-slate-300'
+                    }`}
+                  />
                 </div>
 
                 <div>
