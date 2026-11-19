@@ -88,6 +88,7 @@ export interface RealtimeRoomSyncMessage {
     isBlocked: boolean;
   }[];
   homeHeroAds?: HeroBannerAd[];
+  homeHeroAdsVersion?: number;
   requireDepositApproval?: boolean;
   timestamp: number;
 }
@@ -396,6 +397,8 @@ let lastRegularSeq = 0;
 let lastStateFingerprint = '';
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSyncMessage: RealtimeRoomSyncMessage | null = null;
+let lastKnownHomeAdsVersion = -1;
+let cachedHomeHeroAds: HeroBannerAd[] | undefined = undefined;
 const seenNotifyIds = new Set<string>();
 
 function emitGameNotifyToListeners(event?: GameStartNotificationEvent) {
@@ -415,8 +418,20 @@ function emitGameNotifyToListeners(event?: GameStartNotificationEvent) {
   });
 }
 
-function notifyListeners(msg: RealtimeRoomSyncMessage, fromStream = false) {
-  if (!msg) return;
+function notifyListeners(rawMsg: RealtimeRoomSyncMessage, fromStream = false) {
+  if (!rawMsg) return;
+  if (Array.isArray(rawMsg.homeHeroAds)) {
+    cachedHomeHeroAds = rawMsg.homeHeroAds;
+    if (typeof rawMsg.homeHeroAdsVersion === 'number') {
+      lastKnownHomeAdsVersion = rawMsg.homeHeroAdsVersion;
+    } else {
+      lastKnownHomeAdsVersion = Math.max(1, lastKnownHomeAdsVersion);
+    }
+  }
+  const msg: RealtimeRoomSyncMessage =
+    !Array.isArray(rawMsg.homeHeroAds) && cachedHomeHeroAds
+      ? { ...rawMsg, homeHeroAds: cachedHomeHeroAds }
+      : rawMsg;
   const fRoom = msg.fastRoom;
   const rRoom = msg.regularRoom;
 
@@ -544,6 +559,12 @@ function connectEventSource() {
             : Array.isArray(parsed.ads)
             ? parsed.ads
             : null;
+          if (adsList) {
+            cachedHomeHeroAds = adsList;
+            if (typeof (parsed as { homeHeroAdsVersion?: number }).homeHeroAdsVersion === 'number') {
+              lastKnownHomeAdsVersion = (parsed as { homeHeroAdsVersion?: number }).homeHeroAdsVersion!;
+            }
+          }
           if (adsList && lastSyncMessage) {
             notifyListeners({ ...lastSyncMessage, homeHeroAds: adsList, timestamp: Date.now() }, true);
           } else if (adsList) {
@@ -578,8 +599,13 @@ function startPollingBackup() {
   if (typeof window === 'undefined' || pollTimer) return;
   const fetchLatest = (force = false) => {
     if (listeners.size === 0) return;
-    // Only skip HTTP poll if a real-time WebSocket/SSE event arrived within the last 550ms
-    if (!force && Date.now() - lastRealtimePushAt < 550) {
+    // Skip HTTP poll when real-time WebSocket or SSE is actively connected unless forced
+    const streamActive =
+      (wsInstance && wsInstance.readyState === WebSocket.OPEN) || isSseConnected;
+    if (!force && streamActive && Date.now() - lastRealtimePushAt < 10000) {
+      return;
+    }
+    if (!force && Date.now() - lastRealtimePushAt < 950) {
       return;
     }
     const devIdentity = getOrCreateDevicePlayerIdentity();
@@ -590,7 +616,7 @@ function startPollingBackup() {
           getDeviceClientId()
         )}&phone=${encodeURIComponent(devIdentity.phone)}&name=${encodeURIComponent(
           devIdentity.name
-        )}${accountToken ? `&accountToken=${encodeURIComponent(accountToken)}` : ''}&_t=${Date.now()}`
+        )}&adsVer=${lastKnownHomeAdsVersion}${accountToken ? `&accountToken=${encodeURIComponent(accountToken)}` : ''}&_t=${Date.now()}`
       ),
       {
         cache: 'no-store',
@@ -617,6 +643,7 @@ function startPollingBackup() {
               transactions: data.transactions,
               players: data.players,
               homeHeroAds: data.homeHeroAds,
+              homeHeroAdsVersion: data.homeHeroAdsVersion,
               requireDepositApproval: data.requireDepositApproval,
               timestamp: Date.now(),
             },
@@ -629,7 +656,7 @@ function startPollingBackup() {
       });
   };
   fetchLatest(true);
-  pollTimer = setInterval(() => fetchLatest(false), 600);
+  pollTimer = setInterval(() => fetchLatest(false), 1200);
 }
 
 function connectWebSocket() {
@@ -674,6 +701,12 @@ function connectWebSocket() {
             : Array.isArray(parsed.ads)
             ? parsed.ads
             : null;
+          if (adsList) {
+            cachedHomeHeroAds = adsList;
+            if (typeof (parsed as { homeHeroAdsVersion?: number }).homeHeroAdsVersion === 'number') {
+              lastKnownHomeAdsVersion = (parsed as { homeHeroAdsVersion?: number }).homeHeroAdsVersion!;
+            }
+          }
           if (adsList && lastSyncMessage) {
             notifyListeners({ ...lastSyncMessage, homeHeroAds: adsList, timestamp: Date.now() }, true);
           } else if (adsList) {

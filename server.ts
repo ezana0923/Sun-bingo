@@ -499,7 +499,45 @@ function getRoomByMode(
 
 // Track connected WebSocket and SSE clients so every ball drawn or game state change broadcasts in real-time (< 20ms) to ALL phones!
 const wsClients = new Set<WebSocket>();
+const wsAliveSet = new WeakSet<WebSocket>();
 const sseClients = new Set<express.Response>();
+
+function safeWsSend(client: WebSocket, payload: string): boolean {
+  if (client.readyState !== WebSocket.OPEN) {
+    if (client.readyState === WebSocket.CLOSED || client.readyState === WebSocket.CLOSING) {
+      wsClients.delete(client);
+    }
+    return false;
+  }
+  if (client.bufferedAmount > 1024 * 1024) {
+    wsClients.delete(client);
+    try {
+      client.terminate();
+    } catch {}
+    return false;
+  }
+  try {
+    client.send(payload);
+    return true;
+  } catch {
+    wsClients.delete(client);
+    return false;
+  }
+}
+
+function safeSseWrite(res: express.Response, payload: string): boolean {
+  if (res.writableEnded || res.destroyed) {
+    sseClients.delete(res);
+    return false;
+  }
+  try {
+    res.write(`data: ${payload}\n\n`);
+    return true;
+  } catch {
+    sseClients.delete(res);
+    return false;
+  }
+}
 
 function serializeFastRoomsSnapshot() {
   const roomsObj: Record<number, ServerLiveRoomState> = {};
@@ -515,10 +553,20 @@ function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
   const now = Date.now();
   const openWsClients: WebSocket[] = [];
   for (const c of wsClients) {
-    if (c.readyState === WebSocket.OPEN) {
+    if (c.readyState === WebSocket.OPEN && c.bufferedAmount <= 1024 * 1024) {
       openWsClients.push(c);
-    } else if (c.readyState === WebSocket.CLOSED || c.readyState === WebSocket.CLOSING) {
+    } else if (c.readyState !== WebSocket.CONNECTING) {
       wsClients.delete(c);
+      if (c.bufferedAmount > 1024 * 1024) {
+        try {
+          c.terminate();
+        } catch {}
+      }
+    }
+  }
+  for (const r of sseClients) {
+    if (r.writableEnded || r.destroyed) {
+      sseClients.delete(r);
     }
   }
   const activeWsCount = openWsClients.length + sseClients.size;
@@ -565,7 +613,7 @@ function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
     transactions: serverTransactions,
     players: Array.from(playersByPhone.values()),
     bankAccounts: persistedBankAccounts,
-    homeHeroAds: persistedHomeHeroAds,
+    homeHeroAdsVersion,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
     depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
     depositBonusPercent: adminPinConfig.depositBonusPercent,
@@ -575,21 +623,11 @@ function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
   });
 
   for (const client of openWsClients) {
-    if (client.readyState === WebSocket.OPEN) {
-      try {
-        client.send(payload);
-      } catch {
-        wsClients.delete(client);
-      }
-    }
+    safeWsSend(client, payload);
   }
 
   for (const res of sseClients) {
-    try {
-      res.write(`data: ${payload}\n\n`);
-    } catch {
-      sseClients.delete(res);
-    }
+    safeSseWrite(res, payload);
   }
 }
 
@@ -625,20 +663,10 @@ function emitGameNotification(opts: {
   });
 
   for (const client of wsClients) {
-    if (client.readyState === WebSocket.OPEN) {
-      try {
-        client.send(payload);
-      } catch {
-        // ignore
-      }
-    }
+    safeWsSend(client, payload);
   }
   for (const res of sseClients) {
-    try {
-      res.write(`data: ${payload}\n\n`);
-    } catch {
-      sseClients.delete(res);
-    }
+    safeSseWrite(res, payload);
   }
 
   if (sendTelegram) {
@@ -1187,6 +1215,7 @@ let persistedHomeHeroAds: {
   isActive: boolean;
   translations?: Record<string, { title?: string; subtitle?: string; badgeText?: string; ctaText?: string }>;
 }[] = [];
+let homeHeroAdsVersion = 1;
 
 // Preserve saved bot tokens loaded from disk so saveBotsToDisk NEVER overwrites them with []
 let persistedBotTokensCache: {
@@ -1292,7 +1321,34 @@ function saveBotsToDisk() {
       homeHeroAds: persistedHomeHeroAds.slice(0, 25),
     };
     const serialized = JSON.stringify(payload);
-    const nextHash = crypto.createHash('md5').update(serialized).digest('hex');
+    // Hash excluding volatile room seq/timestamp counters so 15s idle timer skips needless synchronous disk writes
+    const stablePayload = {
+      ...payload,
+      fastRoomState: payload.fastRoomState ? { ...payload.fastRoomState, seq: 0 } : undefined,
+      regularRoomState: payload.regularRoomState ? { ...payload.regularRoomState, seq: 0 } : undefined,
+      fastRoomsByStake: undefined as unknown,
+    };
+    const nextHash = crypto
+      .createHash('md5')
+      .update(
+        JSON.stringify(stablePayload) +
+          JSON.stringify(
+            FAST_STAKE_TIERS.map((stk) => ({
+              stk,
+              m: roomsObj[stk]?.gameMatchId,
+              p: roomsObj[stk]?.isPlaying,
+              ps: roomsObj[stk]?.isPaused,
+              b: roomsObj[stk]?.calledBalls?.length,
+              st: roomsObj[stk]?.stakeAmount,
+              pr: roomsObj[stk]?.prizeAmount,
+              pt: roomsObj[stk]?.activePatternId,
+              sp: roomsObj[stk]?.callSpeedSec,
+              bl: roomsObj[stk]?.blockedCartelaIds?.length,
+              bn: roomsObj[stk]?.bonusCartelasForOver20,
+            }))
+          )
+      )
+      .digest('hex');
     if (nextHash === lastSavedStateHash) {
       return;
     }
@@ -1345,6 +1401,7 @@ function loadBotsFromDisk() {
     }
     if (Array.isArray(parsed.homeHeroAds)) {
       persistedHomeHeroAds = parsed.homeHeroAds;
+      homeHeroAdsVersion += 1;
     }
     if (
       typeof parsed.globalWalletBalance === 'number' &&
@@ -5099,16 +5156,25 @@ app.get('/api/live-room/stream', (req, res) => {
     regularLockedCartelas: Array.from(regularRoomLockedCartelas.values()),
     transactions: serverTransactions,
     players: Array.from(playersByPhone.values()),
+    bankAccounts: persistedBankAccounts,
+    homeHeroAds: persistedHomeHeroAds,
+    homeHeroAdsVersion,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
+    depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
+    depositBonusPercent: adminPinConfig.depositBonusPercent,
     smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+    autoNotifyGames: adminPinConfig.autoNotifyGames,
     timestamp: Date.now(),
   });
-  res.write(`data: ${initialPayload}\n\n`);
+  safeSseWrite(res, initialPayload);
   broadcastRealtimeSync();
 
   req.on('close', () => {
     sseClients.delete(res);
     broadcastRealtimeSync();
+  });
+  res.on('error', () => {
+    sseClients.delete(res);
   });
 });
 
@@ -5117,10 +5183,18 @@ app.get('/api/live-room/stream', (req, res) => {
 // Keeps Render.com free tier awake 24/7 without sleeping!
 // ============================================================================
 app.get('/api/health', (_req, res) => {
+  const mem = process.memoryUsage();
   res.json({
     status: 'ok',
     service: 'Ezi-Bingo Live Multiplayer Server',
     uptimeSeconds: Math.floor(process.uptime()),
+    memoryMB: {
+      rss: Math.round(mem.rss / 1048576),
+      heapUsed: Math.round(mem.heapUsed / 1048576),
+      heapTotal: Math.round(mem.heapTotal / 1048576),
+    },
+    wsClients: wsClients.size,
+    sseClients: sseClients.size,
     timestamp: Date.now(),
     dateTime: new Date().toISOString(),
   });
@@ -5212,6 +5286,9 @@ app.get('/api/live-room/state', (req, res) => {
 
   const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
 
+  const clientAdsVer = Number(req.query.adsVer ?? -1);
+  const includeHomeAds = req.query.includeAds === '1' || clientAdsVer !== homeHeroAdsVersion;
+
   res.json({
     ok: true,
     room,
@@ -5228,6 +5305,8 @@ app.get('/api/live-room/state', (req, res) => {
     accountToken: playersByPhone.has(player.phone) ? createSignedPlayerToken(player) : undefined,
     players: Array.from(playersByPhone.values()),
     bankAccounts: persistedBankAccounts,
+    ...(includeHomeAds ? { homeHeroAds: persistedHomeHeroAds } : {}),
+    homeHeroAdsVersion,
     transactions: serverTransactions,
     pendingCount: serverTransactions.filter((t) => t.status === 'pending').length,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
@@ -5713,6 +5792,7 @@ app.post('/api/live-room/action', (req, res) => {
             : undefined,
       }));
       persistedHomeHeroAds = sanitized;
+      homeHeroAdsVersion += 1;
       for (const stk of FAST_STAKE_TIERS) {
         fastRoomsByStake[stk].heroBanners = [];
       }
@@ -5722,20 +5802,13 @@ app.post('/api/live-room/action', (req, res) => {
         type: 'home:ads:sync',
         heroBanners: persistedHomeHeroAds,
         ads: persistedHomeHeroAds,
+        homeHeroAdsVersion,
       });
       for (const wsClient of wsClients) {
-        if (wsClient.readyState === WebSocket.OPEN) {
-          try {
-            wsClient.send(adsPayload);
-          } catch {}
-        }
+        safeWsSend(wsClient, adsPayload);
       }
       for (const sseRes of sseClients) {
-        try {
-          sseRes.write(`data: ${adsPayload}\n\n`);
-        } catch {
-          sseClients.delete(sseRes);
-        }
+        safeSseWrite(sseRes, adsPayload);
       }
       broadcastRealtimeSync('both');
     }
@@ -7432,6 +7505,7 @@ app.post('/api/admin/state-restore', (req, res) => {
 
   if (Array.isArray(b.homeHeroAds)) {
     persistedHomeHeroAds = b.homeHeroAds.slice(0, 25);
+    homeHeroAdsVersion += 1;
     for (const stk of FAST_STAKE_TIERS) {
       if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [];
     }
@@ -7851,16 +7925,13 @@ function serializeKenoLiveState() {
 }
 
 function broadcastKenoLiveState() {
+  if (wsClients.size === 0) return;
   const payload = JSON.stringify({
     type: 'keno:state:sync',
     state: serializeKenoLiveState(),
   });
   for (const client of wsClients) {
-    if (client.readyState === WebSocket.OPEN) {
-      try {
-        client.send(payload);
-      } catch {}
-    }
+    safeWsSend(client, payload);
   }
 }
 
@@ -8670,21 +8741,19 @@ function serializePublicRoomsList() {
 }
 
 function broadcastRaminoLobbySync() {
+  if (wsClients.size === 0) return;
   const payload = JSON.stringify({
     type: 'ramino:lobby:sync',
     rooms: serializePublicRoomsList(),
     timestamp: Date.now(),
   });
   for (const client of wsClients) {
-    if (client.readyState === WebSocket.OPEN) {
-      try {
-        client.send(payload);
-      } catch {}
-    }
+    safeWsSend(client, payload);
   }
 }
 
 function broadcastPrivateRoomSnapshot(room: RaminoPrivateRoomRecord) {
+  if (wsClients.size === 0) return;
   const { voiceAccessKey: _hiddenVoiceKey, ...publicRoomSnap } = room;
   void _hiddenVoiceKey;
   const payload = JSON.stringify({
@@ -8692,11 +8761,7 @@ function broadcastPrivateRoomSnapshot(room: RaminoPrivateRoomRecord) {
     room: publicRoomSnap,
   });
   for (const client of wsClients) {
-    if (client.readyState === WebSocket.OPEN) {
-      try {
-        client.send(payload);
-      } catch {}
-    }
+    safeWsSend(client, payload);
   }
 }
 
@@ -10811,6 +10876,7 @@ app.post('/api/home-ads', (req, res) => {
             : undefined,
       }));
     persistedHomeHeroAds = sanitized;
+    homeHeroAdsVersion += 1;
     for (const stk of FAST_STAKE_TIERS) {
       if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [];
     }
@@ -10820,20 +10886,13 @@ app.post('/api/home-ads', (req, res) => {
       type: 'home:ads:sync',
       heroBanners: persistedHomeHeroAds,
       ads: persistedHomeHeroAds,
+      homeHeroAdsVersion,
     });
     for (const wsClient of wsClients) {
-      if (wsClient.readyState === WebSocket.OPEN) {
-        try {
-          wsClient.send(payload);
-        } catch {}
-      }
+      safeWsSend(wsClient, payload);
     }
     for (const sseRes of sseClients) {
-      try {
-        sseRes.write(`data: ${payload}\n\n`);
-      } catch {
-        sseClients.delete(sseRes);
-      }
+      safeSseWrite(sseRes, payload);
     }
     broadcastRealtimeSync('both');
   }
@@ -11095,6 +11154,13 @@ app.get('/api/ramino/export/part2', (_req, res) => {
 });
 
 async function startServer() {
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception (kept alive):', err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled Rejection (kept alive):', reason);
+  });
+
   const isRender = Boolean(process.env.RENDER) || Boolean(process.env.RENDER_EXTERNAL_URL);
   const PORT = isRender ? Number(process.env.PORT) || 3000 : 3000;
 
@@ -11103,7 +11169,7 @@ async function startServer() {
   startKenoServerLoop();
   startRaminoServerLoop();
 
-  // Render.com Free Tier Keep-Alive / Wake-Up Self-Ping (runs every 4 minutes)
+  // Render.com Free Tier Keep-Alive / Wake-Up Self-Ping (runs every 4 minutes, drains body cleanly)
   setInterval(() => {
     const urls = [
       process.env.RENDER_EXTERNAL_URL,
@@ -11114,7 +11180,8 @@ async function startServer() {
 
     for (const url of urls) {
       if (url && !url.includes('localhost') && !url.includes('127.0.0.1')) {
-        fetch(`${url.replace(/\/$/, '')}/api/cron`)
+        fetch(`${url.replace(/\/$/, '')}/api/cron`, { signal: AbortSignal.timeout(8000) })
+          .then((r) => r.body?.cancel().catch(() => {}))
           .catch(() => {});
         break;
       }
@@ -11122,7 +11189,12 @@ async function startServer() {
   }, 4 * 60 * 1000);
 
   const httpServer = http.createServer(app);
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws/bingo' });
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: '/ws/bingo',
+    perMessageDeflate: false,
+    maxPayload: 512 * 1024,
+  });
 
   const leaveRaminoVoiceRoom = (socket: WebSocket) => {
     const info = raminoVoicePeers.get(socket);
@@ -11136,19 +11208,43 @@ async function startServer() {
     });
     for (const [peerWs, meta] of raminoVoicePeers.entries()) {
       if (meta.roomCode === info.roomCode && peerWs.readyState === WebSocket.OPEN) {
-        try {
-          peerWs.send(payload);
-        } catch {}
+        safeWsSend(peerWs, payload);
       }
     }
   };
 
+  // WebSocket Ping/Pong heartbeat every 25s to prune dead mobile sockets and prevent memory/socket leaks
+  setInterval(() => {
+    for (const wsClient of wsClients) {
+      if (!wsAliveSet.has(wsClient)) {
+        wsClients.delete(wsClient);
+        raminoTableSockets.delete(wsClient);
+        leaveRaminoVoiceRoom(wsClient);
+        try {
+          wsClient.terminate();
+        } catch {}
+        continue;
+      }
+      wsAliveSet.delete(wsClient);
+      try {
+        wsClient.ping();
+      } catch {
+        wsClients.delete(wsClient);
+      }
+    }
+  }, 25000);
+
   wss.on('connection', (ws) => {
     wsClients.add(ws);
+    wsAliveSet.add(ws);
+    ws.on('pong', () => {
+      wsAliveSet.add(ws);
+    });
     // Immediately send current authoritative state on connection
     try {
       const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
-      ws.send(
+      safeWsSend(
+        ws,
         JSON.stringify({
           type: 'room:sync',
           changedMode: 'both',
@@ -11160,20 +11256,24 @@ async function startServer() {
           regularLockedCartelas: Array.from(regularRoomLockedCartelas.values()),
           transactions: serverTransactions,
           players: Array.from(playersByPhone.values()),
+          bankAccounts: persistedBankAccounts,
           homeHeroAds: persistedHomeHeroAds,
+          homeHeroAdsVersion,
           requireDepositApproval: adminPinConfig.requireDepositApproval,
           depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
           depositBonusPercent: adminPinConfig.depositBonusPercent,
           timestamp: Date.now(),
         })
       );
-      ws.send(
+      safeWsSend(
+        ws,
         JSON.stringify({
           type: 'keno:state:sync',
           state: serializeKenoLiveState(),
         })
       );
-      ws.send(
+      safeWsSend(
+        ws,
         JSON.stringify({
           type: 'ramino:lobby:sync',
           rooms: serializePublicRoomsList(),
@@ -11197,7 +11297,8 @@ async function startServer() {
             raminoTableSockets.set(ws, { roomCode, playerId });
             const tbl = raminoTables.get(roomCode);
             if (tbl && ws.readyState === WebSocket.OPEN) {
-              ws.send(
+              safeWsSend(
+                ws,
                 JSON.stringify({
                   type: 'ramino:table:sync',
                   table: serializeRaminoTableForPlayer(tbl, playerId),
@@ -11216,7 +11317,8 @@ async function startServer() {
           if (tbl && playerId && action) {
             const resAction = handleServerRaminoAction(tbl, playerId, action, msg.payload || {});
             if (!resAction.ok && ws.readyState === WebSocket.OPEN) {
-              ws.send(
+              safeWsSend(
+                ws,
                 JSON.stringify({
                   type: 'ramino:action:error',
                   roomCode,
@@ -11226,7 +11328,6 @@ async function startServer() {
             }
           }
         } else if (msg.type === 'ramino:voice:join') {
-          leaveRaminoVoiceRoom(ws);
           const roomCode = String(msg.roomCode || '').trim().toUpperCase();
           const peerId = String(msg.peerId || '').trim();
           const playerId = String(msg.playerId || '').trim();
@@ -11237,11 +11338,16 @@ async function startServer() {
           // Block ALL external/admin eavesdropping to keep Private Room voice untappable
           if (msg.isAdminMonitor) {
             if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'ramino:voice:error', roomCode, error: 'Private voice is E2E encrypted' }));
+              safeWsSend(ws, JSON.stringify({ type: 'ramino:voice:error', roomCode, error: 'Private voice is E2E encrypted' }));
             }
             return;
           }
           if (!roomCode || !peerId) return;
+
+          const existingSameSocket = raminoVoicePeers.get(ws);
+          if (existingSameSocket && existingSameSocket.roomCode !== roomCode) {
+            leaveRaminoVoiceRoom(ws);
+          }
 
           const activeRoom = raminoPrivateRooms.get(roomCode);
           const activeTable = raminoTables.get(roomCode);
@@ -11253,7 +11359,7 @@ async function startServer() {
               Boolean(playerId && activeTable?.players.some((p) => p.id === playerId));
             if (!isMember) {
               if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'ramino:voice:error', roomCode, error: 'Unauthorized voice room access' }));
+                safeWsSend(ws, JSON.stringify({ type: 'ramino:voice:error', roomCode, error: 'Unauthorized voice room access' }));
               }
               return;
             }
@@ -11268,28 +11374,26 @@ async function startServer() {
             isMuted,
           });
           for (const [peerWs, meta] of Array.from(raminoVoicePeers.entries())) {
+            if (peerWs === ws) continue;
             if (meta.roomCode === roomCode && playerId && meta.playerId === playerId && peerWs !== ws) {
               raminoVoicePeers.delete(peerWs);
               continue;
             }
             if (meta.roomCode === roomCode && peerWs.readyState === WebSocket.OPEN) {
               existingPeers.push({ peerId: meta.peerId, playerName: meta.playerName, isMuted: meta.isMuted !== false });
-              try {
-                peerWs.send(joinedNotify);
-              } catch {}
+              safeWsSend(peerWs, joinedNotify);
             }
           }
           raminoVoicePeers.set(ws, { roomCode, peerId, playerId, playerName, isMuted });
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(
-              JSON.stringify({
-                type: 'ramino:voice:peers',
-                roomCode,
-                peers: existingPeers,
-                voiceAccessKey: expectedKey || undefined,
-              })
-            );
-          }
+          safeWsSend(
+            ws,
+            JSON.stringify({
+              type: 'ramino:voice:peers',
+              roomCode,
+              peers: existingPeers,
+              voiceAccessKey: expectedKey || undefined,
+            })
+          );
         } else if (msg.type === 'ramino:voice:signal') {
           const sender = raminoVoicePeers.get(ws);
           if (!sender) return;

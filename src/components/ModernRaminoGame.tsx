@@ -2240,6 +2240,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const mutedPeerIdsRef = useRef<Record<string, boolean>>({});
   mutedPeerIdsRef.current = mutedPeerIds;
 
+  const [isVoiceAudioLocked, setIsVoiceAudioLocked] = useState(false);
   const activePrivateRoomCodeRef = useRef<string | null>(null);
   activePrivateRoomCodeRef.current = activePrivateRoomCode;
 
@@ -2257,6 +2258,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const voiceAesKeyRef = useRef<CryptoKey | null>(null);
   const voiceAesKeySecretRef = useRef<string>('');
   const voiceTxQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const voiceRxQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const lastVoiceResyncAtRef = useRef<number>(0);
   const voiceTxPendingCountRef = useRef<number>(0);
   const pttReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMicMutedRef = useRef(isMicMuted);
@@ -2383,6 +2386,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         playbackAudioCtxRef.current = ctx;
         playbackCompressorRef.current = null;
         peerPlaybackMapRef.current.clear();
+        ctx.onstatechange = () => {
+          setIsVoiceAudioLocked(ctx.state !== 'running');
+        };
         try {
           const comp = ctx.createDynamicsCompressor();
           comp.threshold.value = -22;
@@ -2397,8 +2403,18 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         }
       }
       if (playbackAudioCtxRef.current.state === 'suspended') {
-        playbackAudioCtxRef.current.resume().catch(() => {});
+        playbackAudioCtxRef.current
+          .resume()
+          .then(() => {
+            if (playbackAudioCtxRef.current) {
+              setIsVoiceAudioLocked(playbackAudioCtxRef.current.state !== 'running');
+            }
+          })
+          .catch(() => {
+            setIsVoiceAudioLocked(true);
+          });
       }
+      setIsVoiceAudioLocked(playbackAudioCtxRef.current.state !== 'running');
       return playbackAudioCtxRef.current;
     } catch {
       return null;
@@ -2448,12 +2464,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       } catch {}
       micSilentGainRef.current = null;
     }
-    if (micCaptureCtxRef.current) {
+    if (micCaptureCtxRef.current && micCaptureCtxRef.current !== playbackAudioCtxRef.current) {
       try {
         micCaptureCtxRef.current.close();
       } catch {}
-      micCaptureCtxRef.current = null;
     }
+    micCaptureCtxRef.current = null;
     if (localMicStreamRef.current) {
       localMicStreamRef.current.getTracks().forEach((t) => {
         try {
@@ -2475,6 +2491,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       } catch {}
       playbackAudioCtxRef.current = null;
     }
+    setIsVoiceAudioLocked(false);
     if (voiceJoinedRef.current && gameWsRef.current?.readyState === WebSocket.OPEN) {
       try {
         gameWsRef.current.send(
@@ -2543,48 +2560,43 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           noiseSuppression: { ideal: true },
           autoGainControl: { ideal: true },
           channelCount: { ideal: 1 },
-          sampleRate: { ideal: 16000 },
-          sampleSize: { ideal: 16 },
-          googEchoCancellation: true,
-          googAutoGainControl: true,
-          googNoiseSuppression: true,
-          googHighpassFilter: true,
         } as MediaTrackConstraints;
 
         try {
           stream = await navigator.mediaDevices.getUserMedia({ audio: voiceConstraints });
         } catch {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-              channelCount: 1,
-            },
-          });
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         }
         localMicStreamRef.current = stream;
 
-        const AudioCtx =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        if (AudioCtx) {
-          if (micCaptureCtxRef.current) {
-            try {
-              micCaptureCtxRef.current.close();
-            } catch {}
-            micCaptureCtxRef.current = null;
-          }
-          const ctx = new AudioCtx({ latencyHint: 'interactive' });
+        const ctx = ensurePlaybackAudioCtx();
+        if (ctx) {
           micCaptureCtxRef.current = ctx;
           if (ctx.state === 'suspended') {
             await ctx.resume().catch(() => {});
+          }
+          if (micSourceNodeRef.current) {
+            try {
+              micSourceNodeRef.current.disconnect();
+            } catch {}
+          }
+          if (micProcessorRef.current) {
+            try {
+              micProcessorRef.current.onaudioprocess = null;
+              micProcessorRef.current.disconnect();
+            } catch {}
+          }
+          if (micSilentGainRef.current) {
+            try {
+              micSilentGainRef.current.disconnect();
+            } catch {}
           }
           const src = ctx.createMediaStreamSource(stream);
           micSourceNodeRef.current = src;
           const processor = ctx.createScriptProcessor(2048, 1, 1);
           const silentGain = ctx.createGain();
-          silentGain.gain.value = 0;
+          // Non-zero -100dB gain prevents Chrome/Android WebView from optimizing out ScriptProcessorNode callbacks
+          silentGain.gain.value = 0.00001;
           micProcessorRef.current = processor;
           micSilentGainRef.current = silentGain;
 
@@ -2711,8 +2723,21 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   const unlockRemoteAudioElements = () => {
     const ctx = ensurePlaybackAudioCtx();
-    if (ctx && ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
+    if (ctx) {
+      if (ctx.state === 'suspended') {
+        ctx
+          .resume()
+          .then(() => setIsVoiceAudioLocked(ctx.state !== 'running'))
+          .catch(() => {});
+      }
+      // iOS Safari / Telegram WebView loudspeaker unlock via 1-sample silent buffer inside user gesture
+      try {
+        const silentBuf = ctx.createBuffer(1, 1, 22050);
+        const src = ctx.createBufferSource();
+        src.buffer = silentBuf;
+        src.connect(ctx.destination);
+        src.start(0);
+      } catch {}
     }
     applyRemoteAudioVolumes();
   };
@@ -2859,59 +2884,79 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         if (isDeafenedRef.current || Boolean(mutedPeerIdsRef.current[fromPeerId])) return;
         if (typeof msg.data !== 'string' || !msg.data) return;
 
-        const accessSecret = voiceAccessKeyRef.current || '';
-        let plainBuf: ArrayBuffer;
-        if (msg.enc === 'xor') {
-          const cipherBytes = base64ToUint8(msg.data);
-          const unmasked = xorVoiceBytes(cipherBytes, `${activeRoom}:${accessSecret}`);
-          plainBuf = unmasked.buffer.slice(unmasked.byteOffset, unmasked.byteOffset + unmasked.byteLength) as ArrayBuffer;
-        } else {
-          if (typeof msg.iv !== 'string' || !msg.iv) return;
-          const aesKey = await deriveVoiceAesKey(activeRoom, accessSecret);
-          if (!aesKey) return;
-          const ivBytes = base64ToUint8(msg.iv);
-          const cipherBytes = base64ToUint8(msg.data);
-          plainBuf = await window.crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv: ivBytes as BufferSource },
-            aesKey,
-            cipherBytes as BufferSource
-          );
-        }
-        if (plainBuf.byteLength < 2) return;
-        const int16 = new Int16Array(plainBuf);
-        if (int16.length === 0) return;
+        // Serialize decryption and WebAudio scheduling so frames never play out of order or collide
+        voiceRxQueueRef.current = voiceRxQueueRef.current
+          .then(async () => {
+            if (isDeafenedRef.current || Boolean(mutedPeerIdsRef.current[fromPeerId])) return;
+            const accessSecret = voiceAccessKeyRef.current || '';
+            let plainBuf: ArrayBuffer;
+            try {
+              if (msg.enc === 'xor') {
+                const cipherBytes = base64ToUint8(msg.data);
+                const unmasked = xorVoiceBytes(cipherBytes, `${activeRoom}:${accessSecret}`);
+                plainBuf = unmasked.buffer.slice(unmasked.byteOffset, unmasked.byteOffset + unmasked.byteLength) as ArrayBuffer;
+              } else {
+                if (typeof msg.iv !== 'string' || !msg.iv) return;
+                const aesKey = await deriveVoiceAesKey(activeRoom, accessSecret);
+                if (!aesKey) return;
+                const ivBytes = base64ToUint8(msg.iv);
+                const cipherBytes = base64ToUint8(msg.data);
+                plainBuf = await window.crypto.subtle.decrypt(
+                  { name: 'AES-GCM', iv: ivBytes as BufferSource },
+                  aesKey,
+                  cipherBytes as BufferSource
+                );
+              }
+            } catch {
+              // Key mismatch / missed voiceAccessKey sync: throttle re-sync from server once per 2.5s
+              if (Date.now() - lastVoiceResyncAtRef.current > 2500 && gameWsRef.current?.readyState === WebSocket.OPEN) {
+                lastVoiceResyncAtRef.current = Date.now();
+                sendVoiceJoinOnSharedWs(activeRoom);
+              }
+              return;
+            }
+            if (plainBuf.byteLength < 2) return;
+            const int16 = new Int16Array(plainBuf);
+            if (int16.length === 0) return;
 
-        const ctx = ensurePlaybackAudioCtx();
-        if (!ctx) return;
-        if (ctx.state === 'suspended') {
-          await ctx.resume().catch(() => {});
-        }
+            const ctx = ensurePlaybackAudioCtx();
+            if (!ctx) return;
+            if (ctx.state === 'suspended') {
+              await ctx.resume().catch(() => {});
+            }
+            if (ctx.state !== 'running') {
+              setIsVoiceAudioLocked(true);
+              return;
+            }
+            setIsVoiceAudioLocked(false);
 
-        let slot = peerPlaybackMapRef.current.get(fromPeerId);
-        if (!slot) {
-          const gainNode = ctx.createGain();
-          const shouldDuck = !isMicMutedRef.current && isLocalSpeakingRef.current;
-          gainNode.gain.value = isDeafenedRef.current || mutedPeerIdsRef.current[fromPeerId] ? 0 : shouldDuck ? 0.35 : 1.35;
-          gainNode.connect(playbackCompressorRef.current || ctx.destination);
-          slot = { nextPlayTime: ctx.currentTime + 0.055, gainNode };
-          peerPlaybackMapRef.current.set(fromPeerId, slot);
-        }
+            let slot = peerPlaybackMapRef.current.get(fromPeerId);
+            if (!slot) {
+              const gainNode = ctx.createGain();
+              const shouldDuck = !isMicMutedRef.current && isLocalSpeakingRef.current;
+              gainNode.gain.value = isDeafenedRef.current || mutedPeerIdsRef.current[fromPeerId] ? 0 : shouldDuck ? 0.35 : 1.45;
+              gainNode.connect(playbackCompressorRef.current || ctx.destination);
+              slot = { nextPlayTime: ctx.currentTime + 0.055, gainNode };
+              peerPlaybackMapRef.current.set(fromPeerId, slot);
+            }
 
-        const audioBuf = ctx.createBuffer(1, int16.length, 16000);
-        const chData = audioBuf.getChannelData(0);
-        for (let i = 0; i < int16.length; i++) {
-          chData[i] = int16[i] / 32768;
-        }
+            const audioBuf = ctx.createBuffer(1, int16.length, 16000);
+            const chData = audioBuf.getChannelData(0);
+            for (let i = 0; i < int16.length; i++) {
+              chData[i] = int16[i] / 32768;
+            }
 
-        const nowTime = ctx.currentTime;
-        if (slot.nextPlayTime < nowTime || slot.nextPlayTime > nowTime + 0.45) {
-          slot.nextPlayTime = nowTime + 0.055;
-        }
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuf;
-        source.connect(slot.gainNode);
-        source.start(slot.nextPlayTime);
-        slot.nextPlayTime += audioBuf.duration;
+            const nowTime = ctx.currentTime;
+            if (slot.nextPlayTime < nowTime || slot.nextPlayTime > nowTime + 0.45) {
+              slot.nextPlayTime = nowTime + 0.055;
+            }
+            const source = ctx.createBufferSource();
+            source.buffer = audioBuf;
+            source.connect(slot.gainNode);
+            source.start(slot.nextPlayTime);
+            slot.nextPlayTime += audioBuf.duration;
+          })
+          .catch(() => {});
       } else if (msg.type === 'ramino:voice:mic-state') {
         const pid = String(msg.peerId || '');
         const peerMuted = Boolean(msg.isMuted);
@@ -3035,7 +3080,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     if (!inPrivateVoiceArena || !activePrivateRoomCode || !voiceAccessKey) return;
     const roomCode = activePrivateRoomCode.trim().toUpperCase();
     void deriveVoiceAesKey(roomCode, voiceAccessKey);
-    sendVoiceJoinOnSharedWs(roomCode);
+    if (!voiceJoinedRef.current || activeVoiceRoomCodeRef.current !== roomCode) {
+      sendVoiceJoinOnSharedWs(roomCode);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceAccessKey]);
 
@@ -6821,6 +6868,18 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   >
                     <Headphones className="w-3 h-3" />
                   </button>
+                  {isVoiceAudioLocked && !isDeafened && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        unlockRemoteAudioElements();
+                        raminoAudio.playCardSnap();
+                      }}
+                      className="px-2 py-0.5 rounded-xl bg-amber-400 text-slate-950 font-black text-[10px] animate-pulse cursor-pointer"
+                    >
+                      🔊 {language === 'en' ? 'Enable Audio' : 'ድምፅ ክፈት'}
+                    </button>
+                  )}
                 </div>
               )}
               <button
@@ -7426,6 +7485,18 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                       <span className={`w-1 h-3.5 bg-emerald-300 rounded-full ${isLocalSpeaking ? 'animate-bounce [animation-delay:0.15s]' : ''}`}></span>
                       <span className={`w-1 h-2.5 bg-emerald-400 rounded-full ${isLocalSpeaking ? 'animate-bounce [animation-delay:0.3s]' : ''}`}></span>
                     </div>
+                  )}
+                  {isVoiceAudioLocked && !isDeafened && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        unlockRemoteAudioElements();
+                        raminoAudio.playCardSnap();
+                      }}
+                      className="px-2 py-0.5 rounded-xl bg-amber-400 text-slate-950 font-black text-[10px] animate-pulse cursor-pointer"
+                    >
+                      🔊 {language === 'en' ? 'Enable Audio' : 'ድምፅ ክፈት'}
+                    </button>
                   )}
                 </div>
               )}
@@ -9336,6 +9407,23 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 <Headphones className="w-4 h-4" />
               </button>
             </div>
+            {isVoiceAudioLocked && !isDeafened && (
+              <div className="shrink-0 px-4 py-2 bg-amber-500/20 border-t border-amber-400/40 flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-amber-200">
+                  {language === 'en' ? 'Browser paused audio — tap to hear friends' : 'ድምፅ ለመስማት ይንኩ'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    unlockRemoteAudioElements();
+                    raminoAudio.playCardSnap();
+                  }}
+                  className="px-3 py-1 rounded-xl bg-amber-400 text-slate-950 font-black text-[11px] cursor-pointer"
+                >
+                  🔊 {language === 'en' ? 'Enable Audio' : 'ድምፅ ክፈት'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
