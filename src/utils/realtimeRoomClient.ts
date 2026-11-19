@@ -470,23 +470,28 @@ function notifyListeners(msg: RealtimeRoomSyncMessage, fromStream = false) {
           const rm = msg.fastRoomsByStake?.[stk];
           const lk = msg.fastLockedCartelasByStake?.[stk];
           const lkSig = Array.isArray(lk) ? lk.map((x) => `${x.cartelaId}:${x.clientId || x.ownerPhone}`).join(',') : '';
-          return `${stk}:${rm?.gameMatchId || 0}:${rm?.calledBalls?.length || 0}:${rm?.activeBall}:${rm?.preGameCountdown}:${rm?.winnerDisplayCountdown}:${rm?.isPlaying}:${rm?.isPaused}:${lkSig}:${rm?.gameHistory?.length || 0}:${rm?.adminRoomMessage || ''}:${rm?.bonusCartelasForOver20 ?? 5}:${rm?.heroBanners?.length ?? 0}`;
+          return `${stk}:${rm?.gameMatchId || 0}:${rm?.calledBalls?.length || 0}:${rm?.activeBall}:${rm?.preGameCountdown}:${rm?.winnerDisplayCountdown}:${rm?.isPlaying}:${rm?.isPaused}:${rm?.activePatternId || 1}:${rm?.activePatternCode || 'L'}:${rm?.callSpeedSec || 3}:${rm?.stakeAmount || stk}:${rm?.prizeAmount || 0}:${rm?.blockedCartelaIds?.length || 0}:${rm?.jackpotPool || 0}:${lkSig}:${rm?.gameHistory?.length || 0}:${rm?.adminRoomMessage || ''}:${rm?.bonusCartelasForOver20 ?? 5}:${rm?.heroBanners?.length ?? 0}`;
         })
         .join(';')
-    : `${fRoom?.gameMatchId}:${fRoom?.calledBalls?.length || 0}:${fRoom?.activeBall}:${fRoom?.preGameCountdown}:${fRoom?.winnerDisplayCountdown}:${fRoom?.isPlaying}:${fRoom?.isPaused}:${msg.fastLockedCartelas?.length || 0}:${fRoom?.gameHistory?.length || 0}:${fRoom?.adminRoomMessage || ''}:${fRoom?.bonusCartelasForOver20 ?? 5}`;
+    : `${fRoom?.gameMatchId}:${fRoom?.calledBalls?.length || 0}:${fRoom?.activeBall}:${fRoom?.preGameCountdown}:${fRoom?.winnerDisplayCountdown}:${fRoom?.isPlaying}:${fRoom?.isPaused}:${fRoom?.activePatternId || 1}:${fRoom?.activePatternCode || 'L'}:${fRoom?.callSpeedSec || 3}:${fRoom?.stakeAmount || 10}:${fRoom?.prizeAmount || 0}:${fRoom?.blockedCartelaIds?.length || 0}:${fRoom?.jackpotPool || 0}:${msg.fastLockedCartelas?.length || 0}:${fRoom?.gameHistory?.length || 0}:${fRoom?.adminRoomMessage || ''}:${fRoom?.bonusCartelasForOver20 ?? 5}`;
 
   const bannerSig = Array.isArray((rRoom || fRoom)?.heroBanners)
     ? (rRoom || fRoom)!.heroBanners!.map((b) => `${b.id}:${b.title}:${b.imageUrl ? b.imageUrl.length : 0}`).join(',')
     : '';
   const homeAdsSig = Array.isArray(msg.homeHeroAds)
-    ? msg.homeHeroAds.map((b) => `${b.id}:${b.title}:${b.isActive}:${b.imageUrl ? b.imageUrl.length : 0}`).join(',')
+    ? msg.homeHeroAds
+        .map(
+          (b) =>
+            `${b.id}:${b.title}:${b.subtitle}:${b.badgeText}:${b.ctaText || ''}:${b.targetGame || ''}:${b.isActive}:${b.imageUrl ? b.imageUrl.length : 0}:${b.translations ? JSON.stringify(b.translations) : ''}`
+        )
+        .join(',')
     : '';
   const bankSig = Array.isArray((rRoom || fRoom)?.bankAccounts)
     ? (rRoom || fRoom)!
         .bankAccounts!.map((b) => `${b.id}:${b.shortName}:${b.accountNumber}:${b.isActive !== false}`)
         .join(',')
     : '';
-  const fingerprint = `${allFastSummary}|${rRoom?.gameMatchId}:${rRoom?.calledBalls?.length || 0}:${rRoom?.activeBall}:${rRoom?.preGameCountdown}:${rRoom?.bingoClaimCountdown}:${rRoom?.winnerDisplayCountdown}:${rRoom?.isPlaying}:${rRoom?.isPaused}:${rRoom?.winnersList?.length || 0}:${rRoom?.blockedCartelaIds?.length || 0}:${rRoom?.stakeAmount || 10}:${rRoom?.prizeAmount || 500}:${rRoom?.activePatternId || 5}:${rRoom?.gameHistory?.length || 0}:${rRoom?.adminRoomMessage || ''}:${rRoom?.bonusCartelasForOver20 ?? 5}:${bannerSig}:${homeAdsSig}:${bankSig}|${txSummary}:${playersSummary}:${msg.requireDepositApproval}`;
+  const fingerprint = `${allFastSummary}|${rRoom?.gameMatchId}:${rRoom?.calledBalls?.length || 0}:${rRoom?.activeBall}:${rRoom?.preGameCountdown}:${rRoom?.bingoClaimCountdown}:${rRoom?.winnerDisplayCountdown}:${rRoom?.isPlaying}:${rRoom?.isPaused}:${rRoom?.callSpeedSec || 5}:${rRoom?.winnersList?.length || 0}:${rRoom?.blockedCartelaIds?.length || 0}:${rRoom?.stakeAmount || 10}:${rRoom?.prizeAmount || 500}:${rRoom?.activePatternId || 5}:${rRoom?.activePatternCode || 'HH'}:${rRoom?.jackpotPool || 500}:${rRoom?.gameHistory?.length || 0}:${rRoom?.adminRoomMessage || ''}:${rRoom?.bonusCartelasForOver20 ?? 5}:${bannerSig}:${homeAdsSig}:${bankSig}|${txSummary}:${playersSummary}:${msg.requireDepositApproval}`;
   if (fingerprint === lastStateFingerprint) {
     return;
   }

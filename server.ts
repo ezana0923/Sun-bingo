@@ -426,7 +426,7 @@ function createInitialRoomState(
     callSpeedSec: mode === 'fast' ? 3 : 5,
     stakeAmount: initialStake,
     prizeAmount: mode === 'fast' ? initialStake * 20 : 500,
-    activePatternId: 5,
+    activePatternId: mode === 'fast' ? 1 : 5,
     activePatternCode: mode === 'fast' ? 'L' : 'HH',
     jackpotPool: 500,
     houseEarningsTotal: 420,
@@ -439,7 +439,7 @@ function createInitialRoomState(
     adminRoomMessage: '',
     adminRoomMessageAt: '',
     bonusCartelasForOver20: 5,
-    heroBanners: DEFAULT_SERVER_HERO_BANNERS,
+    heroBanners: [],
     bankAccounts: [...persistedBankAccounts],
     sha256Hash: fair.sha256Hash,
     lastBallTickAt: 0,
@@ -1159,21 +1159,20 @@ interface PersistedBotData {
     badgeText: string;
     accentColor: 'blue' | 'emerald' | 'amber' | 'rose';
     imageUrl?: string;
-    targetGame?: 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none';
+    targetGame?: 'fast' | 'regular' | 'keno' | 'ramino' | 'none';
     ctaText?: string;
     isActive: boolean;
+    translations?: Record<string, { title?: string; subtitle?: string; badgeText?: string; ctaText?: string }>;
   }[];
 }
 
 // Persistent Game Visibility State (Admin can hide/show games or mark Soon)
-type GameVisibilityKey = 'ludo' | 'fast' | 'regular' | 'keno' | 'ramino' | 'dama';
+type GameVisibilityKey = 'fast' | 'regular' | 'keno' | 'ramino';
 let persistedGameVisibility: Record<GameVisibilityKey, { visible: boolean; comingSoon?: boolean }> = {
-  ludo: { visible: true, comingSoon: true },
   fast: { visible: true, comingSoon: false },
   regular: { visible: true, comingSoon: false },
   keno: { visible: true, comingSoon: false },
   ramino: { visible: true, comingSoon: false },
-  dama: { visible: true, comingSoon: true },
 };
 
 let persistedHomeHeroAds: {
@@ -1183,9 +1182,10 @@ let persistedHomeHeroAds: {
   badgeText: string;
   accentColor: 'blue' | 'emerald' | 'amber' | 'rose';
   imageUrl?: string;
-  targetGame?: 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none';
+  targetGame?: 'fast' | 'regular' | 'keno' | 'ramino' | 'none';
   ctaText?: string;
   isActive: boolean;
+  translations?: Record<string, { title?: string; subtitle?: string; badgeText?: string; ctaText?: string }>;
 }[] = [];
 
 // Preserve saved bot tokens loaded from disk so saveBotsToDisk NEVER overwrites them with []
@@ -1335,19 +1335,16 @@ function loadBotsFromDisk() {
       if (regularLiveRoomState) regularLiveRoomState.bankAccounts = [...persistedBankAccounts];
     }
     if (parsed.gameVisibility && typeof parsed.gameVisibility === 'object') {
+      const gv = parsed.gameVisibility as Record<string, { visible: boolean; comingSoon?: boolean }>;
       persistedGameVisibility = {
-        ...persistedGameVisibility,
-        ...parsed.gameVisibility,
-      } as typeof persistedGameVisibility;
+        fast: gv.fast ?? persistedGameVisibility.fast,
+        regular: gv.regular ?? persistedGameVisibility.regular,
+        keno: gv.keno ?? persistedGameVisibility.keno,
+        ramino: gv.ramino ?? persistedGameVisibility.ramino,
+      };
     }
     if (Array.isArray(parsed.homeHeroAds)) {
       persistedHomeHeroAds = parsed.homeHeroAds;
-      if (persistedHomeHeroAds.length > 0) {
-        for (const stk of FAST_STAKE_TIERS) {
-          if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [...persistedHomeHeroAds];
-        }
-        if (regularLiveRoomState) regularLiveRoomState.heroBanners = [...persistedHomeHeroAds];
-      }
     }
     if (
       typeof parsed.globalWalletBalance === 'number' &&
@@ -1426,6 +1423,7 @@ function loadBotsFromDisk() {
     for (const stk of FAST_STAKE_TIERS) {
       if (fastRoomsByStake[stk]) {
         fastRoomsByStake[stk].jackpotPool = 500;
+        fastRoomsByStake[stk].heroBanners = [];
       }
     }
     fastLiveRoomState = fastRoomsByStake[10];
@@ -1433,12 +1431,14 @@ function loadBotsFromDisk() {
       regularLiveRoomState = {
         ...regularLiveRoomState,
         ...parsed.regularRoomState,
+        heroBanners: [],
         jackpotPool: 500,
         lastBallTickAt: Date.now(),
         lastCountdownTickAt: Date.now(),
       };
     }
     regularLiveRoomState.jackpotPool = 500;
+    regularLiveRoomState.heroBanners = [];
     if (Array.isArray(parsed.fastGameHistory) && parsed.fastGameHistory.length > 0) {
       fastRoomsByStake[10].gameHistory = parsed.fastGameHistory.filter(
         (h) => !h.winners?.some((w) => w.userName === 'Yonas_Fast' || w.userName === 'Dawit_Bingo')
@@ -5277,7 +5277,8 @@ app.post('/api/live-room/action', (req, res) => {
       | 'set_admin_message'
       | 'set_bonus_over_20'
       | 'set_hero_banners'
-      | 'set_bank_accounts';
+      | 'set_bank_accounts'
+      | 'set_jackpot';
     countdownSeconds?: number;
     callSpeedSec?: number;
     stakeAmount?: number;
@@ -5295,9 +5296,10 @@ app.post('/api/live-room/action', (req, res) => {
 
   const mode = rawMode === 'regular' ? 'regular' : 'fast';
   const { room, lockedMap } = getRoomByMode(mode, stakeAmount);
+  const applyAllRooms = Boolean((req.body as { applyAllRooms?: boolean }).applyAllRooms);
 
   if (action === 'start_countdown') {
-    if (!room.isPlaying && room.calledBalls.length === 0 && room.preGameCountdown === null) {
+    if (!room.isPlaying && room.calledBalls.length === 0) {
       room.isPaused = false;
       room.winnersList = [];
       room.winnerDisplayCountdown = null;
@@ -5360,22 +5362,25 @@ app.post('/api/live-room/action', (req, res) => {
   } else if (action === 'reset_round' || action === 'reset') {
     resetServerRoomRound(room, lockedMap);
   } else if (action === 'set_speed' && typeof callSpeedSec === 'number') {
-    room.callSpeedSec = callSpeedSec;
+    if (mode === 'fast' && applyAllRooms) {
+      for (const stk of FAST_STAKE_TIERS) {
+        fastRoomsByStake[stk].callSpeedSec = callSpeedSec;
+      }
+    } else {
+      room.callSpeedSec = callSpeedSec;
+    }
+    saveBotsToDisk();
+    broadcastRealtimeSync(mode);
+  } else if (action === 'set_jackpot' && typeof jackpotPool === 'number') {
+    room.jackpotPool = Math.max(0, Number(jackpotPool));
+    saveBotsToDisk();
     broadcastRealtimeSync(mode);
   } else if (action === 'update_settings') {
-    if (mode === 'regular' && typeof stakeAmount === 'number') room.stakeAmount = stakeAmount;
-    if (typeof prizeAmount === 'number') room.prizeAmount = prizeAmount;
-    if (typeof activePatternId === 'number') room.activePatternId = activePatternId;
-    if (typeof (req.body as any).activePatternCode === 'string') {
-      room.activePatternCode = (req.body as any).activePatternCode;
-    }
-    if (typeof jackpotPool === 'number') room.jackpotPool = jackpotPool;
-    if (typeof callSpeedSec === 'number') room.callSpeedSec = callSpeedSec;
-
     const b = req.body as {
       countdownSeconds?: number;
       preGameCountdown?: number | null;
       registrationMinutes?: number;
+      activePatternCode?: string;
     };
     const incomingSecs =
       typeof b.countdownSeconds === 'number'
@@ -5386,21 +5391,40 @@ app.post('/api/live-room/action', (req, res) => {
         ? b.registrationMinutes * 60
         : undefined;
 
-    if (incomingSecs !== undefined) {
-      if (incomingSecs > 0) {
-        room.preGameCountdown = Math.round(incomingSecs);
-        room.lastCountdownTickAt = Date.now();
-        room.isPlaying = false;
-        room.isPaused = false;
-        room.calledBalls = [];
-        room.activeBall = null;
-        room.winnersList = [];
-        room.bingoClaimCountdown = null;
-        room.winnerDisplayCountdown = null;
-      } else {
-        room.preGameCountdown = null;
+    const targetRooms =
+      mode === 'fast' && applyAllRooms
+        ? FAST_STAKE_TIERS.map((stk) => fastRoomsByStake[stk])
+        : [room];
+
+    for (const targetRoom of targetRooms) {
+      if (mode === 'regular' && typeof stakeAmount === 'number') {
+        targetRoom.stakeAmount = stakeAmount;
+      }
+      if (typeof prizeAmount === 'number') targetRoom.prizeAmount = prizeAmount;
+      if (typeof activePatternId === 'number') targetRoom.activePatternId = activePatternId;
+      if (typeof b.activePatternCode === 'string') {
+        targetRoom.activePatternCode = b.activePatternCode;
+      }
+      if (typeof jackpotPool === 'number') targetRoom.jackpotPool = jackpotPool;
+      if (typeof callSpeedSec === 'number') targetRoom.callSpeedSec = callSpeedSec;
+
+      if (incomingSecs !== undefined) {
+        if (incomingSecs > 0) {
+          targetRoom.preGameCountdown = Math.round(incomingSecs);
+          targetRoom.lastCountdownTickAt = Date.now();
+          targetRoom.isPlaying = false;
+          targetRoom.isPaused = false;
+          targetRoom.calledBalls = [];
+          targetRoom.activeBall = null;
+          targetRoom.winnersList = [];
+          targetRoom.bingoClaimCountdown = null;
+          targetRoom.winnerDisplayCountdown = null;
+        } else {
+          targetRoom.preGameCountdown = null;
+        }
       }
     }
+    saveBotsToDisk();
     broadcastRealtimeSync(mode);
   } else if (action === 'claim_win' && winner) {
     // SERVER-SIDE ANTI-CHEAT BINGO VERIFICATION:
@@ -5409,13 +5433,15 @@ app.post('/api/live-room/action', (req, res) => {
     const serverCard = generateCartelaById(Number(winner.cartelaId) || 1);
     const serverCalledSet = new Set<number>([0, ...(room.calledBalls || [])]);
     const claimedCells = Array.isArray(winner.winningCells) ? winner.winningCells : [];
+    const isAdminOverride = Boolean((req.body as { isAdminOverride?: boolean }).isAdminOverride);
     const allClaimedCellsValid =
-      claimedCells.length >= 4 &&
-      claimedCells.every(([r, c]) => {
-        if (r === 2 && c === 2) return true; // Center FREE
-        const num = serverCard.numbers?.[r]?.[c];
-        return typeof num === 'number' && serverCalledSet.has(num);
-      });
+      isAdminOverride ||
+      (claimedCells.length >= 4 &&
+        claimedCells.every(([r, c]) => {
+          if (r === 2 && c === 2) return true; // Center FREE
+          const num = serverCard.numbers?.[r]?.[c];
+          return typeof num === 'number' && serverCalledSet.has(num);
+        }));
 
     if (!allClaimedCellsValid && room.calledBalls.length > 0) {
       res.status(400).json({
@@ -5623,9 +5649,11 @@ app.post('/api/live-room/action', (req, res) => {
     if (!room.blockedCartelaIds.includes(cartelaId)) {
       room.blockedCartelaIds = [...room.blockedCartelaIds, cartelaId];
     }
+    saveBotsToDisk();
     broadcastRealtimeSync(mode);
   } else if (action === 'unblock_cartela' && typeof cartelaId === 'number') {
     room.blockedCartelaIds = room.blockedCartelaIds.filter((id) => id !== cartelaId);
+    saveBotsToDisk();
     broadcastRealtimeSync(mode);
   } else if (action === 'force_balls' && Array.isArray(forcedBalls) && forcedBalls.length > 0) {
     room.preGameCountdown = null;
@@ -5660,6 +5688,7 @@ app.post('/api/live-room/action', (req, res) => {
       fastRoomsByStake[stk].bonusCartelasForOver20 = cleanBonus;
     }
     regularLiveRoomState.bonusCartelasForOver20 = cleanBonus;
+    saveBotsToDisk();
     broadcastRealtimeSync('both');
   } else if (action === 'set_hero_banners') {
     const rawBanners = (req.body as { heroBanners?: unknown }).heroBanners;
@@ -5673,17 +5702,21 @@ app.post('/api/live-room/action', (req, res) => {
           ? String(b?.accentColor)
           : 'emerald') as 'blue' | 'emerald' | 'amber' | 'rose',
         imageUrl: b?.imageUrl ? String(b.imageUrl) : undefined,
-        targetGame: (['fast', 'regular', 'keno', 'ramino', 'ludo', 'none'].includes(String(b?.targetGame))
+        targetGame: (['fast', 'regular', 'keno', 'ramino', 'none'].includes(String(b?.targetGame))
           ? String(b?.targetGame)
-          : 'fast') as 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none',
+          : 'fast') as 'fast' | 'regular' | 'keno' | 'ramino' | 'none',
         ctaText: b?.ctaText ? String(b.ctaText).trim() : 'አሁን ይጫወቱ →',
         isActive: b?.isActive !== false,
+        translations:
+          b?.translations && typeof b.translations === 'object'
+            ? (b.translations as Record<string, { title?: string; subtitle?: string; badgeText?: string; ctaText?: string }>)
+            : undefined,
       }));
       persistedHomeHeroAds = sanitized;
       for (const stk of FAST_STAKE_TIERS) {
-        fastRoomsByStake[stk].heroBanners = sanitized;
+        fastRoomsByStake[stk].heroBanners = [];
       }
-      regularLiveRoomState.heroBanners = sanitized;
+      regularLiveRoomState.heroBanners = [];
       saveBotsToDisk();
       const adsPayload = JSON.stringify({
         type: 'home:ads:sync',
@@ -7400,16 +7433,19 @@ app.post('/api/admin/state-restore', (req, res) => {
   if (Array.isArray(b.homeHeroAds)) {
     persistedHomeHeroAds = b.homeHeroAds.slice(0, 25);
     for (const stk of FAST_STAKE_TIERS) {
-      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [...persistedHomeHeroAds];
+      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [];
     }
-    if (regularLiveRoomState) regularLiveRoomState.heroBanners = [...persistedHomeHeroAds];
+    if (regularLiveRoomState) regularLiveRoomState.heroBanners = [];
   }
 
   if (b.gameVisibility && typeof b.gameVisibility === 'object') {
+    const gv = b.gameVisibility as Record<string, { visible: boolean; comingSoon?: boolean }>;
     persistedGameVisibility = {
-      ...persistedGameVisibility,
-      ...b.gameVisibility,
-    } as typeof persistedGameVisibility;
+      fast: gv.fast ?? persistedGameVisibility.fast,
+      regular: gv.regular ?? persistedGameVisibility.regular,
+      keno: gv.keno ?? persistedGameVisibility.keno,
+      ramino: gv.ramino ?? persistedGameVisibility.ramino,
+    };
   }
 
   if (b.adminPinConfig && typeof b.adminPinConfig === 'object') {
@@ -9960,7 +9996,7 @@ function startRaminoServerLoop() {
 }
 
 // Active Game Presence Tracking for Accurate Real-Time Player Counts
-type TrackedGameKey = 'hub' | 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo';
+type TrackedGameKey = 'hub' | 'fast' | 'regular' | 'keno' | 'ramino';
 const activeGamePresence = new Map<string, { game: TrackedGameKey; lastSeen: number }>();
 
 const pruneStaleGamePresence = () => {
@@ -9986,7 +10022,6 @@ function computeLiveGameCounts() {
     regular: new Set(),
     keno: new Set(),
     ramino: new Set(),
-    ludo: new Set(),
   };
 
   for (const [cid, info] of activeGamePresence.entries()) {
@@ -10028,8 +10063,6 @@ function computeLiveGameCounts() {
     regular: regularPlayers.size,
     keno: presenceByGame.keno.size,
     ramino: raminoPlayers.size,
-    ludo: 0,
-    dama: 0,
     updatedAt: Date.now(),
   };
 }
@@ -10037,7 +10070,7 @@ function computeLiveGameCounts() {
 app.post('/api/games/presence', (req, res) => {
   const clientId = String(req.body?.clientId || '').trim();
   const game = String(req.body?.game || 'hub').trim() as TrackedGameKey;
-  if (clientId && ['hub', 'fast', 'regular', 'keno', 'ramino', 'ludo'].includes(game)) {
+  if (clientId && ['hub', 'fast', 'regular', 'keno', 'ramino'].includes(game)) {
     activeGamePresence.set(clientId, { game, lastSeen: Date.now() });
   }
   res.json({ ok: true, counts: computeLiveGameCounts() });
@@ -10714,7 +10747,7 @@ app.get('/api/games/visibility', (_req, res) => {
 
 app.post('/api/games/visibility', (req, res) => {
   const gameKey = String(req.body?.game || '').trim() as GameVisibilityKey;
-  const validKeys: GameVisibilityKey[] = ['ludo', 'fast', 'regular', 'keno', 'ramino', 'dama'];
+  const validKeys: GameVisibilityKey[] = ['fast', 'regular', 'keno', 'ramino'];
   if (req.body?.visibility && typeof req.body.visibility === 'object') {
     for (const k of validKeys) {
       const entry = req.body.visibility[k];
@@ -10767,17 +10800,21 @@ app.post('/api/home-ads', (req, res) => {
           ? String(b?.accentColor)
           : 'emerald') as 'blue' | 'emerald' | 'amber' | 'rose',
         imageUrl: b?.imageUrl ? String(b.imageUrl) : undefined,
-        targetGame: (['fast', 'regular', 'keno', 'ramino', 'ludo', 'none'].includes(String(b?.targetGame))
+        targetGame: (['fast', 'regular', 'keno', 'ramino', 'none'].includes(String(b?.targetGame))
           ? String(b?.targetGame)
-          : 'fast') as 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none',
+          : 'fast') as 'fast' | 'regular' | 'keno' | 'ramino' | 'none',
         ctaText: b?.ctaText ? String(b.ctaText).trim() : 'አሁን ይጫወቱ →',
         isActive: b?.isActive !== false,
+        translations:
+          b?.translations && typeof b.translations === 'object'
+            ? (b.translations as Record<string, { title?: string; subtitle?: string; badgeText?: string; ctaText?: string }>)
+            : undefined,
       }));
     persistedHomeHeroAds = sanitized;
     for (const stk of FAST_STAKE_TIERS) {
-      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = sanitized;
+      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [];
     }
-    if (regularLiveRoomState) regularLiveRoomState.heroBanners = sanitized;
+    if (regularLiveRoomState) regularLiveRoomState.heroBanners = [];
     saveBotsToDisk();
     const payload = JSON.stringify({
       type: 'home:ads:sync',

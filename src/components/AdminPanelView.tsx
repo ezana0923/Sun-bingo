@@ -213,6 +213,7 @@ interface AdminPanelViewProps {
   onOpenAll16RulesModal?: () => void;
   onOpenDownloadModal?: () => void;
   isFastMode?: boolean;
+  onSelectedAdminGameChange?: (game: 'fast' | 'regular' | 'keno' | 'ramino') => void;
   activeStakeTier?: 10 | 20 | 50 | 100;
   onSelectStakeRoom?: (tier: 10 | 20 | 50 | 100) => void;
   allFastRoomsByStake?: Record<number, ServerRoomStatePayload>;
@@ -285,6 +286,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   onOpenAll16RulesModal,
   onOpenDownloadModal,
   isFastMode = false,
+  onSelectedAdminGameChange,
   activeStakeTier = 10,
   onSelectStakeRoom,
   allFastRoomsByStake = {},
@@ -381,16 +383,14 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const stopListeningRaminoVoice = () => {};
 
   // Game Visibility & Maintenance State (Hide/Show Games on Home Hub)
-  type AdminGameVisKey = 'ludo' | 'fast' | 'regular' | 'keno' | 'ramino' | 'dama';
+  type AdminGameVisKey = 'fast' | 'regular' | 'keno' | 'ramino';
   const [gameVisibilityMap, setGameVisibilityMap] = useState<
     Record<AdminGameVisKey, { visible: boolean; comingSoon?: boolean }>
   >({
-    ludo: { visible: true, comingSoon: true },
     fast: { visible: true, comingSoon: false },
     regular: { visible: true, comingSoon: false },
     keno: { visible: true, comingSoon: false },
     ramino: { visible: true, comingSoon: false },
-    dama: { visible: true, comingSoon: true },
   });
 
   const fetchKenoAndRaminoAdminData = React.useCallback(async () => {
@@ -464,9 +464,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [bannerColor, setBannerColor] = useState<'blue' | 'emerald' | 'amber' | 'rose'>('emerald');
   const [bannerImageUrl, setBannerImageUrl] = useState('');
   const [bannerTargetGame, setBannerTargetGame] = useState<
-    'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none'
+    'fast' | 'regular' | 'keno' | 'ramino' | 'none'
   >('fast');
   const [bannerCtaText, setBannerCtaText] = useState('አሁን ይጫወቱ →');
+  const [bannerTranslations, setBannerTranslations] = useState<HeroBannerAd['translations']>({});
 
   // Add / Edit Bank Account Form State
   const [editingBankId, setEditingBankId] = useState<string | null>(null);
@@ -496,6 +497,19 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [patternInput, setPatternInput] = useState(activePatternId);
   const [regMinInput, setRegMinInput] = useState(registrationMinutes.toString());
   const [cartelaToBlock, setCartelaToBlock] = useState('');
+
+  useEffect(() => {
+    setStakeInput(stakeAmount.toString());
+  }, [stakeAmount]);
+  useEffect(() => {
+    setPrizeInput(prizeAmount.toString());
+  }, [prizeAmount]);
+  useEffect(() => {
+    setPatternInput(activePatternId);
+  }, [activePatternId]);
+  useEffect(() => {
+    setRegMinInput(registrationMinutes.toString());
+  }, [registrationMinutes]);
   const [expandedPatternCategories, setExpandedPatternCategories] = useState<Record<string, boolean>>({
     lines: true,
     squares: true,
@@ -543,6 +557,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       action: 'update_settings',
       activePatternId: newRuleId,
       activePatternCode: code,
+      applyAllRooms: true,
     });
 
     if (typeof window !== 'undefined') {
@@ -572,6 +587,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [over20BonusCartelasInput, setOver20BonusCartelasInput] = useState(
     String(bonusCartelasForOver20 ?? 5)
   );
+  useEffect(() => {
+    setOver20BonusCartelasInput(String(bonusCartelasForOver20 ?? 5));
+  }, [bonusCartelasForOver20]);
 
   // Deposits & Withdrawals Filters (IMG_3563)
   const [depositStatusFilter, setDepositStatusFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
@@ -1132,10 +1150,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       onUpdateBonusCartelasForOver20(over20Cards);
     }
     dispatchServerRoomAction({
-      mode: isFastMode ? 'fast' : 'regular',
+      mode: selectedAdminGame === 'regular' ? 'regular' : 'fast',
       stakeAmount: activeStakeTier,
       action: 'set_bonus_over_20',
       bonusCount: over20Cards,
+      applyAllRooms: selectedAdminGame !== 'regular',
     });
 
     try {
@@ -1737,15 +1756,13 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {(
                 [
                   { key: 'fast', label: '⚡ Fast Bingo' },
                   { key: 'regular', label: '👑 ልዩ ቢንጎ' },
                   { key: 'keno', label: '🎱 Keno' },
                   { key: 'ramino', label: '♠️ Ramino' },
-                  { key: 'ludo', label: '🎲 Ludo' },
-                  { key: 'dama', label: '♟️ Dama' },
                 ] as const
               ).map((item) => {
                 const state = gameVisibilityMap[item.key] || { visible: true, comingSoon: false };
@@ -1846,7 +1863,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 <button
                   key={g.id}
                   type="button"
-                  onClick={() => setSelectedAdminGame(g.id)}
+                  onClick={() => {
+                    setSelectedAdminGame(g.id);
+                    onSelectedAdminGameChange?.(g.id);
+                  }}
                   className={`px-3 py-2.5 rounded-xl border text-left transition-all cursor-pointer ${
                     active
                       ? `${g.activeClass} shadow-md`
@@ -2590,7 +2610,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             }`}
           >
             <h4 className="text-sm font-black text-indigo-400">
-              የኳስ ፍጥነት እና ካርቴላ ማገጃ (Room {activeStakeTier} Br)
+              {selectedAdminGame === 'regular'
+                ? 'የልዩ ቢንጎ ኳስ ፍጥነት እና ካርቴላ ማገጃ (Liyu Bingo)'
+                : `የኳስ ፍጥነት እና ካርቴላ ማገጃ (Room ${activeStakeTier} Br)`}
             </h4>
 
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2754,10 +2776,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   onUpdateBonusCartelasForOver20(parsed);
                 }
                 dispatchServerRoomAction({
-                  mode: selectedAdminGame === 'fast' ? 'fast' : 'regular',
+                  mode: selectedAdminGame === 'regular' ? 'regular' : 'fast',
                   stakeAmount: activeStakeTier,
                   action: 'set_bonus_over_20',
                   bonusCount: parsed,
+                  applyAllRooms: selectedAdminGame !== 'regular',
                 });
                 showToast(`🎁 ከ 20 ካርቴላ በላይ ለሚይዙ የሚሰጠው ነፃ ቦነስ ካርቴላ ብዛት ወደ +${parsed} ተቀይሯል!`);
               }}
@@ -2958,6 +2981,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   setBannerImageUrl('');
                   setBannerTargetGame('fast');
                   setBannerCtaText('አሁን ይጫወቱ →');
+                  setBannerTranslations({});
                 }}
                   className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
                 >
@@ -2975,6 +2999,21 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   showToast('❌ እባክዎ የማስታወቂያውን ዋና ርዕስ (Title) ይፃፉ ወይም ምስል ይምረጡ!');
                   return;
                 }
+                const cleanedTranslations: HeroBannerAd['translations'] = {};
+                (['en', 'ti', 'om'] as const).forEach((lng) => {
+                  const entry = bannerTranslations?.[lng];
+                  if (entry) {
+                    const nextEntry = {
+                      ...(entry.title?.trim() ? { title: entry.title.trim() } : {}),
+                      ...(entry.subtitle?.trim() ? { subtitle: entry.subtitle.trim() } : {}),
+                      ...(entry.badgeText?.trim() ? { badgeText: entry.badgeText.trim() } : {}),
+                      ...(entry.ctaText?.trim() ? { ctaText: entry.ctaText.trim() } : {}),
+                    };
+                    if (Object.keys(nextEntry).length > 0) {
+                      cleanedTranslations[lng] = nextEntry;
+                    }
+                  }
+                });
                 const payload: Omit<HeroBannerAd, 'id'> = {
                   title: effectiveTitle,
                   subtitle: bannerSubtitle.trim() || 'ዕድልዎን ዛሬ ይሞክሩ! ፈጣን ድል እና ታላቅ ሽልማት።',
@@ -2984,6 +3023,9 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   targetGame: bannerTargetGame,
                   ctaText: bannerCtaText.trim() || 'አሁን ይጫወቱ →',
                   isActive: true,
+                  ...(Object.keys(cleanedTranslations).length > 0
+                    ? { translations: cleanedTranslations }
+                    : {}),
                 };
 
                 if (editingBannerId && onUpdateHeroBanner) {
@@ -3002,6 +3044,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 setBannerImageUrl('');
                 setBannerTargetGame('fast');
                 setBannerCtaText('አሁን ይጫወቱ →');
+                setBannerTranslations({});
               }}
               className="space-y-3.5"
             >
@@ -3052,7 +3095,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                     value={bannerTargetGame}
                     onChange={(e) =>
                       setBannerTargetGame(
-                        e.target.value as 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none'
+                        e.target.value as 'fast' | 'regular' | 'keno' | 'ramino' | 'none'
                       )
                     }
                     className={`w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold border focus:outline-none ${
@@ -3207,6 +3250,96 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 )}
               </div>
 
+              {/* Optional multi-language overrides for Ads (auto-translated automatically if left empty) */}
+              <details
+                className={`rounded-2xl border p-3 ${
+                  isDark ? 'bg-[#14141d] border-slate-800' : 'bg-slate-50 border-slate-200'
+                }`}
+              >
+                <summary className="text-xs font-black text-cyan-400 cursor-pointer select-none">
+                  🌐 በሌሎች ቋንቋዎች (EN / TI / OM) ትርጉም አማራጭ — ባዶ ከተዉት በራሱ ይተረጎማል
+                </summary>
+                <div className="mt-3 space-y-3">
+                  {(
+                    [
+                      { code: 'en', label: '🇬🇧 English (EN)' },
+                      { code: 'ti', label: '🇪🇷 ትግርኛ (TI)' },
+                      { code: 'om', label: '🇪🇹 Afaan Oromoo (OM)' },
+                    ] as const
+                  ).map((langItem) => {
+                    const entry = bannerTranslations?.[langItem.code] || {};
+                    const updateField = (
+                      field: 'badgeText' | 'title' | 'subtitle' | 'ctaText',
+                      val: string
+                    ) => {
+                      setBannerTranslations((prev) => ({
+                        ...(prev || {}),
+                        [langItem.code]: {
+                          ...(prev?.[langItem.code] || {}),
+                          [field]: val,
+                        },
+                      }));
+                    };
+                    return (
+                      <div
+                        key={langItem.code}
+                        className={`p-2.5 rounded-xl border space-y-2 ${
+                          isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-white border-slate-200'
+                        }`}
+                      >
+                        <div className="text-[11px] font-black text-amber-400">{langItem.label}</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            value={entry.badgeText || ''}
+                            onChange={(e) => updateField('badgeText', e.target.value)}
+                            placeholder="Badge text (optional)"
+                            className={`px-3 py-1.5 rounded-lg text-xs border ${
+                              isDark
+                                ? 'bg-[#14141d] border-slate-700 text-white'
+                                : 'bg-slate-50 border-slate-300'
+                            }`}
+                          />
+                          <input
+                            type="text"
+                            value={entry.ctaText || ''}
+                            onChange={(e) => updateField('ctaText', e.target.value)}
+                            placeholder="Button CTA text (optional)"
+                            className={`px-3 py-1.5 rounded-lg text-xs border ${
+                              isDark
+                                ? 'bg-[#14141d] border-slate-700 text-white'
+                                : 'bg-slate-50 border-slate-300'
+                            }`}
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={entry.title || ''}
+                          onChange={(e) => updateField('title', e.target.value)}
+                          placeholder="Title (optional)"
+                          className={`w-full px-3 py-1.5 rounded-lg text-xs border ${
+                            isDark
+                              ? 'bg-[#14141d] border-slate-700 text-white'
+                              : 'bg-slate-50 border-slate-300'
+                          }`}
+                        />
+                        <input
+                          type="text"
+                          value={entry.subtitle || ''}
+                          onChange={(e) => updateField('subtitle', e.target.value)}
+                          placeholder="Subtitle (optional)"
+                          className={`w-full px-3 py-1.5 rounded-lg text-xs border ${
+                            isDark
+                              ? 'bg-[#14141d] border-slate-700 text-white'
+                              : 'bg-slate-50 border-slate-300'
+                          }`}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+
               <button
                 type="submit"
                 className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer shadow-lg"
@@ -3290,8 +3423,11 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                             setBannerBadge(b.badgeText);
                             setBannerColor(b.accentColor);
                             setBannerImageUrl(b.imageUrl || '');
-                            setBannerTargetGame(b.targetGame || 'fast');
+                            setBannerTargetGame(
+                              ((b.targetGame as string) === 'ludo' ? 'fast' : b.targetGame) || 'fast'
+                            );
                             setBannerCtaText(b.ctaText || 'አሁን ይጫወቱ →');
+                            setBannerTranslations(b.translations || {});
                             window.scrollTo({ top: 0, behavior: 'smooth' });
                           }}
                           className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1 cursor-pointer"

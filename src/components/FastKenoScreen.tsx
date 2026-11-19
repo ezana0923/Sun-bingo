@@ -685,7 +685,6 @@ export interface KenoTranslations {
   quickPick10Menu: string;
   clearAllMenu: string;
   goToBingoMenu: string;
-  goToLudoMenu: string;
   walletMenu: (balance: number) => string;
   soundEffectsMenu: string;
   onLabel: string;
@@ -782,7 +781,6 @@ export const KENO_TRANSLATIONS: Record<Language, KenoTranslations> = {
     quickPick10Menu: '10 ቁጥሮች በራንደም ምረጥ',
     clearAllMenu: 'ሁሉንም አጽዳ',
     goToBingoMenu: 'ወደ ኢትዮጵያ ቢንጎ ሂድ',
-    goToLudoMenu: 'ወደ ሉዶ ማስተር ሂድ',
     walletMenu: (balance: number) => `ዋሌትና ቀሪ ሂሳብ (${balance} ብር)`,
     soundEffectsMenu: 'የጨዋታ ድምፅ',
     onLabel: 'በርቷል',
@@ -879,7 +877,6 @@ export const KENO_TRANSLATIONS: Record<Language, KenoTranslations> = {
     quickPick10Menu: 'Quick Pick 10 Numbers',
     clearAllMenu: 'Clear All Numbers',
     goToBingoMenu: 'Play Ethiopian Bingo',
-    goToLudoMenu: 'Play Sun Ludo Master',
     walletMenu: (balance: number) => `Wallet & Balance (${balance} ETB)`,
     soundEffectsMenu: 'Sound Effects',
     onLabel: 'ON',
@@ -974,7 +971,6 @@ export const KENO_TRANSLATIONS: Record<Language, KenoTranslations> = {
     quickPick10Menu: 'Lakkoofsa 10 Battalatti Filadhu',
     clearAllMenu: 'Hunda Qulqulleessi',
     goToBingoMenu: 'Gara Itoophiyaa Biingootti',
-    goToLudoMenu: 'Gara Luudoo Maastariitti',
     walletMenu: (balance: number) => `Waleettii fi Qabeenya (${balance} ETB)`,
     soundEffectsMenu: 'Sagalee Taphaa',
     onLabel: 'Banaa',
@@ -1067,7 +1063,6 @@ export const KENO_TRANSLATIONS: Record<Language, KenoTranslations> = {
     quickPick10Menu: '10 ቍጽርታት ብራንደም ምረጽ',
     clearAllMenu: 'ኩሉ ኣጽሪ',
     goToBingoMenu: 'ናብ ኢትዮጵያ ቢንጎ ኺድ',
-    goToLudoMenu: 'ናብ ሉዶ ማስተር ኺድ',
     walletMenu: (balance: number) => `ዋሌትን ቀሪ ሕሳብን (${balance} ብር)`,
     soundEffectsMenu: 'ድምጺ ጸወታ',
     onLabel: 'ክፉት',

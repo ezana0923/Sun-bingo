@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FastBingoStandaloneApp } from './components/FastBingoStandaloneApp';
 import { RegularBingoStandaloneApp } from './components/RegularBingoStandaloneApp';
 import { FastKenoScreen } from './components/FastKenoScreen';
-import { LudoMasterGame } from './components/LudoMasterGame';
 import { ModernRaminoGame } from './components/ModernRaminoGame';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AdminPanelView } from './components/AdminPanelView';
@@ -25,7 +24,11 @@ import {
   getLocalTransactionsCache,
   getLocalWalletBalanceByPhone,
   saveLocalWalletBalanceByPhone,
+  ServerLockedCartelaItem,
+  ServerRoomStatePayload,
 } from './utils/realtimeRoomClient';
+import { localizeHeroAd } from './utils/adTranslations';
+import { BINGO_PATTERNS } from './data/bingoPatterns';
 import { applyTelegramSwipeLock, scrollAppToTop } from './utils/telegramViewport';
 import {
   Language,
@@ -63,22 +66,19 @@ import {
   History,
   Plus,
 } from 'lucide-react';
-import gameTileLudoImg from './assets/images/game_tile_ludo_1794572556916.jpg';
 import gameTileBingoImg from './assets/images/game_tile_bingo_1794572557520.jpg';
 import liyuBingoTileImg from './assets/images/liyu_bingo_tile_1794575305419.jpg';
 import gameTileKenoImg from './assets/images/game_tile_keno_1794572558494.jpg';
 import gameTileConkerImg from './assets/images/game_tile_conker_1794572558656.jpg';
 
-type GameKey = 'ludo' | 'fast' | 'regular' | 'keno' | 'ramino' | 'dama';
+type GameKey = 'fast' | 'regular' | 'keno' | 'ramino';
 type GameVisibilityMap = Record<GameKey, { visible: boolean; comingSoon: boolean }>;
 
 const DEFAULT_GAME_VISIBILITY: GameVisibilityMap = {
-  ludo: { visible: true, comingSoon: true },
   fast: { visible: true, comingSoon: false },
   regular: { visible: true, comingSoon: false },
   keno: { visible: true, comingSoon: false },
   ramino: { visible: true, comingSoon: false },
-  dama: { visible: true, comingSoon: true },
 };
 
 const HUB_T: Record<
@@ -109,21 +109,26 @@ const HUB_T: Record<
     soonBadge: string;
     soonNotice: (title: string) => string;
     gameHiddenNotice: string;
-    ludoTitle: string;
     fastTitle: string;
     regularTitle: string;
     kenoTitle: string;
     raminoTitle: string;
-    damaTitle: string;
     bannerDefaultBadge: string;
     bannerDefaultCta: string;
     noVisibleGames: string;
+    navHome: string;
+    navHistory: string;
+    navProfile: string;
+    changeName: string;
+    newNamePlaceholder: string;
+    saveShort: string;
+    playNowToast: string;
     defaultSlides: {
       badge: string;
       title: string;
       subtitle: string;
       cta: string;
-      target: 'fast' | 'ramino' | 'ludo' | 'regular' | 'keno';
+      target: 'fast' | 'ramino' | 'regular' | 'keno';
     }[];
   }
 > = {
@@ -153,21 +158,26 @@ const HUB_T: Record<
     soonBadge: 'በቅርቡ',
     soonNotice: (title) => `⏳ ${title} በቅርብ ቀን ሲጠናቀቅ ይለቀቃል!`,
     gameHiddenNotice: '⚠️ ይህ ጨዋታ ለማስተካከል በአድሚን ለጊዜው ተደብቋል።',
-    ludoTitle: 'ሉዶ',
     fastTitle: 'ፈጣን ቢንጎ',
     regularTitle: 'ልዩ ቢንጎ',
     kenoTitle: 'ኬኖ',
     raminoTitle: 'ራሚኖ',
-    damaTitle: 'ዳማ',
     bannerDefaultBadge: 'ማስታወቂያ',
     bannerDefaultCta: 'አሁን ይጫወቱ →',
     noVisibleGames: 'ለጊዜው የሚታዩ ጨዋታዎች የሉም፤ የጥገና ስራ ላይ ነን።',
+    navHome: 'ዋና ገጽ',
+    navHistory: 'ታሪክ',
+    navProfile: 'መገለጫ',
+    changeName: 'ስም ቀይር',
+    newNamePlaceholder: 'አዲስ ስም ያስገቡ...',
+    saveShort: 'አስቀምጥ',
+    playNowToast: '🎮 አሁን ግባ',
     defaultSlides: [
       {
         badge: 'የዕድል ሳጥን',
         title: 'ሁሉንም ጨዋታዎች በአንድ ቦታ',
-        subtitle: 'ፈጣን ድል 2x • ልዩ ሽልማት 3x • የዕድል 5 ጨዋታ ዋሌት ደይ!',
-        cta: 'ራሚኖ እተው →',
+        subtitle: 'ፈጣን ድል 2x • ልዩ ሽልማት 3x • የዕድል 5 ጨዋታ!',
+        cta: 'አሁን ይጫወቱ →',
         target: 'fast',
       },
       {
@@ -176,13 +186,6 @@ const HUB_T: Record<
         subtitle: 'ዶፔይ 2x • በጆከር 3x • ከ5 ጨዋታ በኋላ ፖስት ዴይ!',
         cta: 'ራሚኖ ይግቡ →',
         target: 'ramino',
-      },
-      {
-        badge: 'በቅርቡ',
-        title: 'ሉዶ — በቅርብ ቀን ይለቀቃል',
-        subtitle: 'ሲጠናቀቅ ወዲያውኑ በሁሉም ስልክ ይከፈታል።',
-        cta: 'በቅርብ ቀን 🔜',
-        target: 'ludo',
       },
       {
         badge: 'ልዩ ቢንጎ እና ኬኖ',
@@ -219,15 +222,20 @@ const HUB_T: Record<
     soonBadge: 'ብቐረባ',
     soonNotice: (title) => `⏳ ${title} ምስ ተወድአ ብቐረባ ክለቀቕ እዩ!`,
     gameHiddenNotice: '⚠️ እዚ ጸወታ ንምጽጋን ብኣድሚን ተዓጽዩ ኣሎ።',
-    ludoTitle: 'ሉዶ',
     fastTitle: 'ቅልጡፍ ቢንጎ',
     regularTitle: 'ልዩ ቢንጎ',
     kenoTitle: 'ኬኖ',
     raminoTitle: 'ራሚኖ',
-    damaTitle: 'ዳማ',
     bannerDefaultBadge: 'መወዓውዒ',
     bannerDefaultCta: 'ሕጂ ተጻወቱ →',
     noVisibleGames: 'ንግዚኡ ዝርኣዩ ጸወታታት የለዉን።',
+    navHome: 'ዋና ገጽ',
+    navHistory: 'ታሪኽ',
+    navProfile: 'መግለጺ',
+    changeName: 'ስም ቀይር',
+    newNamePlaceholder: 'ሓዱሽ ስም የእትዉ...',
+    saveShort: 'ኣቐምጥ',
+    playNowToast: '🎮 ሕጂ እተዉ',
     defaultSlides: [
       {
         badge: 'ቀንዲ ማእከል',
@@ -242,13 +250,6 @@ const HUB_T: Record<
         subtitle: 'ዶፔይ 2x • ብጆከር 3x • ድሕሪ 5 ጸወታ ፖስት ዴይ!',
         cta: 'ራሚኖ እተዉ →',
         target: 'ramino',
-      },
-      {
-        badge: 'ብቐረባ',
-        title: 'ሉዶ — ብቐረባ ክለቀቕ እዩ',
-        subtitle: 'ምስ ተዛዘመ ብቀጥታ ክኽፈት እዩ።',
-        cta: 'ብቐረባ 🔜',
-        target: 'ludo',
       },
       {
         badge: 'ልዩ ቢንጎን ኬኖን',
@@ -285,15 +286,20 @@ const HUB_T: Record<
     soonBadge: 'Dhiyootti',
     soonNotice: (title) => `⏳ ${title} yeroo xumuramu dhiyootti ni gadhiifama!`,
     gameHiddenNotice: '⚠️ Taphni kun suphaaf yeroof bulchaadhaan dhokfameera.',
-    ludoTitle: 'Luudoo',
     fastTitle: 'Biingoo Ariifataa',
     regularTitle: 'Biingoo Addaa',
     kenoTitle: 'Keenoo',
     raminoTitle: 'Raaminoo',
-    damaTitle: 'Daamaa',
     bannerDefaultBadge: 'Beeksisa',
     bannerDefaultCta: 'Amma Taphadhu →',
     noVisibleGames: 'Yeroof taphoonni mul\'atan hin jiran.',
+    navHome: 'Fuula Duraa',
+    navHistory: 'Seenaa',
+    navProfile: 'Eenyummaa',
+    changeName: 'Maqaa Jijjiiri',
+    newNamePlaceholder: 'Maqaa haaraa galchi...',
+    saveShort: 'Olkaa\'i',
+    playNowToast: '🎮 Amma Seeni',
     defaultSlides: [
       {
         badge: 'Giddugala',
@@ -308,13 +314,6 @@ const HUB_T: Record<
         subtitle: 'Dooppey 2x • Jookeraan 3x • Tapha 5 booda Poost Deey!',
         cta: 'Raaminoo Seeni →',
         target: 'ramino',
-      },
-      {
-        badge: 'Dhiyootti',
-        title: 'Luudoo — Dhiyootti Ni Dhufa',
-        subtitle: 'Yeroo xumuramu battalumatti ni banama.',
-        cta: 'Dhiyootti 🔜',
-        target: 'ludo',
       },
       {
         badge: 'Biingoo Addaa & Keenoo',
@@ -351,15 +350,20 @@ const HUB_T: Record<
     soonBadge: 'Soon',
     soonNotice: (title) => `⏳ ${title} will launch soon once finished!`,
     gameHiddenNotice: '⚠️ This game is temporarily hidden by Admin for maintenance.',
-    ludoTitle: 'Ludo',
     fastTitle: 'Fast Bingo',
     regularTitle: 'Liyu Bingo',
     kenoTitle: 'Keno',
     raminoTitle: 'SUN Ramino',
-    damaTitle: 'Dama',
     bannerDefaultBadge: 'Featured',
     bannerDefaultCta: 'Play Now →',
     noVisibleGames: 'No games are currently visible while maintenance is underway.',
+    navHome: 'Home',
+    navHistory: 'History',
+    navProfile: 'Profile',
+    changeName: 'Edit Name',
+    newNamePlaceholder: 'Enter new name...',
+    saveShort: 'Save',
+    playNowToast: '🎮 Play Now',
     defaultSlides: [
       {
         badge: 'Featured',
@@ -374,13 +378,6 @@ const HUB_T: Record<
         subtitle: 'Dopey 2x • Golden 3x • Post Day after 5 rounds!',
         cta: 'Enter Ramino →',
         target: 'ramino',
-      },
-      {
-        badge: 'Coming Soon',
-        title: 'Ludo Master — Launching Soon',
-        subtitle: 'Currently finalizing gameplay and matchmaking.',
-        cta: 'Soon 🔜',
-        target: 'ludo',
       },
       {
         badge: 'Liyu Bingo & Keno',
@@ -584,7 +581,13 @@ export default function App() {
   const [viewMode, setViewMode] = useState<'game' | 'admin'>('game');
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [isAdminRulesModalOpen, setIsAdminRulesModalOpen] = useState(false);
-  const [adminActivePatternId, setAdminActivePatternId] = useState<number>(5);
+  const [adminActivePatternId, setAdminActivePatternId] = useState<number>(1);
+  const [adminControlGame, setAdminControlGame] = useState<'fast' | 'regular' | 'keno' | 'ramino'>('fast');
+  const [adminStakeTier, setAdminStakeTier] = useState<10 | 20 | 50 | 100>(10);
+  const [adminFastRoomsByStake, setAdminFastRoomsByStake] = useState<Record<number, ServerRoomStatePayload>>({});
+  const [adminFastLockedByStake, setAdminFastLockedByStake] = useState<Record<number, ServerLockedCartelaItem[]>>({});
+  const [adminRegularRoom, setAdminRegularRoom] = useState<ServerRoomStatePayload | null>(null);
+  const [adminRegularLocked, setAdminRegularLocked] = useState<ServerLockedCartelaItem[]>([]);
 
   useEffect(() => {
     try {
@@ -605,7 +608,7 @@ export default function App() {
         params.has('raminoRoom') ||
         params.get('tab') === 'admin' ||
         params.get('direct') === '1' ||
-        (explicitMode && ['fast', 'regular', 'keno', 'ludo', 'ramino'].includes(explicitMode))
+        (explicitMode && ['fast', 'regular', 'keno', 'ramino'].includes(explicitMode))
       ) {
         return false;
       }
@@ -628,9 +631,7 @@ export default function App() {
     regular: number;
     keno: number;
     ramino: number;
-    ludo: number;
-    dama: number;
-  }>({ fast: 0, regular: 0, keno: 0, ramino: 0, ludo: 0, dama: 0 });
+  }>({ fast: 0, regular: 0, keno: 0, ramino: 0 });
 
   const [gameVisibility, setGameVisibility] = useState<GameVisibilityMap>(() => {
     if (typeof window !== 'undefined') {
@@ -828,25 +829,24 @@ export default function App() {
   }, []);
 
   // Active game mode: defaults to 'fast' (Fast Bingo)
-  const [gameMode, setGameMode] = useState<'fast' | 'regular' | 'keno' | 'ludo' | 'ramino'>(() => {
+  const [gameMode, setGameMode] = useState<'fast' | 'regular' | 'keno' | 'ramino'>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const mode = params.get('mode') || params.get('game');
       if (mode === 'ramino' || params.has('raminoRoom')) return 'ramino';
       if (mode === 'keno') return 'keno';
-      if (mode === 'ludo') return 'ludo';
       if (mode === 'regular') return 'regular';
       if (mode === 'fast') return 'fast';
 
       const saved = localStorage.getItem('ezi_bingo_active_mode');
-      if (saved === 'ramino' || saved === 'keno' || saved === 'ludo' || saved === 'regular' || saved === 'fast') {
-        return saved as 'fast' | 'regular' | 'keno' | 'ludo' | 'ramino';
+      if (saved === 'ramino' || saved === 'keno' || saved === 'regular' || saved === 'fast') {
+        return saved as 'fast' | 'regular' | 'keno' | 'ramino';
       }
     }
     return 'fast';
   });
 
-  const handleSwitchMode = (mode: 'fast' | 'regular' | 'keno' | 'ludo' | 'ramino') => {
+  const handleSwitchMode = (mode: 'fast' | 'regular' | 'keno' | 'ramino') => {
     const vis = gameVisibility[mode];
     if (vis && vis.visible === false) {
       setShowGameHub(true);
@@ -855,7 +855,6 @@ export default function App() {
     }
     if (vis && vis.comingSoon) {
       const titleMap: Record<string, string> = {
-        ludo: tHub.ludoTitle,
         fast: tHub.fastTitle,
         regular: tHub.regularTitle,
         keno: tHub.kenoTitle,
@@ -1334,6 +1333,23 @@ export default function App() {
         .then((r) => r.json())
         .then((data) => {
           if (isCancelled || !data?.ok) return;
+        if (data.fastRoomsByStake) {
+          setAdminFastRoomsByStake(data.fastRoomsByStake);
+        } else if (data.fastRoom) {
+          setAdminFastRoomsByStake((prev) => ({ ...prev, [data.fastRoom.stakeAmount || 10]: data.fastRoom }));
+        }
+        if (data.fastLockedCartelasByStake) {
+          setAdminFastLockedByStake(data.fastLockedCartelasByStake);
+        }
+        if (data.regularRoom) {
+          setAdminRegularRoom(data.regularRoom);
+          if (typeof data.regularRoom.activePatternId === 'number') {
+            setAdminActivePatternId(data.regularRoom.activePatternId);
+          }
+        }
+        if (Array.isArray(data.regularLockedCartelas)) {
+          setAdminRegularLocked(data.regularLockedCartelas);
+        }
         if (data.accountToken && data.player?.phone) {
           saveSignedAccountToken(data.player.phone, data.accountToken);
         }
@@ -1411,6 +1427,26 @@ export default function App() {
     void runInitialSync();
 
     const unsubscribe = subscribeRealtimeRoomSync((msg) => {
+      if (msg?.fastRoomsByStake) {
+        setAdminFastRoomsByStake(msg.fastRoomsByStake);
+      } else if (msg?.fastRoom) {
+        setAdminFastRoomsByStake((prev) => ({
+          ...prev,
+          [msg.fastRoom.stakeAmount || 10]: msg.fastRoom,
+        }));
+      }
+      if (msg?.fastLockedCartelasByStake) {
+        setAdminFastLockedByStake(msg.fastLockedCartelasByStake);
+      }
+      if (msg?.regularRoom) {
+        setAdminRegularRoom(msg.regularRoom);
+        if (typeof msg.regularRoom.activePatternId === 'number') {
+          setAdminActivePatternId(msg.regularRoom.activePatternId);
+        }
+      }
+      if (Array.isArray(msg?.regularLockedCartelas)) {
+        setAdminRegularLocked(msg.regularLockedCartelas);
+      }
       if (typeof msg?.requireDepositApproval === 'boolean') {
         setRequireDepositApproval(msg.requireDepositApproval);
       }
@@ -1488,6 +1524,44 @@ export default function App() {
     };
   }, [isLoggedIn, mergeGlobalTransactions]);
 
+  const refreshAdminLiveState = useCallback(() => {
+    const clientId = getDeviceClientId();
+    const curPhone = sharedUsersRef.current[0]?.phone || '';
+    const accountToken = curPhone ? getSignedAccountToken(curPhone) : '';
+    fetch(
+      buildApiUrl(
+        `/api/live-room/state?mode=fast&stake=${adminStakeTier}&phone=${encodeURIComponent(
+          curPhone
+        )}&clientId=${encodeURIComponent(clientId)}`
+      ),
+      {
+        headers: accountToken ? { 'x-account-token': accountToken } : undefined,
+      }
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data?.ok) return;
+        if (data.fastRoomsByStake) setAdminFastRoomsByStake(data.fastRoomsByStake);
+        if (data.fastLockedCartelasByStake) setAdminFastLockedByStake(data.fastLockedCartelasByStake);
+        if (data.regularRoom) {
+          setAdminRegularRoom(data.regularRoom);
+          if (typeof data.regularRoom.activePatternId === 'number') {
+            setAdminActivePatternId(data.regularRoom.activePatternId);
+          }
+        }
+        if (Array.isArray(data.regularLockedCartelas)) {
+          setAdminRegularLocked(data.regularLockedCartelas);
+        }
+        if (typeof data.requireDepositApproval === 'boolean') {
+          setRequireDepositApproval(data.requireDepositApproval);
+        }
+        if (Array.isArray(data.transactions)) {
+          mergeGlobalTransactions(data.transactions);
+        }
+      })
+      .catch(() => {});
+  }, [adminStakeTier, mergeGlobalTransactions]);
+
   // Report live player presence heartbeat & poll accurate live counts on Home Hub
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -1521,8 +1595,6 @@ export default function App() {
               regular: Number(data.counts.regular || 0),
               keno: Number(data.counts.keno || 0),
               ramino: Number(data.counts.ramino || 0),
-              ludo: Number(data.counts.ludo || 0),
-              dama: Number(data.counts.dama || 0),
             });
           }
         })
@@ -1823,22 +1895,6 @@ export default function App() {
 
               <button
                 type="button"
-                onClick={() => handleSwitchMode('ludo')}
-                className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg text-[11px] sm:text-xs font-black flex items-center gap-1 transition-all cursor-pointer ${
-                  gameMode === 'ludo'
-                    ? 'bg-gradient-to-r from-purple-500 to-pink-600 text-white shadow-md shadow-purple-500/20'
-                    : isDark
-                    ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-300/50'
-                }`}
-                title="Sun Ludo Master"
-              >
-                <Trophy className="w-3 h-3 text-amber-400" />
-                <span>Ludo</span>
-              </button>
-
-              <button
-                type="button"
                 onClick={() => handleSwitchMode('ramino')}
                 className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg text-[11px] sm:text-xs font-black flex items-center gap-1 transition-all cursor-pointer ${
                   gameMode === 'ramino'
@@ -2004,103 +2060,316 @@ export default function App() {
               </button>
             </div>
 
-            <AdminPanelView
-              isAdminAuthenticated={isAdminAuthenticated}
-              onAdminLogout={() => {
-                setIsAdminAuthenticated(false);
-                setViewMode('game');
-                try {
-                  localStorage.removeItem('ezi_admin_authenticated_v2');
-                  sessionStorage.removeItem('ezi_admin_session_v3');
-                } catch {}
-                window.location.hash = '';
-              }}
-              onOpenAll16RulesModal={() => setIsAdminRulesModalOpen(true)}
-              isFastMode={gameMode === 'fast'}
-              activePatternId={adminActivePatternId}
-              stakeAmount={10}
-              prizeAmount={80}
-              blockedCartelaIds={[]}
-              totalCartelasCount={100}
-              registeredCartelasCount={15}
-              isPlaying={adminIsPlaying}
-              isPaused={adminIsPaused}
-              callSpeedSec={adminCallSpeed}
-              onChangeSpeed={(sec) => setAdminCallSpeed(sec)}
-              onTogglePause={() => setAdminIsPaused(!adminIsPaused)}
-              onDrawNextManual={() => {}}
-              onResetGame={() => {}}
-              heroBanners={heroBanners}
-              onAddHeroBanner={handleAddHeroBanner}
-              onUpdateHeroBanner={handleUpdateHeroBanner}
-              onRemoveHeroBanner={handleRemoveHeroBanner}
-              bankAccounts={bankAccounts}
-              onAddBankAccount={handleAddBankAccount}
-              onUpdateBankAccount={handleUpdateBankAccount}
-              onRemoveBankAccount={handleRemoveBankAccount}
-              users={sharedUsers}
-              transactions={sharedTransactions}
-              isDark={isDark}
-              requireDepositApproval={requireDepositApproval}
-              onToggleRequireDepositApproval={(nextState) => {
-                setRequireDepositApproval(nextState);
-                fetch(buildApiUrl('/api/admin/update-pin'), {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ requireDepositApproval: nextState }),
-                }).catch(() => {});
-              }}
-              onAdjustUserBalance={(uid, delta) => {
-                setSharedUsers((prev) =>
-                  prev.map((u) =>
-                    u.id === uid ? { ...u, balance: Math.max(0, u.balance + delta) } : u
-                  )
-                );
-              }}
-              onToggleUserBlock={(uid) => {
-                setSharedUsers((prev) =>
-                  prev.map((u) => (u.id === uid ? { ...u, isBlocked: !u.isBlocked } : u))
-                );
-              }}
-              onApproveRejectTransaction={(txId, status) => {
-                const targetTx = sharedTransactions.find((t) => t.id === txId);
-                setSharedTransactions((prev) =>
-                  prev.map((tx) => (tx.id === txId ? { ...tx, status } : tx))
-                );
-                if (targetTx && targetTx.status === 'pending' && status === 'approved') {
-                  setSharedUsers((prev) =>
-                    prev.map((u) => {
-                      if (u.id === targetTx.userId || u.phone === targetTx.userPhone) {
-                        const delta =
-                          targetTx.type === 'deposit' ? targetTx.amount : -targetTx.amount;
-                        return { ...u, balance: Math.max(0, u.balance + delta) };
-                      }
-                      return u;
+            {(() => {
+              const curAdminMode: 'fast' | 'regular' =
+                adminControlGame === 'regular' ? 'regular' : 'fast';
+              const curRoom =
+                curAdminMode === 'regular'
+                  ? adminRegularRoom
+                  : adminFastRoomsByStake[adminStakeTier];
+              const curLocked =
+                curAdminMode === 'regular'
+                  ? adminRegularLocked
+                  : adminFastLockedByStake[adminStakeTier] || [];
+              const livePatternId = curRoom?.activePatternId ?? adminActivePatternId;
+              const liveStake =
+                curRoom?.stakeAmount ?? (curAdminMode === 'regular' ? 10 : adminStakeTier);
+              const livePrize =
+                curRoom?.prizeAmount ??
+                (curAdminMode === 'regular'
+                  ? 500
+                  : Number((Math.max(1, curLocked.length) * adminStakeTier * 0.8).toFixed(0)));
+              const liveSpeed = ((curRoom?.callSpeedSec ?? adminCallSpeed) as CallSpeed);
+
+              return (
+                <AdminPanelView
+                  isAdminAuthenticated={isAdminAuthenticated}
+                  onAdminLogout={() => {
+                    setIsAdminAuthenticated(false);
+                    setViewMode('game');
+                    try {
+                      localStorage.removeItem('ezi_admin_authenticated_v2');
+                      sessionStorage.removeItem('ezi_admin_session_v3');
+                    } catch {}
+                    window.location.hash = '';
+                  }}
+                  onOpenAll16RulesModal={() => setIsAdminRulesModalOpen(true)}
+                  isFastMode={adminControlGame === 'fast'}
+                  onSelectedAdminGameChange={setAdminControlGame}
+                  activeStakeTier={adminStakeTier}
+                  onSelectStakeRoom={setAdminStakeTier}
+                  allFastRoomsByStake={adminFastRoomsByStake}
+                  allFastLockedByStake={adminFastLockedByStake}
+                  activePatternId={livePatternId}
+                  stakeAmount={liveStake}
+                  prizeAmount={livePrize}
+                  blockedCartelaIds={curRoom?.blockedCartelaIds ?? []}
+                  totalCartelasCount={curAdminMode === 'regular' ? 70000 : 500}
+                  registeredCartelasCount={curLocked.length}
+                  isPlaying={curRoom ? curRoom.isPlaying : adminIsPlaying}
+                  isPaused={curRoom ? curRoom.isPaused : adminIsPaused}
+                  callSpeedSec={liveSpeed}
+                  jackpotPool={curRoom?.jackpotPool ?? 0}
+                  houseEarningsTotal={curRoom?.houseEarningsTotal ?? 0}
+                  bonusCartelasForOver20={curRoom?.bonusCartelasForOver20 ?? 5}
+                  gameHistory={curRoom?.gameHistory ?? []}
+                  onRefreshLiveState={refreshAdminLiveState}
+                  onChangeSpeed={(sec) => {
+                    setAdminCallSpeed(sec);
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
+                      action: 'set_speed',
+                      callSpeedSec: sec,
+                      applyAllRooms: curAdminMode === 'fast',
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  onTogglePause={() => {
+                    const nextPlaying = curRoom ? !curRoom.isPlaying : !adminIsPlaying;
+                    const nextPaused = curRoom ? !curRoom.isPaused : !adminIsPaused;
+                    setAdminIsPlaying(nextPlaying);
+                    setAdminIsPaused(nextPaused);
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
+                      action: 'toggle_pause',
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  onDrawNextManual={() => {
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
+                      action: 'draw_next',
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  onResetGame={() => {
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
+                      action: 'reset_round',
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  onStartRegistrationCountdown={(seconds) => {
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
+                      action: 'start_countdown',
+                      countdownSeconds: seconds,
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  onUpdateGameSettings={(stake, prize, patternId, regMinutes) => {
+                    setAdminActivePatternId(patternId);
+                    const totalSecs = regMinutes > 0 ? Math.round(regMinutes * 60) : undefined;
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: stake,
+                      prizeAmount: prize,
+                      activePatternId: patternId,
+                      countdownSeconds: totalSecs,
+                      preGameCountdown: totalSecs ?? null,
+                      action: 'update_settings',
+                      applyAllRooms: curAdminMode === 'fast',
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  onUpdateJackpotPool={(nextJp) => {
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
+                      action: 'set_jackpot',
+                      jackpotPool: nextJp,
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  onUpdateBonusCartelasForOver20={(bonusCount) => {
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
+                      action: 'set_bonus_over_20',
+                      bonusCount,
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  onBlockCartelaId={(id) => {
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
+                      action: 'block_cartela',
+                      cartelaId: id,
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  onUnblockCartelaId={(id) => {
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
+                      action: 'unblock_cartela',
+                      cartelaId: id,
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  onManualApproveWinner={(cartelaId) => {
+                    const winBall =
+                      curRoom?.activeBall ||
+                      (curRoom?.calledBalls?.length
+                        ? curRoom.calledBalls[curRoom.calledBalls.length - 1]
+                        : 1);
+                    const pat = BINGO_PATTERNS.find((p) => p.id === livePatternId);
+                    const winnerObj = {
+                      cartelaId,
+                      userName: `Cartela #${cartelaId} (Admin Verified)`,
+                      prizeAmount: livePrize,
+                      winningCells: [] as [number, number][],
+                      lastBall: winBall,
+                      calledBallsSnapshot: curRoom?.calledBalls || [],
+                      patternTitle: `${pat?.titleAm || 'ቢንጎ'} (በአድሚን የተረጋገጠ)`,
+                      timestamp: new Date().toLocaleString(),
+                    };
+                    dispatchServerRoomAction({
+                      mode: curAdminMode,
+                      stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
+                      action: 'claim_win',
+                      winner: winnerObj,
+                      winnerPhone: sharedUsersRef.current[0]?.phone || '0942742684',
+                      isAdminOverride: true,
+                    }).then(() => refreshAdminLiveState());
+                  }}
+                  heroBanners={heroBanners}
+                  onAddHeroBanner={handleAddHeroBanner}
+                  onUpdateHeroBanner={handleUpdateHeroBanner}
+                  onRemoveHeroBanner={handleRemoveHeroBanner}
+                  bankAccounts={bankAccounts}
+                  onAddBankAccount={handleAddBankAccount}
+                  onUpdateBankAccount={handleUpdateBankAccount}
+                  onRemoveBankAccount={handleRemoveBankAccount}
+                  users={sharedUsers}
+                  transactions={sharedTransactions}
+                  isDark={isDark}
+                  requireDepositApproval={requireDepositApproval}
+                  onToggleRequireDepositApproval={(nextState) => {
+                    setRequireDepositApproval(nextState);
+                    fetch(buildApiUrl('/api/admin/update-pin'), {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ requireDepositApproval: nextState }),
+                    }).catch(() => {});
+                  }}
+                  onAdjustUserBalance={(uid, delta, phone) => {
+                    const target = sharedUsersRef.current.find(
+                      (u) => u.id === uid || (phone && u.phone === phone)
+                    );
+                    if (!target) return;
+                    const nextBal = Math.max(0, Number((target.balance + delta).toFixed(2)));
+                    setSharedUsers((prev) =>
+                      prev.map((u) =>
+                        u.id === target.id || u.phone === target.phone
+                          ? { ...u, balance: nextBal }
+                          : u
+                      )
+                    );
+                    fetch(buildApiUrl('/api/admin/users/upsert'), {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        phone: target.phone,
+                        name: target.name,
+                        balance: nextBal,
+                        bonusBalance: target.bonusBalance,
+                        isBlocked: target.isBlocked,
+                      }),
                     })
-                  );
-                }
-                fetch(buildApiUrl('/api/transactions/approve'), {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    txId,
-                    status,
-                    referenceNumber: targetTx?.referenceNumber,
-                    userPhone: targetTx?.userPhone,
-                  }),
-                })
-                  .then((r) => r.json())
-                  .then((data) => {
-                    if (data?.ok && Array.isArray(data.transactions)) {
-                      mergeGlobalTransactions(data.transactions);
+                      .then(() => refreshAdminLiveState())
+                      .catch(() => {});
+                  }}
+                  onSetExactUserBalance={(phone, name, balance, bonusBalance = 15) => {
+                    fetch(buildApiUrl('/api/admin/users/upsert'), {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ phone, name, balance, bonusBalance }),
+                    })
+                      .then((r) => r.json())
+                      .then((data) => {
+                        if (data?.ok) refreshAdminLiveState();
+                      })
+                      .catch(() => {});
+                  }}
+                  onToggleUserBlock={(uid, phone) => {
+                    const target = sharedUsersRef.current.find(
+                      (u) => u.id === uid || (phone && u.phone === phone)
+                    );
+                    if (!target) return;
+                    const nextBlocked = !target.isBlocked;
+                    setSharedUsers((prev) =>
+                      prev.map((u) =>
+                        u.id === target.id || u.phone === target.phone
+                          ? { ...u, isBlocked: nextBlocked }
+                          : u
+                      )
+                    );
+                    fetch(buildApiUrl('/api/admin/users/upsert'), {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        phone: target.phone,
+                        name: target.name,
+                        balance: target.balance,
+                        bonusBalance: target.bonusBalance,
+                        isBlocked: nextBlocked,
+                      }),
+                    })
+                      .then(() => refreshAdminLiveState())
+                      .catch(() => {});
+                  }}
+                  onApproveRejectTransaction={(txId, status) => {
+                    const targetTx = sharedTransactions.find((t) => t.id === txId);
+                    setSharedTransactions((prev) =>
+                      prev.map((tx) => (tx.id === txId ? { ...tx, status } : tx))
+                    );
+                    if (targetTx && targetTx.status === 'pending' && status === 'approved') {
+                      setSharedUsers((prev) =>
+                        prev.map((u) => {
+                          if (u.id === targetTx.userId || u.phone === targetTx.userPhone) {
+                            const delta =
+                              targetTx.type === 'deposit' ? targetTx.amount : -targetTx.amount;
+                            return { ...u, balance: Math.max(0, u.balance + delta) };
+                          }
+                          return u;
+                        })
+                      );
                     }
-                  })
-                  .catch(() => {});
-              }}
-              onStartRegistrationCountdown={() => {}}
-              onBlockCartelaId={() => {}}
-              onUnblockCartelaId={() => {}}
-            />
+                    fetch(buildApiUrl('/api/transactions/approve'), {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        txId,
+                        status,
+                        referenceNumber: targetTx?.referenceNumber,
+                        userPhone: targetTx?.userPhone,
+                      }),
+                    })
+                      .then((r) => r.json())
+                      .then((data) => {
+                        if (data?.ok && Array.isArray(data.transactions)) {
+                          mergeGlobalTransactions(data.transactions);
+                        }
+                        refreshAdminLiveState();
+                      })
+                      .catch(() => {});
+                  }}
+                  onApproveAllPending={() => {
+                    const pendingList = sharedTransactions.filter((t) => t.status === 'pending');
+                    pendingList.forEach((tx) => {
+                      fetch(buildApiUrl('/api/transactions/approve'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          txId: tx.id,
+                          status: 'approved',
+                          referenceNumber: tx.referenceNumber,
+                          userPhone: tx.userPhone,
+                        }),
+                      }).catch(() => {});
+                    });
+                    window.setTimeout(() => refreshAdminLiveState(), 500);
+                  }}
+                />
+              );
+            })()}
           </div>
         ) : showGameHub ? (
           /* 3. SUN GAMES HOME HUB (Redesigned after IMG_3954: Cosmic Midnight-Teal, Gold Crest, Split Hero Card, 2-Column Game Cards & Bottom Bar) */
@@ -2211,10 +2480,10 @@ export default function App() {
                               ? 'bg-[#0D2B36] hover:bg-[#123947] text-amber-300 border border-cyan-500/30'
                               : 'bg-white hover:bg-slate-100 text-amber-700 border border-slate-300'
                           }`}
-                          title="ስም አስተካክል"
+                          title={tHub.changeName}
                         >
                           <Edit3 className="w-3 h-3" />
-                          <span>ስም ቀይር</span>
+                          <span>{tHub.changeName}</span>
                         </button>
                       </div>
 
@@ -2228,7 +2497,7 @@ export default function App() {
                               if (e.key === 'Enter') handleSaveHubUsername();
                             }}
                             maxLength={24}
-                            placeholder="አዲስ ስም ያስገቡ..."
+                            placeholder={tHub.newNamePlaceholder}
                             className={`flex-1 min-w-0 px-2 py-1 rounded-lg text-xs border outline-none ${
                               isDark
                                 ? 'bg-[#030D12] border-cyan-500/30 text-white focus:border-amber-400'
@@ -2240,7 +2509,7 @@ export default function App() {
                             disabled={isSavingHubName || hubNameDraft.trim().length < 2}
                             onClick={handleSaveHubUsername}
                             className="p-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-black cursor-pointer shrink-0"
-                            title="አስቀምጥ"
+                            title={tHub.saveShort}
                           >
                             <Check className="w-3.5 h-3.5" />
                           </button>
@@ -2374,24 +2643,28 @@ export default function App() {
                   subtitle: string;
                   cta: string;
                   imageUrl?: string;
-                  target: 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none';
+                  target: 'fast' | 'regular' | 'keno' | 'ramino' | 'none';
                 }[] =
                   activeAdminAds.length > 0
-                    ? activeAdminAds.map((ad) => ({
-                        id: ad.id,
-                        badge: ad.badgeText || tHub.bannerDefaultBadge,
-                        title: ad.title,
-                        subtitle: ad.subtitle,
-                        cta: ad.ctaText || tHub.bannerDefaultCta,
-                        imageUrl: ad.imageUrl || undefined,
-                        target: (ad.targetGame || 'fast') as
-                          | 'fast'
-                          | 'regular'
-                          | 'keno'
-                          | 'ramino'
-                          | 'ludo'
-                          | 'none',
-                      }))
+                    ? activeAdminAds.map((rawAd) => {
+                        const ad = localizeHeroAd(rawAd, language);
+                        return {
+                          id: ad.id,
+                          badge: ad.badgeText || tHub.bannerDefaultBadge,
+                          title: ad.title,
+                          subtitle: ad.subtitle,
+                          cta: ad.ctaText || tHub.bannerDefaultCta,
+                          imageUrl: ad.imageUrl || undefined,
+                          target: ((ad.targetGame as string) === 'ludo'
+                            ? 'fast'
+                            : ad.targetGame || 'fast') as
+                            | 'fast'
+                            | 'regular'
+                            | 'keno'
+                            | 'ramino'
+                            | 'none',
+                        };
+                      })
                     : tHub.defaultSlides.map((s, idx) => ({
                         id: `default_${idx}`,
                         badge: s.badge,
@@ -2592,15 +2865,12 @@ export default function App() {
                   key: GameKey;
                   title: string;
                   players: number;
-                  image?: string;
-                  isDamaSvg?: boolean;
+                  image: string;
                 }[] = [
                   { key: 'fast', title: tHub.fastTitle, players: liveGameCounts.fast, image: gameTileBingoImg },
                   { key: 'regular', title: tHub.regularTitle, players: liveGameCounts.regular, image: liyuBingoTileImg },
                   { key: 'keno', title: tHub.kenoTitle, players: liveGameCounts.keno, image: gameTileKenoImg },
                   { key: 'ramino', title: tHub.raminoTitle, players: liveGameCounts.ramino, image: gameTileConkerImg },
-                  { key: 'ludo', title: tHub.ludoTitle, players: liveGameCounts.ludo, image: gameTileLudoImg },
-                  { key: 'dama', title: tHub.damaTitle, players: liveGameCounts.dama, isDamaSvg: true },
                 ];
 
                 const visibleTiles = allTiles.filter((item) => gameVisibility[item.key]?.visible !== false);
@@ -2614,11 +2884,11 @@ export default function App() {
                 }
 
                 return (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
+                  <div className="grid grid-cols-2 gap-3 sm:gap-4">
                     {visibleTiles.map((item) => {
                       const isSoon = Boolean(gameVisibility[item.key]?.comingSoon);
                       const handleTileClick = () => {
-                        if (isSoon || item.key === 'dama') {
+                        if (isSoon) {
                           setHubNotice(tHub.soonNotice(item.title));
                         } else {
                           handleSwitchMode(item.key);
@@ -2637,39 +2907,12 @@ export default function App() {
                         >
                           {/* Top Bar Badges inside Card */}
                           <div className="relative w-full aspect-[4/3.1] overflow-hidden bg-[#05141B]">
-                            {item.isDamaSvg ? (
-                              <svg
-                                viewBox="0 0 120 100"
-                                className="w-full h-full transition-transform duration-300 group-hover:scale-105 bg-[#1B1410]"
-                                aria-label={item.title}
-                              >
-                                {Array.from({ length: 5 }).map((_, r) =>
-                                  Array.from({ length: 6 }).map((__, c) => (
-                                    <rect
-                                      key={`${r}-${c}`}
-                                      x={c * 20}
-                                      y={r * 20}
-                                      width={20}
-                                      height={20}
-                                      fill={(r + c) % 2 === 0 ? '#D4A373' : '#4A2C18'}
-                                    />
-                                  ))
-                                )}
-                                <circle cx="30" cy="10" r="7" fill="#1E1B18" stroke="#F59E0B" strokeWidth="1.2" />
-                                <circle cx="70" cy="10" r="7" fill="#1E1B18" stroke="#F59E0B" strokeWidth="1.2" />
-                                <circle cx="90" cy="30" r="7" fill="#1E1B18" stroke="#F59E0B" strokeWidth="1.2" />
-                                <circle cx="30" cy="90" r="7" fill="#FDE68A" stroke="#92400E" strokeWidth="1.5" />
-                                <circle cx="70" cy="90" r="7" fill="#FDE68A" stroke="#92400E" strokeWidth="1.5" />
-                                <circle cx="50" cy="70" r="7" fill="#FDE68A" stroke="#92400E" strokeWidth="1.5" />
-                              </svg>
-                            ) : (
-                              <img
-                                src={item.image}
-                                alt={item.title}
-                                referrerPolicy="no-referrer"
-                                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                              />
-                            )}
+                            <img
+                              src={item.image}
+                              alt={item.title}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                            />
                             <div className="absolute inset-0 bg-gradient-to-t from-[#041117] via-transparent to-black/35" />
 
                             {isSoon && (
@@ -2717,7 +2960,7 @@ export default function App() {
                   className="flex flex-col items-center justify-center gap-0.5 py-1 rounded-xl text-amber-400 cursor-pointer"
                 >
                   <Home className="w-4 h-4 sm:w-5 sm:h-5" />
-                  <span className="truncate">{language === 'en' ? 'Home' : 'ዋና ገጽ'}</span>
+                  <span className="truncate">{tHub.navHome}</span>
                 </button>
                 <button
                   type="button"
@@ -2741,7 +2984,7 @@ export default function App() {
                   className="flex flex-col items-center justify-center gap-0.5 py-1 rounded-xl hover:text-amber-300 cursor-pointer transition-colors"
                 >
                   <History className="w-4 h-4 sm:w-5 sm:h-5" />
-                  <span className="truncate">{language === 'en' ? 'History' : 'ታሪክ'}</span>
+                  <span className="truncate">{tHub.navHistory}</span>
                 </button>
                 <button
                   type="button"
@@ -2752,13 +2995,13 @@ export default function App() {
                   className="flex flex-col items-center justify-center gap-0.5 py-1 rounded-xl hover:text-amber-300 cursor-pointer transition-colors"
                 >
                   <User className="w-4 h-4 sm:w-5 sm:h-5" />
-                  <span className="truncate">{language === 'en' ? 'Profile' : 'መገለጫ'}</span>
+                  <span className="truncate">{tHub.navProfile}</span>
                 </button>
               </div>
             </nav>
           </div>
         ) : (
-          /* 4. LOGGED-IN GAMEPLAY VIEW (Fast Bingo, Regular Bingo, Fast Keno, Ludo, or Ramino) */
+          /* 4. LOGGED-IN GAMEPLAY VIEW (Fast Bingo, Regular Bingo, Fast Keno, or Ramino) */
           gameMode === 'fast' ? (
             <FastBingoStandaloneApp
               onSwitchToRegularApp={() => handleSwitchMode('regular')}
@@ -2846,24 +3089,6 @@ export default function App() {
                     }
                   }}
                   onBackToLudo={handleReturnToHub}
-                />
-              </div>
-            </div>
-          ) : gameMode === 'ludo' ? (
-            <div data-scroll-reset="true" className="flex-1 w-full flex flex-col items-center justify-start overflow-y-auto overscroll-y-contain p-2 sm:p-4">
-              <div className="w-full max-w-4xl">
-                <LudoMasterGame
-                  balanceBirr={sharedUsers[0]?.balance ?? 500}
-                  onAdjustBalance={(delta) => {
-                    setSharedUsers((prev) =>
-                      prev.map((u, idx) =>
-                        idx === 0 ? { ...u, balance: Math.max(0, u.balance + delta) } : u
-                      )
-                    );
-                  }}
-                  onBackToLobby={handleReturnToHub}
-                  sharedUsers={sharedUsers}
-                  onUpdateSharedUsers={setSharedUsers}
                 />
               </div>
             </div>
@@ -3168,16 +3393,26 @@ export default function App() {
               action: 'update_settings',
               activePatternId: patternId,
             });
+            dispatchServerRoomAction({
+              mode: 'fast',
+              action: 'update_settings',
+              activePatternId: patternId,
+              applyAllRooms: true,
+            });
+            refreshAdminLiveState();
           }}
           onSetRegistrationMinutes={(minutes) => {
             const totalSecs = minutes > 0 ? Math.round(minutes * 60) : null;
+            const curAdminMode: 'fast' | 'regular' =
+              adminControlGame === 'regular' ? 'regular' : 'fast';
             dispatchServerRoomAction({
-              mode: 'regular',
+              mode: curAdminMode,
+              stakeAmount: curAdminMode === 'fast' ? adminStakeTier : undefined,
               action: 'update_settings',
               countdownSeconds: totalSecs !== null ? totalSecs : undefined,
               preGameCountdown: totalSecs,
               isPlaying: false,
-            });
+            }).then(() => refreshAdminLiveState());
           }}
           language={language}
           isDark={isDark}
@@ -3206,7 +3441,7 @@ export default function App() {
               </div>
               {activeGameNotification.game &&
                 activeGameNotification.game !== 'admin' &&
-                ['fast', 'regular', 'keno', 'ramino', 'ludo'].includes(activeGameNotification.game) && (
+                ['fast', 'regular', 'keno', 'ramino'].includes(activeGameNotification.game) && (
                   <button
                     type="button"
                     onClick={() => {
@@ -3214,15 +3449,14 @@ export default function App() {
                         | 'fast'
                         | 'regular'
                         | 'keno'
-                        | 'ramino'
-                        | 'ludo';
+                        | 'ramino';
                       setActiveGameNotification(null);
                       setViewMode('game');
                       handleSwitchMode(target);
                     }}
                     className="mt-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-black cursor-pointer"
                   >
-                    🎮 አሁን ግባ
+                    {tHub.playNowToast}
                   </button>
                 )}
             </div>

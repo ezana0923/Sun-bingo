@@ -118,9 +118,20 @@ export interface HeroBannerAd {
   badgeText: string;
   accentColor: 'blue' | 'emerald' | 'amber' | 'rose';
   imageUrl?: string;
-  targetGame?: 'fast' | 'regular' | 'keno' | 'ramino' | 'ludo' | 'none';
+  targetGame?: 'fast' | 'regular' | 'keno' | 'ramino' | 'none';
   ctaText?: string;
   isActive: boolean;
+  translations?: Partial<
+    Record<
+      Language,
+      {
+        title?: string;
+        subtitle?: string;
+        badgeText?: string;
+        ctaText?: string;
+      }
+    >
+  >;
 }
 
 export interface WinnerAnnouncement {

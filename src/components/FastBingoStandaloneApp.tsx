@@ -43,7 +43,7 @@ import {
   Home,
 } from 'lucide-react';
 import { EziBingoLogo } from './EziBingoLogo';
-import { FAST_BINGO_RULE_PATTERN } from '../data/bingoPatterns';
+import { BINGO_PATTERNS, FAST_BINGO_RULE_PATTERN, getRuleTitleByLang } from '../data/bingoPatterns';
 import {
   generateCartelaById,
   getCartelaSortMetrics,
@@ -62,6 +62,7 @@ import {
 import { soundFX } from '../utils/soundAndVoice';
 import { FAST_BINGO_TERMS_BY_LANG, PAYMENT_ACCOUNTS, TRANSLATIONS } from '../utils/translations';
 import { connectTelegramBotEverywhere } from '../utils/telegramBotBridge';
+import { localizeHeroAd } from '../utils/adTranslations';
 import { applyTelegramSwipeLock, scrollAppToTop } from '../utils/telegramViewport';
 import {
   AppAccentColor,
@@ -351,6 +352,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
     }
     return 'by_fast_win';
   });
+  const [activePatternId, setActivePatternId] = useState<number>(1);
   const [activePatternCode, setActivePatternCode] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('sun_active_pattern_code');
@@ -924,6 +926,9 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
       setIsPaused(room.isPaused);
       setPreGameCountdown(room.preGameCountdown);
       setWinnerDisplayCountdown(room.winnerDisplayCountdown);
+      if (typeof room.activePatternId === 'number') {
+        setActivePatternId(room.activePatternId);
+      }
       if (typeof room.activePatternCode === 'string' && room.activePatternCode) {
         setActivePatternCode(room.activePatternCode);
         try {
@@ -1224,9 +1229,12 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
       if (typeof msg.requireDepositApproval === 'boolean') {
         setRequireDepositApproval(msg.requireDepositApproval);
       }
+      if (!externalHeroBanners && Array.isArray(msg.homeHeroAds) && msg.homeHeroAds.length > 0) {
+        setHeroBanners(msg.homeHeroAds);
+      }
     });
     return unsubscribe;
-  }, [activeStakeTier, applyServerFastRoomSnapshot, mergeServerTransactions, mergeServerPlayers]);
+  }, [activeStakeTier, applyServerFastRoomSnapshot, mergeServerTransactions, mergeServerPlayers, externalHeroBanners]);
 
   const refreshLiveServerRoomState = useCallback(
     (overrideStake?: number) => {
@@ -1265,6 +1273,9 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
             }
             if (typeof data.requireDepositApproval === 'boolean') {
               setRequireDepositApproval(data.requireDepositApproval);
+            }
+            if (!externalHeroBanners && Array.isArray(data.homeHeroAds) && data.homeHeroAds.length > 0) {
+              setHeroBanners(data.homeHeroAds);
             }
           }
         })
@@ -2046,11 +2057,16 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
       return;
     }
 
+    const effectivePattern =
+      activePatternId > 1 || (activePatternCode && !['L', 'FAST'].includes(activePatternCode))
+        ? BINGO_PATTERNS.find((p) => p.id === activePatternId) || FAST_BINGO_RULE_PATTERN
+        : FAST_BINGO_RULE_PATTERN;
+
     const result = verifyCartelaBingo(
       cartela,
       calledBalls,
       activeBall,
-      FAST_BINGO_RULE_PATTERN
+      effectivePattern
     );
 
     if (result.isValid && activeBall) {
@@ -2094,8 +2110,8 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
         lastBall: activeBall,
         calledBallsSnapshot: [...calledBalls],
         patternTitle: didWinJackpot
-          ? `${FAST_BINGO_RULE_PATTERN.titleAm} + 🎰 ጃክፓት (${jackpotAward.toFixed(0)} ETB)`
-          : FAST_BINGO_RULE_PATTERN.titleAm,
+          ? `${effectivePattern.titleAm} + 🎰 ጃክፓት (${jackpotAward.toFixed(0)} ETB)`
+          : effectivePattern.titleAm,
         timestamp: nowStr,
       };
 
@@ -2575,8 +2591,9 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
               <div className="max-w-xl mx-auto space-y-4 py-2">
                 {/* Ezi Bingo Hero Banner Card (Configurable via Admin Hero Banners & Ads with Text & Image) */}
                 {(() => {
-                  const activeBanner =
+                  const rawBanner =
                     heroBanners.find((b) => b.isActive) || heroBanners[0];
+                  const activeBanner = rawBanner ? localizeHeroAd(rawBanner, language) : undefined;
                   return (
                     <div className="relative overflow-hidden rounded-3xl border border-blue-500/30 bg-gradient-to-br from-[#14204b] via-[#0d1636] to-[#070b19] p-4 sm:p-5 text-white shadow-2xl flex items-center justify-between gap-3">
                       {activeBanner?.imageUrl && (
@@ -3041,7 +3058,17 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                       currentUserName={currentUser?.name}
                       adminRoomMessage={allFastRoomsByStake[activeStakeTier]?.adminRoomMessage || ''}
                       adminRoomMessageAt={allFastRoomsByStake[activeStakeTier]?.adminRoomMessageAt || ''}
-                      gamePatternName={isPostTwoMinutes ? 'ገና አልተሰየመም' : 'ፈጣን ቢንጎ'}
+                      gamePatternName={
+                        isPostTwoMinutes
+                          ? 'ገና አልተሰየመም'
+                          : activePatternId > 1
+                          ? getRuleTitleByLang(
+                              BINGO_PATTERNS.find((p) => p.id === activePatternId) ||
+                                FAST_BINGO_RULE_PATTERN,
+                              language
+                            )
+                          : 'ፈጣን ቢንጎ'
+                      }
                       isGameFinished={Boolean(winnersList.length > 0 || (calledBalls.length >= 75 && !isPlaying) || gameFinishedAt !== null)}
                       winningCartelaIds={winnersList.map((w) => w.cartelaId)}
                       blockedCartelaIds={blockedCartelaIds}
@@ -3391,7 +3418,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                               calledBalls,
                               autoDaub,
                               activePatternCode,
-                              1
+                              activePatternId
                             )}
                             isSelected={!gameStarted && selectedCartelaIds.includes(cartela.id)}
                             isDimmedUnregistered={isDimmedUnreg}
@@ -3831,6 +3858,10 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
               setBlockedCartelaIds((prev) => prev.filter((b) => b !== cartelaId));
               setIsPlaying(false);
               soundFX.playVictoryFanfare();
+              const effectivePat =
+                activePatternId > 1
+                  ? BINGO_PATTERNS.find((p) => p.id === activePatternId) || FAST_BINGO_RULE_PATTERN
+                  : FAST_BINGO_RULE_PATTERN;
               const winnerObj: WinnerAnnouncement = {
                 cartelaId: cardId,
                 userName: `Cartela #${cardId} (Admin Verified)`,
@@ -3838,7 +3869,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                 winningCells: [],
                 lastBall: winBall,
                 calledBallsSnapshot: [...calledBalls],
-                patternTitle: `${FAST_BINGO_RULE_PATTERN.titleAm} (በአድሚን የተረጋገጠ)`,
+                patternTitle: `${effectivePat.titleAm} (በአድሚን የተረጋገጠ)`,
                 timestamp: new Date().toLocaleString(),
               };
               setWinnersList((prev) => {
@@ -3853,6 +3884,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                 action: 'claim_win',
                 winner: winnerObj,
                 winnerPhone: currentUser?.phone || '0942742684',
+                isAdminOverride: true,
               });
             }}
             onAdminLoginSuccess={() => {
@@ -3910,7 +3942,8 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
               setJackpotPool(nextJp);
               dispatchServerRoomAction({
                 mode: 'fast',
-                action: 'update_settings',
+                stakeAmount: activeStakeTier,
+                action: 'set_jackpot',
                 jackpotPool: nextJp,
               });
             }}
@@ -4073,6 +4106,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
             onBlockCartelaId={(id) => {
               dispatchServerRoomAction({
                 mode: 'fast',
+                stakeAmount: activeStakeTier,
                 action: 'block_cartela',
                 cartelaId: id,
               });
@@ -4084,6 +4118,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
             onUnblockCartelaId={(id) => {
               dispatchServerRoomAction({
                 mode: 'fast',
+                stakeAmount: activeStakeTier,
                 action: 'unblock_cartela',
                 cartelaId: id,
               });
@@ -4096,8 +4131,8 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
               setUsers((prev) =>
                 prev.map((item) => {
                   if (item.id === userId || (phone && item.phone === phone)) {
-                    const nextBal = Math.max(0, item.balance + delta);
-                    fetch(buildApiUrl('/api/wallet/sync'), {
+                    const nextBal = Math.max(0, Number((item.balance + delta).toFixed(2)));
+                    fetch(buildApiUrl('/api/admin/users/upsert'), {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
@@ -4105,6 +4140,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                         name: item.name,
                         balance: nextBal,
                         bonusBalance: item.bonusBalance,
+                        isBlocked: item.isBlocked,
                       }),
                     }).catch(() => {});
                     return { ...item, balance: nextBal };
@@ -4137,7 +4173,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                 prev.map((item) => {
                   if (item.id === userId || (phone && item.phone === phone)) {
                     const nextBlocked = !item.isBlocked;
-                    fetch(buildApiUrl('/api/wallet/sync'), {
+                    fetch(buildApiUrl('/api/admin/users/upsert'), {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({

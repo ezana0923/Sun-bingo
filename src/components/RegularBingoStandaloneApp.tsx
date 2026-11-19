@@ -619,6 +619,12 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
       if (typeof room.prizeAmount === 'number' && room.prizeAmount > 0) {
         setCustomPrizeAmount(room.prizeAmount);
       }
+      if (typeof room.callSpeedSec === 'number') {
+        setCallSpeedSec(room.callSpeedSec as CallSpeed);
+      }
+      if (typeof room.bonusCartelasForOver20 === 'number') {
+        setBonusCartelasForOver20(room.bonusCartelasForOver20);
+      }
       if (Array.isArray(room.winnersList)) {
         setWinnersList(room.winnersList);
       }
@@ -723,9 +729,15 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
       if (msg.regularRoom) {
         applyServerRegularRoom(msg.regularRoom, msg.regularLockedCartelas);
       }
+      if (!externalHeroBanners && Array.isArray(msg.homeHeroAds) && msg.homeHeroAds.length > 0) {
+        setHeroBanners(msg.homeHeroAds);
+      }
+      if (typeof msg.requireDepositApproval === 'boolean') {
+        setRequireDepositApproval(msg.requireDepositApproval);
+      }
     });
     return unsub;
-  }, [applyServerRegularRoom]);
+  }, [applyServerRegularRoom, externalHeroBanners]);
 
   const refreshRegularRoomState = useCallback(() => {
     fetch(buildApiUrl('/api/live-room/state?mode=regular'))
@@ -735,9 +747,12 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
           setIsServerRealtimeConnected(true);
           applyServerRegularRoom(data.regularRoom, data.regularLockedCartelas);
         }
+        if (data?.ok && !externalHeroBanners && Array.isArray(data.homeHeroAds) && data.homeHeroAds.length > 0) {
+          setHeroBanners(data.homeHeroAds);
+        }
       })
       .catch(() => setIsServerRealtimeConnected(false));
-  }, [applyServerRegularRoom]);
+  }, [applyServerRegularRoom, externalHeroBanners]);
 
   useEffect(() => {
     refreshRegularRoomState();
@@ -1111,6 +1126,7 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
       action: 'claim_win',
       winner: winnerObj,
       winnerPhone: currentUser?.phone || '0942742684',
+      isAdminOverride: true,
     });
   }, [cartelas, activeBall, calledBalls, prizeAmount, activePattern.titleAm, gameFinishedAt, currentUser?.phone]);
 
@@ -2140,19 +2156,72 @@ export const RegularBingoStandaloneApp: React.FC<RegularBingoStandaloneAppProps>
             bonusCartelasForOver20={bonusCartelasForOver20}
             onUpdateBonusCartelasForOver20={setBonusCartelasForOver20}
             onRefreshLiveState={refreshRegularRoomState}
-            onStartRegistrationCountdown={(secs) => setPreGameCountdown(secs)}
-            onBlockCartelaId={(id) => setBlockedCartelaIds((prev) => [...prev, id])}
-            onUnblockCartelaId={(id) =>
-              setBlockedCartelaIds((prev) => prev.filter((x) => x !== id))
-            }
-            onAdjustUserBalance={(uid, delta) => {
+            onStartRegistrationCountdown={(secs) => {
+              setPreGameCountdown(secs);
+              dispatchServerRoomAction({
+                mode: 'regular',
+                action: 'start_countdown',
+                countdownSeconds: secs,
+              });
+            }}
+            onBlockCartelaId={(id) => {
+              setBlockedCartelaIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+              dispatchServerRoomAction({
+                mode: 'regular',
+                action: 'block_cartela',
+                cartelaId: id,
+              });
+            }}
+            onUnblockCartelaId={(id) => {
+              setBlockedCartelaIds((prev) => prev.filter((x) => x !== id));
+              dispatchServerRoomAction({
+                mode: 'regular',
+                action: 'unblock_cartela',
+                cartelaId: id,
+              });
+            }}
+            onAdjustUserBalance={(uid, delta, phone) => {
               setUsers((prev) =>
-                prev.map((u) => (u.id === uid ? { ...u, balance: Math.max(0, u.balance + delta) } : u))
+                prev.map((u) => {
+                  if (u.id === uid || (phone && u.phone === phone)) {
+                    const nextBal = Math.max(0, Number((u.balance + delta).toFixed(2)));
+                    fetch(buildApiUrl('/api/admin/users/upsert'), {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        phone: u.phone,
+                        name: u.name,
+                        balance: nextBal,
+                        bonusBalance: u.bonusBalance,
+                        isBlocked: u.isBlocked,
+                      }),
+                    }).catch(() => {});
+                    return { ...u, balance: nextBal };
+                  }
+                  return u;
+                })
               );
             }}
-            onToggleUserBlock={(uid) => {
+            onToggleUserBlock={(uid, phone) => {
               setUsers((prev) =>
-                prev.map((u) => (u.id === uid ? { ...u, isBlocked: !u.isBlocked } : u))
+                prev.map((u) => {
+                  if (u.id === uid || (phone && u.phone === phone)) {
+                    const nextBlocked = !u.isBlocked;
+                    fetch(buildApiUrl('/api/admin/users/upsert'), {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        phone: u.phone,
+                        name: u.name,
+                        balance: u.balance,
+                        bonusBalance: u.bonusBalance,
+                        isBlocked: nextBlocked,
+                      }),
+                    }).catch(() => {});
+                    return { ...u, isBlocked: nextBlocked };
+                  }
+                  return u;
+                })
               );
             }}
             onApproveRejectTransaction={(txId, status) => {
