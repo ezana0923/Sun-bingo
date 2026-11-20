@@ -8048,6 +8048,7 @@ interface RaminoCard {
   points: number;
   isJoker: boolean;
   isPrintedJoker?: boolean;
+  laidOffById?: string;
 }
 interface RaminoMeldGroup {
   id: string;
@@ -8064,6 +8065,7 @@ interface RaminoClosedSetBadge {
   rank: string;
   ownerId: string;
   ownerColor: string;
+  laidOffCards?: RaminoCard[];
 }
 interface RaminoPrivatePlayerInfo {
   id: string;
@@ -8181,7 +8183,7 @@ interface RaminoTableSession {
     winAmount: number;
     bottomCardStr?: string;
     winnerCards?: RaminoCard[];
-    winnerGroups?: { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[];
+    winnerGroups?: { label: 'tris' | 'catris' | 'pair' | 'meld' | 'layoff'; cards: RaminoCard[] }[];
     winnerClosingCard?: RaminoCard | null;
   } | null;
   postDayRequest: {
@@ -8708,11 +8710,13 @@ function srvPartitionCollapsedFourSuitSets(melds: RaminoMeldGroup[], currentSeq:
   const remainingMelds: RaminoMeldGroup[] = [];
   for (const m of melds) {
     if (m.type === 'set' && srvIsAllFourSuitsClosedSet(m.cards) && m.meldTurnSeq < currentSeq) {
+      const laidOffCards = m.cards.filter((c) => Boolean(c.laidOffById));
       badgesToAdd.push({
         id: `closed_${m.id}`,
         rank: m.rank || m.cards[0].rank,
         ownerId: m.ownerId,
         ownerColor: m.ownerColor,
+        ...(laidOffCards.length > 0 ? { laidOffCards } : {}),
       });
     } else {
       remainingMelds.push(m);
@@ -8781,7 +8785,7 @@ function srvExtractWinnerShowcaseGroups(
   closingCard?: RaminoCard | null
 ): {
   winnerCards: RaminoCard[];
-  winnerGroups: { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[];
+  winnerGroups: { label: 'tris' | 'catris' | 'pair' | 'meld' | 'layoff'; cards: RaminoCard[] }[];
   winnerClosingCard: RaminoCard | null;
 } {
   if (
@@ -8844,29 +8848,46 @@ function srvExtractWinnerShowcaseGroups(
     };
   }
 
-  // Normal / Joker Finish / Streak finish: gather winner's melds & collapsed 4-suit sets on table
-  const groups: { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[] = [];
+  // Normal / Joker Finish / Streak finish: gather winner's melds, collapsed 4-suit sets & laid-off cards on table
+  const groups: { label: 'tris' | 'catris' | 'pair' | 'meld' | 'layoff'; cards: RaminoCard[] }[] = [];
+  const laidOffByWinner: RaminoCard[] = [];
   for (const b of session.closedSetBadges) {
-    if (b.ownerId !== winner.id) continue;
-    groups.push({
-      label: 'tris',
-      cards: RAMINO_SUITS.map((s, idx) => ({
-        id: `closed_vis_${b.id}_${idx}`,
-        rank: b.rank,
-        suit: s.symbol,
-        suitName: s.name,
-        color: s.color,
-        value: 0,
-        points: 0,
-        isJoker: false,
-      })),
-    });
+    if (b.ownerId === winner.id) {
+      groups.push({
+        label: 'tris',
+        cards: RAMINO_SUITS.map((s, idx) => ({
+          id: `closed_vis_${b.id}_${idx}`,
+          rank: b.rank,
+          suit: s.symbol,
+          suitName: s.name,
+          color: s.color,
+          value: 0,
+          points: 0,
+          isJoker: false,
+        })),
+      });
+    } else if (Array.isArray(b.laidOffCards)) {
+      for (const lc of b.laidOffCards) {
+        if (lc.laidOffById === winner.id) laidOffByWinner.push(lc);
+      }
+    }
   }
   for (const m of session.tableMelds) {
-    if (m.ownerId !== winner.id) continue;
+    if (m.ownerId === winner.id) {
+      groups.push({
+        label: m.type === 'run' ? 'catris' : 'tris',
+        cards: [...m.cards],
+      });
+    } else {
+      for (const c of m.cards) {
+        if (c.laidOffById === winner.id) laidOffByWinner.push(c);
+      }
+    }
+  }
+  if (laidOffByWinner.length > 0) {
     groups.push({
-      label: m.type === 'run' ? 'catris' : 'tris',
-      cards: [...m.cards],
+      label: 'layoff',
+      cards: laidOffByWinner,
     });
   }
   const collectedCards = groups.flatMap((g) => g.cards);
@@ -10082,19 +10103,20 @@ function handleServerRaminoAction(
     const selCard = me.hand.find((c) => c.id === cardId);
     if (!targetMeld || !selCard) return { ok: false, error: 'ቡድን ወይም ካርታ አልተገኘም።' };
 
+    const taggedCard: RaminoCard = { ...selCard, laidOffById: me.id };
     let updatedCards: RaminoCard[] | null = null;
-    if (selCard.isJoker) {
+    if (taggedCard.isJoker) {
       if (targetMeld.type === 'set') {
         if (targetMeld.cards.length >= 4) return { ok: false, error: 'ይህ ትሪስ 4 ካርድ ሞልቷል።' };
-        updatedCards = [...targetMeld.cards, selCard];
+        updatedCards = [...targetMeld.cards, taggedCard];
       } else {
-        updatedCards = srvInsertCardIntoRunMeld(targetMeld.cards, selCard, cardIdx);
+        updatedCards = srvInsertCardIntoRunMeld(targetMeld.cards, taggedCard, cardIdx);
       }
     } else if (targetMeld.type === 'set') {
-      const candidate = [...targetMeld.cards, selCard];
+      const candidate = [...targetMeld.cards, taggedCard];
       if (srvIsValidSet(candidate)) updatedCards = candidate;
     } else {
-      updatedCards = srvInsertCardIntoRunMeld(targetMeld.cards, selCard, cardIdx);
+      updatedCards = srvInsertCardIntoRunMeld(targetMeld.cards, taggedCard, cardIdx);
     }
 
     if (!updatedCards) return { ok: false, error: 'ይህ ካርድ ከቡድኑ ጋር አይገጥምም!' };
@@ -10139,8 +10161,10 @@ function handleServerRaminoAction(
     if (matchIdx === -1) return { ok: false, error: 'ትክክለኛው መቀየሪያ ካርድ በእጅዎ ላይ የለም!' };
 
     const natural = me.hand[matchIdx];
-    me.hand.splice(matchIdx, 1, targetCard);
-    targetMeld.cards[cardIdx] = natural;
+    const { laidOffById: _stripLayoff, ...cleanJoker } = targetCard;
+    void _stripLayoff;
+    me.hand.splice(matchIdx, 1, cleanJoker);
+    targetMeld.cards[cardIdx] = { ...natural, laidOffById: me.id };
     session.drawnFromDiscardCardId = null;
     session.lastEvent = { id: ++raminoEventSeq, type: 'swap_joker', actorId: me.id, actorName: me.name };
     broadcastRaminoTableState(session);

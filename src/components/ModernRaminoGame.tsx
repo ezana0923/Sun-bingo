@@ -28,6 +28,8 @@ import {
   Smartphone,
   Palette,
   BookOpen,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { Language, UserAccount } from '../types/bingo';
 import { buildApiUrl, getDeviceClientId } from '../utils/realtimeRoomClient';
@@ -61,6 +63,7 @@ export interface PlayingCard {
   points: number;
   isJoker: boolean;
   isPrintedJoker?: boolean;
+  laidOffById?: string;
 }
 
 export interface MeldGroup {
@@ -79,6 +82,7 @@ export interface ClosedSetBadge {
   rank: string;
   ownerId: string;
   ownerColor: string;
+  laidOffCards?: PlayingCard[];
 }
 
 export interface RaminoOpponent {
@@ -816,7 +820,7 @@ function checkDopey(
 }
 
 type WinnerShowcaseGroup = {
-  label: 'tris' | 'catris' | 'pair' | 'meld';
+  label: 'tris' | 'catris' | 'pair' | 'meld' | 'layoff';
   cards: PlayingCard[];
 };
 
@@ -948,27 +952,44 @@ function extractLocalWinnerShowcaseGroups({
   }
 
   const groups: WinnerShowcaseGroup[] = [];
+  const laidOffByWinner: PlayingCard[] = [];
   for (const b of closedSetBadges) {
-    if (b.ownerId !== winnerId) continue;
-    groups.push({
-      label: 'tris',
-      cards: SUITS.map((s, idx) => ({
-        id: `closed_vis_${b.id}_${idx}`,
-        rank: b.rank,
-        suit: s.symbol,
-        suitName: s.name,
-        color: s.color,
-        value: 0,
-        points: 0,
-        isJoker: false,
-      })),
-    });
+    if (b.ownerId === winnerId) {
+      groups.push({
+        label: 'tris',
+        cards: SUITS.map((s, idx) => ({
+          id: `closed_vis_${b.id}_${idx}`,
+          rank: b.rank,
+          suit: s.symbol,
+          suitName: s.name,
+          color: s.color,
+          value: 0,
+          points: 0,
+          isJoker: false,
+        })),
+      });
+    } else if (Array.isArray(b.laidOffCards)) {
+      for (const lc of b.laidOffCards) {
+        if (lc.laidOffById === winnerId) laidOffByWinner.push(lc);
+      }
+    }
   }
   for (const m of tableMelds) {
-    if (m.ownerId !== winnerId) continue;
+    if (m.ownerId === winnerId) {
+      groups.push({
+        label: m.type === 'run' ? 'catris' : 'tris',
+        cards: [...m.cards],
+      });
+    } else {
+      for (const c of m.cards) {
+        if (c.laidOffById === winnerId) laidOffByWinner.push(c);
+      }
+    }
+  }
+  if (laidOffByWinner.length > 0) {
     groups.push({
-      label: m.type === 'run' ? 'catris' : 'tris',
-      cards: [...m.cards],
+      label: 'layoff',
+      cards: laidOffByWinner,
     });
   }
   const collected = groups.flatMap((g) => g.cards);
@@ -1493,7 +1514,9 @@ const RAMINO_T: Record<Language, any> = {
     winnerGroupPair: 'ጥንድ',
     winnerGroupTris: 'ትሪስ',
     winnerGroupCatris: 'ካትሪስ',
+    winnerGroupLayoff: 'ገቢ',
     winnerGroupClosing: 'መዝጊያ',
+    winnerTableGlowBadge: '✨ ጠረጴዛው ላይ ያበራል',
     viewTableCardsBtn: '👁️ ጠረጴዛው ላይ እይ',
     openWinSummaryBtn: '🏆 ውጤት ክፈት',
   },
@@ -1779,7 +1802,9 @@ const RAMINO_T: Record<Language, any> = {
     winnerGroupPair: 'ጽምዲ',
     winnerGroupTris: 'ትሪስ',
     winnerGroupCatris: 'ካትሪስ',
+    winnerGroupLayoff: 'ዝኣተወ',
     winnerGroupClosing: 'መዕጸዊ',
+    winnerTableGlowBadge: '✨ ኣብ ጠረጴዛ ይበርህ',
     viewTableCardsBtn: '👁️ ኣብ ጠረጴዛ ርአ',
     openWinSummaryBtn: '🏆 ውጽኢት ክፈት',
   },
@@ -2065,7 +2090,9 @@ const RAMINO_T: Record<Language, any> = {
     winnerGroupPair: 'Cimdii',
     winnerGroupTris: 'Tiriisii',
     winnerGroupCatris: 'Kaatriisii',
+    winnerGroupLayoff: 'Galfame',
     winnerGroupClosing: 'Cufaa',
+    winnerTableGlowBadge: '✨ Gabateerratti ni ifa',
     viewTableCardsBtn: '👁️ Gabatee Ilaali',
     openWinSummaryBtn: '🏆 Bu\'aa Bani',
   },
@@ -2351,7 +2378,9 @@ const RAMINO_T: Record<Language, any> = {
     winnerGroupPair: 'Pair',
     winnerGroupTris: 'Set',
     winnerGroupCatris: 'Run',
+    winnerGroupLayoff: 'Laid Off',
     winnerGroupClosing: 'Close',
+    winnerTableGlowBadge: '✨ Highlighted on table',
     viewTableCardsBtn: '👁️ View on Table',
     openWinSummaryBtn: '🏆 Show Summary',
   },
@@ -4669,6 +4698,58 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const justDraggedRef = useRef<boolean>(false);
   const dragSlotsRef = useRef<{ index: number; cx: number; cy: number }[]>([]);
   const lastDragEvalPosRef = useRef<{ x: number; y: number } | null>(null);
+  const modalCardsCarouselRef = useRef<HTMLDivElement | null>(null);
+  const tableCardsCarouselRef = useRef<HTMLDivElement | null>(null);
+  const carouselSwipeRef = useRef<{
+    el: HTMLDivElement;
+    startX: number;
+    startScrollLeft: number;
+  } | null>(null);
+
+  const handleCarouselPointerDown = (
+    e: React.PointerEvent<HTMLDivElement>,
+    refObj: React.MutableRefObject<HTMLDivElement | null>
+  ) => {
+    e.stopPropagation();
+    const el = refObj.current;
+    if (!el) return;
+    const mapped = mapClientToContainer(e.clientX, e.clientY);
+    carouselSwipeRef.current = {
+      el,
+      startX: mapped.x,
+      startScrollLeft: el.scrollLeft,
+    };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  const handleCarouselPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = carouselSwipeRef.current;
+    if (!drag) return;
+    e.stopPropagation();
+    const mapped = mapClientToContainer(e.clientX, e.clientY);
+    drag.el.scrollLeft = drag.startScrollLeft - (mapped.x - drag.startX);
+  };
+
+  const handleCarouselPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (carouselSwipeRef.current) {
+      e.stopPropagation();
+      carouselSwipeRef.current = null;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+    }
+  };
+
+  const slideCarouselBy = (
+    refObj: React.MutableRefObject<HTMLDivElement | null>,
+    delta: number
+  ) => {
+    const el = refObj.current;
+    if (!el) return;
+    el.scrollBy({ left: delta, behavior: 'smooth' });
+  };
 
   // Prepare Dealer Cut Ceremony for N players
   const startDealerCutCeremony = (seatCount: 2 | 3 | 4 | 5, stake: number) => {
@@ -5077,11 +5158,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     for (const m of melds) {
       if (m.type === 'set' && isAllFourSuitsClosedSet(m.cards) && m.meldTurnSeq < currentSeq) {
         const rank = m.rank || m.cards[0].rank;
+        const laidOffCards = m.cards.filter((c) => Boolean(c.laidOffById));
         badgesToAdd.push({
           id: `closed_${m.id}`,
           rank,
           ownerId: m.ownerId,
           ownerColor: m.ownerColor,
+          ...(laidOffCards.length > 0 ? { laidOffCards } : {}),
         });
       } else {
         remainingMelds.push(m);
@@ -5699,6 +5782,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
       // 1A: Selected card is a JOKER -> Layoff Joker onto Set (<4) or Run (<13)!
       if (selCard.isJoker) {
+        const taggedSelCard: PlayingCard = { ...selCard, laidOffById: 'self' };
         let updatedCards: PlayingCard[] | null = null;
         if (targetMeld.type === 'set') {
           if (targetMeld.cards.length >= 4) {
@@ -5706,9 +5790,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             triggerNotification(t.notifySetFull4);
             return;
           }
-          updatedCards = [...targetMeld.cards, selCard];
+          updatedCards = [...targetMeld.cards, taggedSelCard];
         } else {
-          updatedCards = insertCardIntoRunMeld(targetMeld.cards, selCard, cardIdx);
+          updatedCards = insertCardIntoRunMeld(targetMeld.cards, taggedSelCard, cardIdx);
           if (!updatedCards) {
             raminoAudio.playBuzzer();
             triggerNotification(t.notifyNoMoreJokersRun);
@@ -5756,14 +5840,16 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             return;
           }
           raminoAudio.playSwap();
+          const { laidOffById: _stripLayoff, ...cleanJoker } = targetCard;
+          void _stripLayoff;
           const nextTableMelds = tableMeldsRef.current.map((m) => {
             if (m.id !== meldId) return m;
             const updated = [...m.cards];
-            updated[cardIdx] = selCard;
+            updated[cardIdx] = { ...selCard, laidOffById: 'self' };
             return { ...m, cards: updated };
           });
           tableMeldsRef.current = nextTableMelds;
-          setPlayerHand((prev) => prev.map((c) => (c.id === selId ? targetCard : c)));
+          setPlayerHand((prev) => prev.map((c) => (c.id === selId ? cleanJoker : c)));
           setSelectedCardIds(new Set());
           setDrawnFromDiscardCard(null);
           setTableMelds(nextTableMelds);
@@ -5773,12 +5859,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       }
 
       // 1C: Normal natural card layoff onto Set or Run
+      const taggedLayoffCard: PlayingCard = { ...selCard, laidOffById: 'self' };
       let combined: PlayingCard[] | null = null;
       if (targetMeld.type === 'set') {
-        const candidate = [...targetMeld.cards, selCard];
+        const candidate = [...targetMeld.cards, taggedLayoffCard];
         if (isValidSet(candidate)) combined = candidate;
       } else {
-        combined = insertCardIntoRunMeld(targetMeld.cards, selCard, cardIdx);
+        combined = insertCardIntoRunMeld(targetMeld.cards, taggedLayoffCard, cardIdx);
       }
 
       if (!combined) {
@@ -5837,17 +5924,19 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         return;
       }
       const naturalCard = playerHand[matchIdx];
+      const { laidOffById: _stripLayoff2, ...cleanJoker2 } = targetCard;
+      void _stripLayoff2;
       raminoAudio.playSwap();
       setPlayerHand((prev) => {
         const copy = [...prev];
-        copy.splice(matchIdx, 1, targetCard);
+        copy.splice(matchIdx, 1, cleanJoker2);
         return copy;
       });
       setTableMelds((prev) =>
         prev.map((m) => {
           if (m.id !== meldId) return m;
           const updated = [...m.cards];
-          updated[cardIdx] = naturalCard;
+          updated[cardIdx] = { ...naturalCard, laidOffById: 'self' };
           return { ...m, cards: updated };
         })
       );
@@ -8202,121 +8291,160 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   </div>
                 </div>
 
-                {/* Center Felt: Open Table Melds (IMG_3903 - Full 2-3 row visibility) + Revealed Winner Cards For Trust */}
+                {/* Center Felt: Open Table Melds + Horizontal Sliding Winner Showcase + Glowing Winner Cards */}
                 <div className="flex-1 min-w-0 max-h-full flex flex-wrap items-center justify-center content-center gap-1 sm:gap-1.5 px-1 overflow-visible">
                   {winnerCelebration?.show &&
                     ((winnerCelebration.winnerGroups && winnerCelebration.winnerGroups.length > 0) ||
                       winnerCelebration.winnerClosingCard) && (
-                      <div className="w-full max-w-xl mx-auto mb-1 p-1.5 sm:p-2 rounded-2xl bg-black/70 border-2 border-yellow-400/80 shadow-[0_0_24px_rgba(250,204,21,0.35)] backdrop-blur-md">
+                      <div className="w-full max-w-2xl mx-auto mb-1 p-1.5 rounded-2xl bg-black/75 border-2 border-yellow-400/85 shadow-[0_0_24px_rgba(250,204,21,0.38)] backdrop-blur-md">
                         <div className="flex items-center justify-between gap-2 px-1 pb-1 border-b border-yellow-400/20">
                           <span className="text-[10px] sm:text-xs font-black text-yellow-300 truncate">
                             {t.winnerCardsHeader} • {winnerCelebration.winnerName}
                           </span>
-                          <span className="text-[9px] text-emerald-300 font-bold hidden sm:inline">
-                            {t.winnerCardsTrustNote}
+                          <span className="text-[9px] text-amber-200 font-bold shrink-0">
+                            {t.winnerTableGlowBadge}
                           </span>
                         </div>
-                        <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1.5">
-                          {(winnerCelebration.winnerGroups || []).map((grp, gIdx) => {
-                            const grpBorder =
-                              grp.label === 'pair'
-                                ? 'border-fuchsia-400/60 bg-fuchsia-950/35'
-                                : grp.label === 'catris'
-                                ? 'border-sky-400/60 bg-sky-950/35'
-                                : 'border-emerald-400/60 bg-emerald-950/35';
-                            const grpText =
-                              grp.label === 'pair'
-                                ? t.winnerGroupPair
-                                : grp.label === 'catris'
-                                ? t.winnerGroupCatris
-                                : t.winnerGroupTris;
-                            return (
-                              <div
-                                key={gIdx}
-                                className={`flex flex-col items-center p-1 rounded-xl border ${grpBorder}`}
-                              >
-                                <div className="flex items-center -space-x-2.5 sm:-space-x-3">
-                                  {grp.cards.map((c, cIdx) => {
-                                    const cIsJ = Boolean(c.isJoker || c.rank === 'JOKER');
-                                    const rClr = cIsJ
-                                      ? 'text-red-700'
-                                      : c.suit === '♦'
-                                      ? 'text-blue-600'
-                                      : c.suit === '♣'
-                                      ? 'text-emerald-700'
-                                      : c.suit === '♥'
-                                      ? 'text-red-600'
-                                      : 'text-slate-950';
-                                    const sClr =
-                                      c.suit === '♥' || c.suit === '♦' ? 'text-red-600' : 'text-slate-950';
-                                    return (
-                                      <div
-                                        key={`${c.id}_${cIdx}`}
-                                        className={`w-7 h-10 sm:w-8 sm:h-11 rounded-md p-0.5 flex flex-col justify-between shadow border ${
-                                          cIsJ
-                                            ? 'bg-[#fef3c7] border-amber-400'
-                                            : 'bg-[#fcfbf7] border-slate-300'
-                                        }`}
-                                      >
-                                        <span className={`text-[9px] sm:text-[10px] font-black leading-none ${rClr}`}>
-                                          {cIsJ ? 'JOK' : c.rank}
-                                        </span>
-                                        <span className={`text-xs sm:text-sm leading-none self-end ${sClr}`}>
-                                          {cIsJ ? '🃏' : c.suit}
-                                        </span>
-                                      </div>
-                                    );
-                                  })}
+                        <div className="flex items-center gap-1 pt-1">
+                          <button
+                            type="button"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={() => slideCarouselBy(tableCardsCarouselRef, -160)}
+                            className="w-6 h-10 shrink-0 rounded-lg bg-white/10 hover:bg-white/20 text-yellow-300 flex items-center justify-center cursor-pointer"
+                            aria-label="Slide left"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+                          <div
+                            ref={tableCardsCarouselRef}
+                            onPointerDown={(e) => handleCarouselPointerDown(e, tableCardsCarouselRef)}
+                            onPointerMove={handleCarouselPointerMove}
+                            onPointerUp={handleCarouselPointerUp}
+                            onPointerCancel={handleCarouselPointerUp}
+                            className="flex-1 min-w-0 flex flex-nowrap items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden touch-none cursor-grab active:cursor-grabbing select-none px-0.5"
+                          >
+                            {(winnerCelebration.winnerGroups || []).map((grp, gIdx) => {
+                              const grpBorder =
+                                grp.label === 'pair'
+                                  ? 'border-fuchsia-400/60 bg-fuchsia-950/35'
+                                  : grp.label === 'catris'
+                                  ? 'border-sky-400/60 bg-sky-950/35'
+                                  : grp.label === 'layoff'
+                                  ? 'border-yellow-400/85 bg-amber-950/50 shadow-[0_0_12px_rgba(250,204,21,0.45)]'
+                                  : 'border-emerald-400/60 bg-emerald-950/35';
+                              const grpText =
+                                grp.label === 'pair'
+                                  ? t.winnerGroupPair
+                                  : grp.label === 'catris'
+                                  ? t.winnerGroupCatris
+                                  : grp.label === 'layoff'
+                                  ? t.winnerGroupLayoff
+                                  : t.winnerGroupTris;
+                              return (
+                                <div
+                                  key={gIdx}
+                                  className={`shrink-0 flex flex-col items-center p-1 rounded-xl border ${grpBorder}`}
+                                >
+                                  <div className="flex items-center -space-x-2">
+                                    {grp.cards.map((c, cIdx) => {
+                                      const cIsJ = Boolean(c.isJoker || c.rank === 'JOKER');
+                                      const rClr = cIsJ
+                                        ? 'text-red-700'
+                                        : c.suit === '♦'
+                                        ? 'text-blue-600'
+                                        : c.suit === '♣'
+                                        ? 'text-emerald-700'
+                                        : c.suit === '♥'
+                                        ? 'text-red-600'
+                                        : 'text-slate-950';
+                                      const sClr =
+                                        c.suit === '♥' || c.suit === '♦' ? 'text-red-600' : 'text-slate-950';
+                                      return (
+                                        <div
+                                          key={`${c.id}_${cIdx}`}
+                                          className={`w-7 h-10 rounded-md p-0.5 flex flex-col justify-between shadow border ${
+                                            grp.label === 'layoff'
+                                              ? 'ring-1 ring-yellow-300 border-yellow-400 bg-amber-50'
+                                              : cIsJ
+                                              ? 'bg-[#fef3c7] border-amber-400'
+                                              : 'bg-[#fcfbf7] border-slate-300'
+                                          }`}
+                                        >
+                                          <span className={`text-[9px] font-black leading-none ${rClr}`}>
+                                            {cIsJ ? 'JOK' : c.rank}
+                                          </span>
+                                          <span className={`text-xs leading-none self-end ${sClr}`}>
+                                            {cIsJ ? '🃏' : c.suit}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                  <span className="text-[8px] font-black text-white/85 mt-0.5 leading-none">
+                                    {grpText}
+                                  </span>
                                 </div>
-                                <span className="text-[8px] font-black text-white/80 mt-0.5 leading-none">
-                                  {grpText}
+                              );
+                            })}
+                            {winnerCelebration.winnerClosingCard && (
+                              <div className="shrink-0 flex flex-col items-center p-1 rounded-xl border border-yellow-400/75 bg-amber-950/45">
+                                {(() => {
+                                  const cc = winnerCelebration.winnerClosingCard;
+                                  const ccIsJ = Boolean(cc.isJoker || cc.rank === 'JOKER');
+                                  const rClr = ccIsJ
+                                    ? 'text-red-700'
+                                    : cc.suit === '♦'
+                                    ? 'text-blue-600'
+                                    : cc.suit === '♣'
+                                    ? 'text-emerald-700'
+                                    : cc.suit === '♥'
+                                    ? 'text-red-600'
+                                    : 'text-slate-950';
+                                  const sClr =
+                                    cc.suit === '♥' || cc.suit === '♦' ? 'text-red-600' : 'text-slate-950';
+                                  return (
+                                    <div
+                                      className={`w-7 h-10 rounded-md p-0.5 flex flex-col justify-between shadow border ${
+                                        ccIsJ
+                                          ? 'bg-[#fef3c7] border-amber-400'
+                                          : 'bg-[#fcfbf7] border-slate-300'
+                                      }`}
+                                    >
+                                      <span className={`text-[9px] font-black leading-none ${rClr}`}>
+                                        {ccIsJ ? 'JOK' : cc.rank}
+                                      </span>
+                                      <span className={`text-xs leading-none self-end ${sClr}`}>
+                                        {ccIsJ ? '🃏' : cc.suit}
+                                      </span>
+                                    </div>
+                                  );
+                                })()}
+                                <span className="text-[8px] font-black text-yellow-300 mt-0.5 leading-none">
+                                  {t.winnerGroupClosing}
                                 </span>
                               </div>
-                            );
-                          })}
-                          {winnerCelebration.winnerClosingCard && (
-                            <div className="flex flex-col items-center p-1 rounded-xl border border-yellow-400/75 bg-amber-950/45">
-                              {(() => {
-                                const cc = winnerCelebration.winnerClosingCard;
-                                const ccIsJ = Boolean(cc.isJoker || cc.rank === 'JOKER');
-                                const rClr = ccIsJ
-                                  ? 'text-red-700'
-                                  : cc.suit === '♦'
-                                  ? 'text-blue-600'
-                                  : cc.suit === '♣'
-                                  ? 'text-emerald-700'
-                                  : cc.suit === '♥'
-                                  ? 'text-red-600'
-                                  : 'text-slate-950';
-                                const sClr =
-                                  cc.suit === '♥' || cc.suit === '♦' ? 'text-red-600' : 'text-slate-950';
-                                return (
-                                  <div
-                                    className={`w-7 h-10 sm:w-8 sm:h-11 rounded-md p-0.5 flex flex-col justify-between shadow border ${
-                                      ccIsJ
-                                        ? 'bg-[#fef3c7] border-amber-400'
-                                        : 'bg-[#fcfbf7] border-slate-300'
-                                    }`}
-                                  >
-                                    <span className={`text-[9px] sm:text-[10px] font-black leading-none ${rClr}`}>
-                                      {ccIsJ ? 'JOK' : cc.rank}
-                                    </span>
-                                    <span className={`text-xs sm:text-sm leading-none self-end ${sClr}`}>
-                                      {ccIsJ ? '🃏' : cc.suit}
-                                    </span>
-                                  </div>
-                                );
-                              })()}
-                              <span className="text-[8px] font-black text-yellow-300 mt-0.5 leading-none">
-                                {t.winnerGroupClosing}
-                              </span>
-                            </div>
-                          )}
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={() => slideCarouselBy(tableCardsCarouselRef, 160)}
+                            className="w-6 h-10 shrink-0 rounded-lg bg-white/10 hover:bg-white/20 text-yellow-300 flex items-center justify-center cursor-pointer"
+                            aria-label="Slide right"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
                     )}
                   {tableMelds.map((meld) => {
                     const meldCount = tableMelds.length;
+                    const activeWinnerId = winnerCelebration?.show ? winnerCelebration.winnerId : null;
+                    const isWinnerOwnedMeld = Boolean(activeWinnerId && meld.ownerId === activeWinnerId);
+                    const hasWinnerLayoffCard = Boolean(
+                      activeWinnerId && meld.cards.some((card) => card.laidOffById === activeWinnerId)
+                    );
+                    const hasAnyWinnerCard = isWinnerOwnedMeld || hasWinnerLayoffCard;
                     const meldCardSize =
                       meldCount >= 9
                         ? 'w-7.5 h-11 sm:w-9.5 sm:h-13.5'
@@ -8332,11 +8460,24 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                     return (
                       <div
                         key={meld.id}
-                        className={`relative p-0.5 sm:p-1 rounded-lg sm:rounded-xl bg-[#0b2a1e]/75 border-l-[3px] ${meld.ownerColor} border border-white/20 backdrop-blur-sm shadow-[0_5px_14px_rgba(0,0,0,0.45)]`}
+                        className={`relative p-0.5 sm:p-1 rounded-lg sm:rounded-xl backdrop-blur-sm transition-all ${
+                          hasAnyWinnerCard
+                            ? 'bg-amber-950/45 border-2 border-yellow-300 ring-2 ring-yellow-400/90 shadow-[0_0_22px_rgba(250,204,21,0.8)]'
+                            : activeWinnerId
+                            ? `bg-[#0b2a1e]/60 border-l-[3px] ${meld.ownerColor} border border-white/15 opacity-65 shadow-[0_5px_14px_rgba(0,0,0,0.45)]`
+                            : `bg-[#0b2a1e]/75 border-l-[3px] ${meld.ownerColor} border border-white/20 shadow-[0_5px_14px_rgba(0,0,0,0.45)]`
+                        }`}
                       >
                         <div className={`flex items-center ${meldOverlap}`}>
                           {meld.cards.map((c, cIdx) => {
                             const isLast = cIdx === meld.cards.length - 1;
+                            const isWinnerTableCard = Boolean(
+                              activeWinnerId &&
+                                (c.laidOffById ? c.laidOffById === activeWinnerId : meld.ownerId === activeWinnerId)
+                            );
+                            const isWinnerLaidOffHere = Boolean(
+                              activeWinnerId && c.laidOffById === activeWinnerId
+                            );
                             const jokerInfo = c.isJoker ? getTableMeldJokerInfo(meld, cIdx) : null;
                             const displayRank = c.isJoker ? jokerInfo?.rank || 'JOK' : c.rank;
                             const displaySuit = c.isJoker ? jokerInfo?.suit || '🃏' : c.suit;
@@ -8362,11 +8503,21 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                                 key={c.id + cIdx}
                                 onClick={() => handleTableMeldClick(meld.id, cIdx)}
                                 className={`${meldCardSize} relative rounded-md sm:rounded-lg p-0.5 sm:p-1 flex flex-col justify-between shadow-[0_2px_7px_rgba(0,0,0,0.38)] cursor-pointer transition hover:scale-105 hover:z-30 select-none border ${
-                                  c.isJoker
+                                  isWinnerTableCard
+                                    ? 'bg-amber-50 border-yellow-400 ring-2 ring-yellow-300 shadow-[0_0_16px_rgba(250,204,21,0.95)] animate-pulse scale-[1.04] z-20'
+                                    : c.isJoker
                                     ? 'bg-[#fef3c7] border-amber-400 ring-1 ring-amber-400/70'
                                     : 'bg-[#fcfbf7] border-slate-300/90'
                                 }`}
                               >
+                                {isWinnerLaidOffHere && (
+                                  <span
+                                    title={t.winnerGroupLayoff}
+                                    className="absolute -top-1.5 -right-1 w-4 h-4 rounded-full bg-yellow-400 border border-amber-900 text-slate-950 text-[9px] font-black flex items-center justify-center shadow-md z-30"
+                                  >
+                                    ★
+                                  </span>
+                                )}
                                 <div className="flex flex-col items-start pl-0.5 leading-none">
                                   <span
                                     className={`${
@@ -8424,19 +8575,31 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
                     {closedSetBadges.length > 0 && (
                       <div className="flex flex-col items-end gap-1 sm:gap-1.5">
-                        {closedSetBadges.map((badge) => (
-                          <div
-                            key={badge.id}
-                            className={`px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-[#fcfbf7] border-l-4 ${badge.ownerColor} shadow-[0_4px_12px_rgba(0,0,0,0.45)] flex items-center gap-1 text-[11px] sm:text-sm font-black tracking-tight`}
-                            title={t.closedSetsTip}
-                          >
-                            <span className="text-slate-950 font-black mr-0.5">{badge.rank}</span>
-                            <span className="text-slate-950 leading-none">♠</span>
-                            <span className="text-red-600 leading-none">♥</span>
-                            <span className="text-slate-950 leading-none">♣</span>
-                            <span className="text-red-600 leading-none">♦</span>
-                          </div>
-                        ))}
+                        {closedSetBadges.map((badge) => {
+                          const activeWId = winnerCelebration?.show ? winnerCelebration.winnerId : null;
+                          const isWinnerBadge = Boolean(
+                            activeWId &&
+                              (badge.ownerId === activeWId ||
+                                badge.laidOffCards?.some((lc) => lc.laidOffById === activeWId))
+                          );
+                          return (
+                            <div
+                              key={badge.id}
+                              className={`px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-[#fcfbf7] border-l-4 ${badge.ownerColor} shadow-[0_4px_12px_rgba(0,0,0,0.45)] flex items-center gap-1 text-[11px] sm:text-sm font-black tracking-tight ${
+                                isWinnerBadge
+                                  ? 'ring-2 ring-yellow-300 border-yellow-400 shadow-[0_0_18px_rgba(250,204,21,0.95)] animate-pulse'
+                                  : ''
+                              }`}
+                              title={t.closedSetsTip}
+                            >
+                              <span className="text-slate-950 font-black mr-0.5">{badge.rank}</span>
+                              <span className="text-slate-950 leading-none">♠</span>
+                              <span className="text-red-600 leading-none">♥</span>
+                              <span className="text-slate-950 leading-none">♣</span>
+                              <span className="text-red-600 leading-none">♦</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -9233,7 +9396,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       )}
 
       {/* ========================================================
-          WINNER CELEBRATION MODAL (Reveals Winner Cards + Table Peek Toggle)
+          WINNER CELEBRATION MODAL (Horizontal Card Slider, Zero Vertical Scroll)
          ======================================================== */}
       {winnerCelebration?.show && view !== 'postday_pick' && (
         isWinnerModalMinimized ? (
@@ -9249,260 +9412,315 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               {t.openWinSummaryBtn}
             </button>
           </div>
-        ) : (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-[100000] flex items-center justify-center p-2 sm:p-4 overflow-hidden">
-          <div
-            style={{ maxHeight: modalMaxHeightPx ? `${modalMaxHeightPx}px` : '88dvh' }}
-            className="bg-[#121626] border-2 border-yellow-400 rounded-[28px] p-4 sm:p-5 max-w-md w-full text-center flex flex-col overflow-hidden shadow-2xl"
-          >
-            <div
-              style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}
-              className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-3 pr-0.5"
-            >
-            <div className="flex items-start justify-between gap-2">
-              <span className="w-20" />
-              <span className="text-4xl leading-none">{winnerCelebration.isOpponentWin ? '🃏' : '👑'}</span>
-              <button
-                type="button"
-                onClick={() => setIsWinnerModalMinimized(true)}
-                className="px-2 py-1 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-[10px] font-black text-amber-200 whitespace-nowrap cursor-pointer"
+        ) : (() => {
+          const useLandscapeWinnerLayout = shouldRotateToLandscape || viewportSize.w >= 640;
+          return (
+            <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-[100000] flex items-center justify-center p-1.5 sm:p-4 overflow-hidden">
+              <div
+                style={{ maxHeight: modalMaxHeightPx ? `${modalMaxHeightPx}px` : '92dvh' }}
+                className={`bg-[#121626] border-2 border-yellow-400 rounded-[22px] sm:rounded-[26px] p-2.5 sm:p-4 w-full text-center flex flex-col gap-2 overflow-hidden shadow-2xl ${
+                  useLandscapeWinnerLayout ? 'max-w-3xl' : 'max-w-md'
+                }`}
               >
-                {t.viewTableCardsBtn}
-              </button>
-            </div>
-            <h2 className="text-base sm:text-lg font-black text-yellow-300 leading-snug">
-              {winnerCelebration.title}
-            </h2>
-
-            {((winnerCelebration.winnerGroups && winnerCelebration.winnerGroups.length > 0) ||
-              winnerCelebration.winnerClosingCard) && (
-              <div className="p-2.5 rounded-2xl bg-[#07261a]/95 border border-emerald-400/45 space-y-1.5 text-left">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-black text-yellow-300">
-                    {t.winnerCardsHeader} ({winnerCelebration.winnerName})
-                  </span>
-                  <span className="text-[9px] font-bold text-emerald-300/90">
-                    ✓ {t.winnerCardsTrustNote}
-                  </span>
+                {/* Band 1: Compact Single-Row Header */}
+                <div className="flex items-center justify-between gap-2 shrink-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xl sm:text-2xl leading-none shrink-0">
+                      {winnerCelebration.isOpponentWin ? '🃏' : '👑'}
+                    </span>
+                    <h2 className="text-xs sm:text-base font-black text-yellow-300 leading-tight text-left truncate">
+                      {winnerCelebration.title}
+                    </h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsWinnerModalMinimized(true)}
+                    className="px-2.5 py-1 rounded-xl bg-amber-400/15 hover:bg-amber-400/25 border border-yellow-400/50 text-[10px] sm:text-xs font-black text-yellow-200 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    {t.viewTableCardsBtn}
+                  </button>
                 </div>
-                <div className="flex flex-wrap items-center justify-center gap-1.5 pt-0.5">
-                  {(winnerCelebration.winnerGroups || []).map((grp, gIdx) => {
-                    const grpStyle =
-                      grp.label === 'pair'
-                        ? 'border-fuchsia-400/55 bg-fuchsia-950/35'
-                        : grp.label === 'catris'
-                        ? 'border-sky-400/55 bg-sky-950/35'
-                        : 'border-emerald-400/55 bg-emerald-950/35';
-                    const grpLbl =
-                      grp.label === 'pair'
-                        ? t.winnerGroupPair
-                        : grp.label === 'catris'
-                        ? t.winnerGroupCatris
-                        : t.winnerGroupTris;
-                    return (
-                      <div
-                        key={gIdx}
-                        className={`flex flex-col items-center p-1 rounded-xl border ${grpStyle}`}
-                      >
-                        <div className="flex items-center -space-x-2">
-                          {grp.cards.map((c, cIdx) => {
-                            const cIsJ = Boolean(c.isJoker || c.rank === 'JOKER');
-                            const rClr = cIsJ
-                              ? 'text-red-700'
-                              : c.suit === '♦'
-                              ? 'text-blue-600'
-                              : c.suit === '♣'
-                              ? 'text-emerald-700'
-                              : c.suit === '♥'
-                              ? 'text-red-600'
-                              : 'text-slate-950';
-                            const sClr =
-                              c.suit === '♥' || c.suit === '♦' ? 'text-red-600' : 'text-slate-950';
-                            return (
-                              <div
-                                key={`${c.id}_${cIdx}`}
-                                className={`w-7 h-10 rounded-md p-0.5 flex flex-col justify-between shadow border ${
-                                  cIsJ
-                                    ? 'bg-[#fef3c7] border-amber-400'
-                                    : 'bg-[#fcfbf7] border-slate-300'
-                                }`}
-                              >
-                                <span className={`text-[9px] font-black leading-none ${rClr}`}>
-                                  {cIsJ ? 'JOK' : c.rank}
-                                </span>
-                                <span className={`text-xs leading-none self-end ${sClr}`}>
-                                  {cIsJ ? '🃏' : c.suit}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <span className="text-[8px] font-black text-white/85 mt-0.5 leading-none">
-                          {grpLbl}
-                        </span>
-                      </div>
-                    );
-                  })}
-                  {winnerCelebration.winnerClosingCard && (
-                    <div className="flex flex-col items-center p-1 rounded-xl border border-yellow-400/75 bg-amber-950/45">
-                      {(() => {
-                        const cc = winnerCelebration.winnerClosingCard;
-                        const ccIsJ = Boolean(cc.isJoker || cc.rank === 'JOKER');
-                        const rClr = ccIsJ
-                          ? 'text-red-700'
-                          : cc.suit === '♦'
-                          ? 'text-blue-600'
-                          : cc.suit === '♣'
-                          ? 'text-emerald-700'
-                          : cc.suit === '♥'
-                          ? 'text-red-600'
-                          : 'text-slate-950';
-                        const sClr =
-                          cc.suit === '♥' || cc.suit === '♦' ? 'text-red-600' : 'text-slate-950';
-                        return (
-                          <div
-                            className={`w-7 h-10 rounded-md p-0.5 flex flex-col justify-between shadow border ${
-                              ccIsJ
-                                ? 'bg-[#fef3c7] border-amber-400'
-                                : 'bg-[#fcfbf7] border-slate-300'
-                            }`}
-                          >
-                            <span className={`text-[9px] font-black leading-none ${rClr}`}>
-                              {ccIsJ ? 'JOK' : cc.rank}
-                            </span>
-                            <span className={`text-xs leading-none self-end ${sClr}`}>
-                              {ccIsJ ? '🃏' : cc.suit}
-                            </span>
-                          </div>
-                        );
-                      })()}
-                      <span className="text-[8px] font-black text-yellow-300 mt-0.5 leading-none">
-                        {t.winnerGroupClosing}
+
+                {/* Band 2: Horizontal Sliding Winner Cards Showcase */}
+                {((winnerCelebration.winnerGroups && winnerCelebration.winnerGroups.length > 0) ||
+                  winnerCelebration.winnerClosingCard) && (
+                  <div className="p-1.5 sm:p-2 rounded-2xl bg-[#07261a]/95 border border-emerald-400/45 space-y-1 text-left shrink-0">
+                    <div className="flex items-center justify-between gap-2 px-1">
+                      <span className="text-[10px] sm:text-[11px] font-black text-yellow-300 truncate">
+                        {t.winnerCardsHeader} ({winnerCelebration.winnerName})
+                      </span>
+                      <span className="text-[9px] font-bold text-amber-200/95 shrink-0">
+                        {t.winnerTableGlowBadge}
                       </span>
                     </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            <div className="p-3 rounded-2xl bg-black/60 border border-yellow-500/30 space-y-1.5 text-xs">
-              <div className="flex justify-between text-gray-300">
-                <span>{t.potAmountLabel}</span>
-                <span className="font-mono">
-                  {(activeMultiplayerRoomCode ? activeTableStake : selectedStake) *
-                    (activeMultiplayerRoomCode ? Math.max(2, opponents.length + 1) : playerSeatCount)}{' '}
-                  {t.currencyUnit}
-                </span>
-              </div>
-              <div className="flex justify-between text-rose-400">
-                <span>{t.rakeLabel}</span>
-                <span className="font-mono">-{winnerCelebration.rakeAmount.toFixed(1)} {t.currencyUnit}</span>
-              </div>
-              {winnerCelebration.multiplier >= 3 && (
-                <div className="flex justify-between text-yellow-300 font-black">
-                  <span>{t.goldenMultLabel}</span>
-                  <span>3x (ጎልደን)</span>
-                </div>
-              )}
-              {winnerCelebration.multiplier === 2 && (
-                <div className="flex justify-between text-amber-300 font-black">
-                  <span>{t.dopeyMultLabel}</span>
-                  <span>2x (ዶፔይ / ሞንቴ)</span>
-                </div>
-              )}
-              {!winnerCelebration.isOpponentWin && winnerCelebration.streakCount > 0 && winnerCelebration.streakCount < 3 && (
-                <div className="text-[10px] text-sky-300 font-bold pt-0.5">
-                  {t.streakProgress(winnerCelebration.streakCount)}
-                </div>
-              )}
-              {winnerCelebration.isOpponentWin && (winnerCelebration.lostPenalty ?? 0) > 0 && (
-                <div className="flex justify-between text-rose-400 font-black border-t border-rose-500/20 pt-1.5">
-                  <span>{t.penaltyDeductedLabel}</span>
-                  <span className="font-mono">-{Number(winnerCelebration.lostPenalty).toFixed(1)} {t.currencyUnit}</span>
-                </div>
-              )}
-              <div className="flex justify-between text-sm font-black text-emerald-400 border-t border-white/10 pt-2">
-                <span>{t.netWonLabel}</span>
-                <span className="font-mono text-base text-yellow-300">
-                  {winnerCelebration.isOpponentWin
-                    ? `0.0 ${t.currencyUnit}`
-                    : `+${winnerCelebration.winAmount.toFixed(1)} ${t.currencyUnit}`}
-                </span>
-              </div>
-              <div className="text-[11px] text-amber-200/90 font-bold pt-1">
-                {t.nextDealerLabel} <span className="text-yellow-300">{winnerCelebration.winnerName}</span>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={() => {
-                  const tableStakeAmt = activeMultiplayerRoomCode ? activeTableStake : selectedStake;
-                  if (balance < tableStakeAmt) {
-                    raminoAudio.playBuzzer();
-                    triggerNotification(t.notifyInsufficientNext);
-                    return;
-                  }
-                  if (activeMultiplayerRoomCode) {
-                    const nextIdx = (lastSyncedRoundIndexRef.current >= 0 ? lastSyncedRoundIndexRef.current : 1) + 1;
-                    debitedRoundIndexRef.current = nextIdx;
-                    adjustWalletBalance(-tableStakeAmt, `Ramino Next Round (${tableStakeAmt} ETB)`);
-                    void sendRaminoGameAction('next_round').then((ok) => {
-                      if (!ok) {
-                        debitedRoundIndexRef.current = lastSyncedRoundIndexRef.current;
-                        adjustWalletBalance(tableStakeAmt, `Ramino Next Round Revert`);
-                      }
-                    });
-                    return;
-                  }
-                  if (isPrivateRoomGame) {
-                    const nextRound = privateRoundCountRef.current + 1;
-                    privateRoundCountRef.current = nextRound;
-                    setPrivateRoundCount(nextRound);
-                  }
-                  adjustWalletBalance(-tableStakeAmt, `Ramino Next Round (${tableStakeAmt} ETB)`);
-                  dealRoundWithDealer(winnerCelebration.winnerName);
-                }}
-                className="w-full py-3 rounded-2xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 text-slate-950 font-black text-sm shadow-xl hover:brightness-105 transition cursor-pointer"
-              >
-                {t.nextRoundBtn(
-                  winnerCelebration.winnerName,
-                  isPrivateRoomGame ? ` • ${t.roundWord} #${privateRoundCount + 1}` : ''
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => slideCarouselBy(modalCardsCarouselRef, -170)}
+                        className="w-6 h-11 shrink-0 rounded-lg bg-white/10 hover:bg-white/20 text-yellow-300 flex items-center justify-center cursor-pointer"
+                        aria-label="Slide left"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <div
+                        ref={modalCardsCarouselRef}
+                        onPointerDown={(e) => handleCarouselPointerDown(e, modalCardsCarouselRef)}
+                        onPointerMove={handleCarouselPointerMove}
+                        onPointerUp={handleCarouselPointerUp}
+                        onPointerCancel={handleCarouselPointerUp}
+                        className="flex-1 min-w-0 flex flex-nowrap items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden touch-none cursor-grab active:cursor-grabbing select-none px-0.5 py-0.5"
+                      >
+                        {(winnerCelebration.winnerGroups || []).map((grp, gIdx) => {
+                          const grpStyle =
+                            grp.label === 'pair'
+                              ? 'border-fuchsia-400/55 bg-fuchsia-950/35'
+                              : grp.label === 'catris'
+                              ? 'border-sky-400/55 bg-sky-950/35'
+                              : grp.label === 'layoff'
+                              ? 'border-yellow-400/85 bg-amber-950/50 shadow-[0_0_12px_rgba(250,204,21,0.4)]'
+                              : 'border-emerald-400/55 bg-emerald-950/35';
+                          const grpLbl =
+                            grp.label === 'pair'
+                              ? t.winnerGroupPair
+                              : grp.label === 'catris'
+                              ? t.winnerGroupCatris
+                              : grp.label === 'layoff'
+                              ? t.winnerGroupLayoff
+                              : t.winnerGroupTris;
+                          return (
+                            <div
+                              key={gIdx}
+                              className={`shrink-0 flex flex-col items-center p-1 rounded-xl border ${grpStyle}`}
+                            >
+                              <div className="flex items-center -space-x-2">
+                                {grp.cards.map((c, cIdx) => {
+                                  const cIsJ = Boolean(c.isJoker || c.rank === 'JOKER');
+                                  const rClr = cIsJ
+                                    ? 'text-red-700'
+                                    : c.suit === '♦'
+                                    ? 'text-blue-600'
+                                    : c.suit === '♣'
+                                    ? 'text-emerald-700'
+                                    : c.suit === '♥'
+                                    ? 'text-red-600'
+                                    : 'text-slate-950';
+                                  const sClr =
+                                    c.suit === '♥' || c.suit === '♦' ? 'text-red-600' : 'text-slate-950';
+                                  return (
+                                    <div
+                                      key={`${c.id}_${cIdx}`}
+                                      className={`w-6.5 h-9 sm:w-7 sm:h-10 rounded-md p-0.5 flex flex-col justify-between shadow border ${
+                                        grp.label === 'layoff'
+                                          ? 'ring-1 ring-yellow-300 border-yellow-400 bg-amber-50'
+                                          : cIsJ
+                                          ? 'bg-[#fef3c7] border-amber-400'
+                                          : 'bg-[#fcfbf7] border-slate-300'
+                                      }`}
+                                    >
+                                      <span className={`text-[8px] sm:text-[9px] font-black leading-none ${rClr}`}>
+                                        {cIsJ ? 'JOK' : c.rank}
+                                      </span>
+                                      <span className={`text-[11px] sm:text-xs leading-none self-end ${sClr}`}>
+                                        {cIsJ ? '🃏' : c.suit}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <span className="text-[8px] font-black text-white/85 mt-0.5 leading-none">
+                                {grpLbl}
+                              </span>
+                            </div>
+                          );
+                        })}
+                        {winnerCelebration.winnerClosingCard && (
+                          <div className="shrink-0 flex flex-col items-center p-1 rounded-xl border border-yellow-400/75 bg-amber-950/45">
+                            {(() => {
+                              const cc = winnerCelebration.winnerClosingCard;
+                              const ccIsJ = Boolean(cc.isJoker || cc.rank === 'JOKER');
+                              const rClr = ccIsJ
+                                ? 'text-red-700'
+                                : cc.suit === '♦'
+                                ? 'text-blue-600'
+                                : cc.suit === '♣'
+                                ? 'text-emerald-700'
+                                : cc.suit === '♥'
+                                ? 'text-red-600'
+                                : 'text-slate-950';
+                              const sClr =
+                                cc.suit === '♥' || cc.suit === '♦' ? 'text-red-600' : 'text-slate-950';
+                              return (
+                                <div
+                                  className={`w-6.5 h-9 sm:w-7 sm:h-10 rounded-md p-0.5 flex flex-col justify-between shadow border ${
+                                    ccIsJ
+                                      ? 'bg-[#fef3c7] border-amber-400'
+                                      : 'bg-[#fcfbf7] border-slate-300'
+                                  }`}
+                                >
+                                  <span className={`text-[8px] sm:text-[9px] font-black leading-none ${rClr}`}>
+                                    {ccIsJ ? 'JOK' : cc.rank}
+                                  </span>
+                                  <span className={`text-[11px] sm:text-xs leading-none self-end ${sClr}`}>
+                                    {ccIsJ ? '🃏' : cc.suit}
+                                  </span>
+                                </div>
+                              );
+                            })()}
+                            <span className="text-[8px] font-black text-yellow-300 mt-0.5 leading-none">
+                              {t.winnerGroupClosing}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => slideCarouselBy(modalCardsCarouselRef, 170)}
+                        className="w-6 h-11 shrink-0 rounded-lg bg-white/10 hover:bg-white/20 text-yellow-300 flex items-center justify-center cursor-pointer"
+                        aria-label="Slide right"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
                 )}
-              </button>
 
-              {isPrivateRoomGame && privateRoundCount >= 5 && (
-                <button
-                  onClick={() => requestPostDayConsensus('winner')}
-                  className="w-full py-2.5 rounded-2xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs shadow-lg transition cursor-pointer"
-                >
-                  {t.postDayWinnerBtn}
-                </button>
-              )}
-
-              <button
-                onClick={() => {
-                  clearLocalSuspendedGame();
-                  if (activeMultiplayerRoomCode) {
-                    void leaveMultiplayerTable(false);
-                    return;
+                {/* Band 3: Payout Summary + Action Buttons (Side-by-side in landscape so zero vertical scroll!) */}
+                <div
+                  className={
+                    useLandscapeWinnerLayout
+                      ? 'grid grid-cols-12 gap-2.5 items-stretch min-h-0'
+                      : 'flex flex-col gap-2 min-h-0'
                   }
-                  winStreakRef.current = 0;
-                  setWinStreak(0);
-                  privateRoundCountRef.current = 1;
-                  setPrivateRoundCount(1);
-                  setWinnerCelebration(null);
-                  setView('lobby');
-                }}
-                className="w-full py-2.5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/15 text-gray-200 font-black text-xs transition cursor-pointer"
-              >
-                {t.backToLobbyResetBtn}
-              </button>
+                >
+                  <div
+                    className={`${
+                      useLandscapeWinnerLayout ? 'col-span-7' : ''
+                    } p-2 sm:p-2.5 rounded-2xl bg-black/60 border border-yellow-500/30 flex flex-col justify-center space-y-1 text-[11px] sm:text-xs`}
+                  >
+                    <div className="flex justify-between text-gray-300">
+                      <span>{t.potAmountLabel}</span>
+                      <span className="font-mono">
+                        {(activeMultiplayerRoomCode ? activeTableStake : selectedStake) *
+                          (activeMultiplayerRoomCode ? Math.max(2, opponents.length + 1) : playerSeatCount)}{' '}
+                        {t.currencyUnit}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-rose-400">
+                      <span>{t.rakeLabel}</span>
+                      <span className="font-mono">-{winnerCelebration.rakeAmount.toFixed(1)} {t.currencyUnit}</span>
+                    </div>
+                    {winnerCelebration.multiplier >= 3 && (
+                      <div className="flex justify-between text-yellow-300 font-black">
+                        <span>{t.goldenMultLabel}</span>
+                        <span>3x (ጎልደን)</span>
+                      </div>
+                    )}
+                    {winnerCelebration.multiplier === 2 && (
+                      <div className="flex justify-between text-amber-300 font-black">
+                        <span>{t.dopeyMultLabel}</span>
+                        <span>2x (ዶፔይ / ሞንቴ)</span>
+                      </div>
+                    )}
+                    {!winnerCelebration.isOpponentWin && winnerCelebration.streakCount > 0 && winnerCelebration.streakCount < 3 && (
+                      <div className="text-[10px] text-sky-300 font-bold">
+                        {t.streakProgress(winnerCelebration.streakCount)}
+                      </div>
+                    )}
+                    {winnerCelebration.isOpponentWin && (winnerCelebration.lostPenalty ?? 0) > 0 && (
+                      <div className="flex justify-between text-rose-400 font-black border-t border-rose-500/20 pt-1">
+                        <span>{t.penaltyDeductedLabel}</span>
+                        <span className="font-mono">-{Number(winnerCelebration.lostPenalty).toFixed(1)} {t.currencyUnit}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-xs sm:text-sm font-black text-emerald-400 border-t border-white/10 pt-1">
+                      <span>{t.netWonLabel}</span>
+                      <span className="font-mono text-sm sm:text-base text-yellow-300">
+                        {winnerCelebration.isOpponentWin
+                          ? `0.0 ${t.currencyUnit}`
+                          : `+${winnerCelebration.winAmount.toFixed(1)} ${t.currencyUnit}`}
+                      </span>
+                    </div>
+                    <div className="text-[10px] sm:text-[11px] text-amber-200/90 font-bold text-left">
+                      {t.nextDealerLabel} <span className="text-yellow-300">{winnerCelebration.winnerName}</span>
+                    </div>
+                  </div>
+
+                  <div
+                    className={`${
+                      useLandscapeWinnerLayout ? 'col-span-5' : ''
+                    } flex flex-col justify-center gap-1.5 sm:gap-2`}
+                  >
+                    <button
+                      onClick={() => {
+                        const tableStakeAmt = activeMultiplayerRoomCode ? activeTableStake : selectedStake;
+                        if (balance < tableStakeAmt) {
+                          raminoAudio.playBuzzer();
+                          triggerNotification(t.notifyInsufficientNext);
+                          return;
+                        }
+                        if (activeMultiplayerRoomCode) {
+                          const nextIdx = (lastSyncedRoundIndexRef.current >= 0 ? lastSyncedRoundIndexRef.current : 1) + 1;
+                          debitedRoundIndexRef.current = nextIdx;
+                          adjustWalletBalance(-tableStakeAmt, `Ramino Next Round (${tableStakeAmt} ETB)`);
+                          void sendRaminoGameAction('next_round').then((ok) => {
+                            if (!ok) {
+                              debitedRoundIndexRef.current = lastSyncedRoundIndexRef.current;
+                              adjustWalletBalance(tableStakeAmt, `Ramino Next Round Revert`);
+                            }
+                          });
+                          return;
+                        }
+                        if (isPrivateRoomGame) {
+                          const nextRound = privateRoundCountRef.current + 1;
+                          privateRoundCountRef.current = nextRound;
+                          setPrivateRoundCount(nextRound);
+                        }
+                        adjustWalletBalance(-tableStakeAmt, `Ramino Next Round (${tableStakeAmt} ETB)`);
+                        dealRoundWithDealer(winnerCelebration.winnerName);
+                      }}
+                      className="w-full py-2.5 sm:py-3 px-2 rounded-2xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 text-slate-950 font-black text-xs sm:text-sm shadow-xl hover:brightness-105 transition cursor-pointer"
+                    >
+                      {t.nextRoundBtn(
+                        winnerCelebration.winnerName,
+                        isPrivateRoomGame ? ` • ${t.roundWord} #${privateRoundCount + 1}` : ''
+                      )}
+                    </button>
+
+                    {isPrivateRoomGame && privateRoundCount >= 5 && (
+                      <button
+                        onClick={() => requestPostDayConsensus('winner')}
+                        className="w-full py-2 px-2 rounded-2xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-[11px] sm:text-xs shadow-lg transition cursor-pointer"
+                      >
+                        {t.postDayWinnerBtn}
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => {
+                        clearLocalSuspendedGame();
+                        if (activeMultiplayerRoomCode) {
+                          void leaveMultiplayerTable(false);
+                          return;
+                        }
+                        winStreakRef.current = 0;
+                        setWinStreak(0);
+                        privateRoundCountRef.current = 1;
+                        setPrivateRoundCount(1);
+                        setWinnerCelebration(null);
+                        setView('lobby');
+                      }}
+                      className="w-full py-2 px-2 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/15 text-gray-200 font-black text-[11px] sm:text-xs transition cursor-pointer"
+                    >
+                      {t.backToLobbyResetBtn}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-            </div>
-          </div>
-        </div>
-        )
+          );
+        })()
       )}
 
       {/* ========================================================
