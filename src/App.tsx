@@ -619,12 +619,15 @@ export default function App() {
   const tHub = HUB_T[language] || HUB_T.am;
   const [promoSlideIndex, setPromoSlideIndex] = useState(0);
   const [hubMenuOpen, setHubMenuOpen] = useState(false);
+  const [hubNotificationsOpen, setHubNotificationsOpen] = useState(false);
   const [hubNotice, setHubNotice] = useState<string | null>(null);
   const [isEditingHubName, setIsEditingHubName] = useState(false);
   const [hubNameDraft, setHubNameDraft] = useState('');
   const [isSavingHubName, setIsSavingHubName] = useState(false);
   const [activeGameNotification, setActiveGameNotification] =
     useState<GameStartNotificationEvent | null>(null);
+  const [notificationHistory, setNotificationHistory] = useState<GameStartNotificationEvent[]>([]);
+  const [hasUnreadNotifs, setHasUnreadNotifs] = useState(false);
   const hubMenuRef = useRef<HTMLDivElement | null>(null);
   const [liveGameCounts, setLiveGameCounts] = useState<{
     fast: number;
@@ -770,6 +773,7 @@ export default function App() {
     const handleHubMenuOutside = (e: MouseEvent) => {
       if (hubMenuRef.current && !hubMenuRef.current.contains(e.target as Node)) {
         setHubMenuOpen(false);
+        setHubNotificationsOpen(false);
       }
     };
     window.addEventListener('mousedown', handleHubMenuOutside);
@@ -1244,6 +1248,8 @@ export default function App() {
     let hideTimer: number | null = null;
     const unsubNotify = subscribeGameNotifications((notif) => {
       setActiveGameNotification(notif);
+      setNotificationHistory((prev) => [notif, ...prev].slice(0, 15));
+      setHasUnreadNotifs(true);
       if (hideTimer) window.clearTimeout(hideTimer);
       hideTimer = window.setTimeout(() => {
         setActiveGameNotification(null);
@@ -2432,11 +2438,39 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Right: Gold Hamburger Menu Drawer */}
+              {/* Right: Notifications Bell + Gold Hamburger Menu Drawer */}
               <div className="flex items-center gap-2 relative" ref={hubMenuRef}>
                 <button
                   type="button"
-                  onClick={() => setHubMenuOpen((prev) => !prev)}
+                  onClick={() => {
+                    setHubMenuOpen(false);
+                    setHubNotificationsOpen((prev) => !prev);
+                    setHasUnreadNotifs(false);
+                  }}
+                  className={`relative p-2 rounded-xl border transition-all cursor-pointer active:scale-95 ${
+                    hubNotificationsOpen
+                      ? isDark
+                        ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                        : 'bg-amber-100 border-amber-400 text-amber-800'
+                      : isDark
+                      ? 'bg-[#081D26]/90 border-amber-400/35 text-amber-300 hover:border-amber-400 hover:bg-[#0D2B36]'
+                      : 'bg-slate-100 border-slate-300 text-amber-700 hover:bg-slate-200'
+                  }`}
+                  aria-label={tHub.notificationsTitle}
+                  title={tHub.notificationsTitle}
+                >
+                  <Bell className="w-6 h-6" />
+                  {hasUnreadNotifs && (
+                    <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-rose-500 ring-2 ring-[#081D26] animate-pulse" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHubNotificationsOpen(false);
+                    setHubMenuOpen((prev) => !prev);
+                  }}
                   className={`p-2 rounded-xl border transition-all cursor-pointer active:scale-95 ${
                     isDark
                       ? 'bg-[#081D26]/90 border-amber-400/35 text-amber-300 hover:border-amber-400 hover:bg-[#0D2B36]'
@@ -2446,6 +2480,100 @@ export default function App() {
                 >
                   {hubMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
                 </button>
+
+                {hubNotificationsOpen && (
+                  <div
+                    className={`absolute right-0 top-12 w-72 sm:w-80 rounded-2xl border shadow-2xl p-3 z-50 space-y-2.5 ${
+                      isDark
+                        ? 'bg-[#081D26] border-cyan-500/35 text-slate-100 shadow-black/80'
+                        : 'bg-white border-slate-200 text-slate-900'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between px-1">
+                      <div className="flex items-center gap-1.5 font-black text-xs text-amber-400">
+                        <Bell className="w-4 h-4" />
+                        <span>{tHub.notificationsTitle}</span>
+                      </div>
+                      {notificationHistory.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setNotificationHistory([])}
+                          className="text-[11px] font-bold text-slate-400 hover:text-rose-400 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHubNotice(
+                          tHub.helloPlayer(
+                            sharedUsers[0]?.name || 'Sun Player',
+                            Math.floor(sharedUsers[0]?.balance ?? 0),
+                            Math.floor(sharedUsers[0]?.bonusBalance ?? 0)
+                          )
+                        );
+                        setHubNotificationsOpen(false);
+                      }}
+                      className={`w-full px-3 py-2.5 rounded-xl text-xs border flex items-start gap-2 text-left cursor-pointer transition-colors ${
+                        isDark
+                          ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-200'
+                          : 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-900'
+                      }`}
+                    >
+                      <Bell className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <div className="font-black truncate">
+                          {sharedUsers[0]?.name || 'Sun Player'}
+                        </div>
+                        <div className="text-[11px] opacity-85 mt-0.5">
+                          {tHub.walletSummary(
+                            Math.floor(sharedUsers[0]?.balance ?? 0),
+                            Math.floor(sharedUsers[0]?.bonusBalance ?? 0)
+                          )}
+                        </div>
+                      </div>
+                    </button>
+
+                    {notificationHistory.length > 0 && (
+                      <div className="max-h-56 overflow-y-auto space-y-1.5 pr-0.5">
+                        {notificationHistory.map((item, idx) => (
+                          <div
+                            key={`${item.title}-${idx}`}
+                            className={`px-3 py-2 rounded-xl border text-xs space-y-1 ${
+                              isDark
+                                ? 'bg-[#051218] border-cyan-500/20 text-slate-200'
+                                : 'bg-slate-50 border-slate-200 text-slate-800'
+                            }`}
+                          >
+                            <div className="font-black text-amber-400 truncate">{item.title}</div>
+                            <div className="text-[11px] opacity-85 leading-snug whitespace-pre-line">
+                              {item.message}
+                            </div>
+                            {item.game &&
+                              item.game !== 'admin' &&
+                              ['fast', 'regular', 'keno', 'ramino'].includes(item.game) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const target = item.game as 'fast' | 'regular' | 'keno' | 'ramino';
+                                    setHubNotificationsOpen(false);
+                                    setViewMode('game');
+                                    handleSwitchMode(target);
+                                  }}
+                                  className="mt-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-black cursor-pointer"
+                                >
+                                  {tHub.playNowToast}
+                                </button>
+                              )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {hubMenuOpen && (
                   <div
@@ -2516,37 +2644,6 @@ export default function App() {
                         </div>
                       )}
                     </div>
-
-                    {/* Notifications / Bell inside Menu */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setHubNotice(
-                          tHub.helloPlayer(
-                            sharedUsers[0]?.name || 'Sun Player',
-                            Math.floor(sharedUsers[0]?.balance ?? 0),
-                            Math.floor(sharedUsers[0]?.bonusBalance ?? 0)
-                          )
-                        );
-                        setHubMenuOpen(false);
-                      }}
-                      className={`w-full px-3 py-2 rounded-xl text-xs border flex items-start gap-2 text-left cursor-pointer transition-colors ${
-                        isDark
-                          ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-200'
-                          : 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-900'
-                      }`}
-                    >
-                      <Bell className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                      <div>
-                        <div className="font-black">{tHub.notificationsTitle}</div>
-                        <div className="text-[11px] opacity-80">
-                          {tHub.walletSummary(
-                            Math.floor(sharedUsers[0]?.balance ?? 0),
-                            Math.floor(sharedUsers[0]?.bonusBalance ?? 0)
-                          )}
-                        </div>
-                      </div>
-                    </button>
 
                     <div className="px-2 pt-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
                       {tHub.languageSection}
