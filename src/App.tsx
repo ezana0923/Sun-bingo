@@ -1,8 +1,21 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { FastBingoStandaloneApp } from './components/FastBingoStandaloneApp';
-import { RegularBingoStandaloneApp } from './components/RegularBingoStandaloneApp';
-import { FastKenoScreen } from './components/FastKenoScreen';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { ModernRaminoGame } from './components/ModernRaminoGame';
+
+const FastBingoStandaloneApp = React.lazy(() =>
+  import('./components/FastBingoStandaloneApp').then((m) => ({
+    default: m.FastBingoStandaloneApp,
+  }))
+);
+const RegularBingoStandaloneApp = React.lazy(() =>
+  import('./components/RegularBingoStandaloneApp').then((m) => ({
+    default: m.RegularBingoStandaloneApp,
+  }))
+);
+const FastKenoScreen = React.lazy(() =>
+  import('./components/FastKenoScreen').then((m) => ({
+    default: m.FastKenoScreen,
+  }))
+);
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AdminPanelView } from './components/AdminPanelView';
 import { RulesAndPatternsModal } from './components/RulesAndPatternsModal';
@@ -75,9 +88,9 @@ type GameKey = 'fast' | 'regular' | 'keno' | 'ramino';
 type GameVisibilityMap = Record<GameKey, { visible: boolean; comingSoon: boolean }>;
 
 const DEFAULT_GAME_VISIBILITY: GameVisibilityMap = {
-  fast: { visible: true, comingSoon: false },
-  regular: { visible: true, comingSoon: false },
-  keno: { visible: true, comingSoon: false },
+  fast: { visible: false, comingSoon: false },
+  regular: { visible: false, comingSoon: false },
+  keno: { visible: false, comingSoon: false },
   ramino: { visible: true, comingSoon: false },
 };
 
@@ -582,7 +595,7 @@ export default function App() {
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [isAdminRulesModalOpen, setIsAdminRulesModalOpen] = useState(false);
   const [adminActivePatternId, setAdminActivePatternId] = useState<number>(1);
-  const [adminControlGame, setAdminControlGame] = useState<'fast' | 'regular' | 'keno' | 'ramino'>('fast');
+  const [adminControlGame, setAdminControlGame] = useState<'fast' | 'regular' | 'keno' | 'ramino'>('ramino');
   const [adminStakeTier, setAdminStakeTier] = useState<10 | 20 | 50 | 100>(10);
   const [adminFastRoomsByStake, setAdminFastRoomsByStake] = useState<Record<number, ServerRoomStatePayload>>({});
   const [adminFastLockedByStake, setAdminFastLockedByStake] = useState<Record<number, ServerLockedCartelaItem[]>>({});
@@ -703,7 +716,7 @@ export default function App() {
     const syncTimer = window.setInterval(() => {
       fetchVisibility();
       fetchHomeAds();
-    }, 4000);
+    }, 30000);
     return () => window.clearInterval(syncTimer);
   }, []);
 
@@ -832,7 +845,7 @@ export default function App() {
     };
   }, []);
 
-  // Active game mode: defaults to 'fast' (Fast Bingo)
+  // Active game mode: defaults to 'ramino' (SUN Ramino)
   const [gameMode, setGameMode] = useState<'fast' | 'regular' | 'keno' | 'ramino'>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -847,7 +860,7 @@ export default function App() {
         return saved as 'fast' | 'regular' | 'keno' | 'ramino';
       }
     }
-    return 'fast';
+    return 'ramino';
   });
 
   const handleSwitchMode = (mode: 'fast' | 'regular' | 'keno' | 'ramino') => {
@@ -1585,7 +1598,7 @@ export default function App() {
       }).catch(() => {});
     };
     sendPresence();
-    const timer = window.setInterval(sendPresence, 8000);
+    const timer = window.setInterval(sendPresence, 25000);
     return () => window.clearInterval(timer);
   }, [isLoggedIn, showGameHub, gameMode, viewMode, currentUserPhone]);
 
@@ -1607,7 +1620,7 @@ export default function App() {
         .catch(() => {});
     };
     fetchCounts();
-    const timer = window.setInterval(fetchCounts, 4000);
+    const timer = window.setInterval(fetchCounts, 15000);
     return () => window.clearInterval(timer);
   }, [isLoggedIn, showGameHub]);
 
@@ -2981,7 +2994,13 @@ export default function App() {
                 }
 
                 return (
-                  <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                  <div
+                    className={
+                      visibleTiles.length === 1
+                        ? 'grid grid-cols-1 max-w-sm mx-auto gap-3 sm:gap-4'
+                        : 'grid grid-cols-2 gap-3 sm:gap-4'
+                    }
+                  >
                     {visibleTiles.map((item) => {
                       const isSoon = Boolean(gameVisibility[item.key]?.comingSoon);
                       const handleTileClick = () => {
@@ -3061,11 +3080,15 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSwitchMode('fast')}
+                  onClick={() =>
+                    handleSwitchMode(gameVisibility.fast?.visible !== false ? 'fast' : 'ramino')
+                  }
                   className="flex flex-col items-center justify-center gap-0.5 py-1 rounded-xl hover:text-amber-300 cursor-pointer transition-colors"
                 >
                   <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
-                  <span className="truncate">{tHub.fastTitle}</span>
+                  <span className="truncate">
+                    {gameVisibility.fast?.visible !== false ? tHub.fastTitle : tHub.raminoTitle}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -3100,93 +3123,117 @@ export default function App() {
         ) : (
           /* 4. LOGGED-IN GAMEPLAY VIEW (Fast Bingo, Regular Bingo, Fast Keno, or Ramino) */
           gameMode === 'fast' ? (
-            <FastBingoStandaloneApp
-              onSwitchToRegularApp={() => handleSwitchMode('regular')}
-              onBackToLobby={handleReturnToHub}
-              language={language}
-              onChangeLanguage={handleUpdateLanguage}
-              sharedUsers={sharedUsers}
-              onUpdateSharedUsers={setSharedUsers}
-              sharedTransactions={sharedTransactions}
-              onUpdateSharedTransactions={setSharedTransactions}
-              isAdminAuthenticated={false}
-              onToggleAdminAuthenticated={setIsAdminAuthenticated}
-              openSettingsTrigger={openSettingsTrigger}
-              isDark={isDark}
-              onToggleTheme={handleToggleTheme}
-              onLogout={handleLogout}
-              onOpenAdminPortal={() => {
-                if (isAdminAuthenticated) {
-                  setViewMode('admin');
-                } else {
-                  setIsAdminModalOpen(true);
-                }
-              }}
-              bankAccounts={bankAccounts}
-              onAddBankAccount={handleAddBankAccount}
-              onUpdateBankAccount={handleUpdateBankAccount}
-              onRemoveBankAccount={handleRemoveBankAccount}
-              heroBanners={heroBanners}
-              onAddHeroBanner={handleAddHeroBanner}
-              onUpdateHeroBanner={handleUpdateHeroBanner}
-              onRemoveHeroBanner={handleRemoveHeroBanner}
-            />
+            <Suspense
+              fallback={
+                <div className="min-h-screen flex items-center justify-center bg-[#06131A] text-amber-300 font-bold text-sm">
+                  Loading...
+                </div>
+              }
+            >
+              <FastBingoStandaloneApp
+                onSwitchToRegularApp={() => handleSwitchMode('regular')}
+                onBackToLobby={handleReturnToHub}
+                language={language}
+                onChangeLanguage={handleUpdateLanguage}
+                sharedUsers={sharedUsers}
+                onUpdateSharedUsers={setSharedUsers}
+                sharedTransactions={sharedTransactions}
+                onUpdateSharedTransactions={setSharedTransactions}
+                isAdminAuthenticated={false}
+                onToggleAdminAuthenticated={setIsAdminAuthenticated}
+                openSettingsTrigger={openSettingsTrigger}
+                isDark={isDark}
+                onToggleTheme={handleToggleTheme}
+                onLogout={handleLogout}
+                onOpenAdminPortal={() => {
+                  if (isAdminAuthenticated) {
+                    setViewMode('admin');
+                  } else {
+                    setIsAdminModalOpen(true);
+                  }
+                }}
+                bankAccounts={bankAccounts}
+                onAddBankAccount={handleAddBankAccount}
+                onUpdateBankAccount={handleUpdateBankAccount}
+                onRemoveBankAccount={handleRemoveBankAccount}
+                heroBanners={heroBanners}
+                onAddHeroBanner={handleAddHeroBanner}
+                onUpdateHeroBanner={handleUpdateHeroBanner}
+                onRemoveHeroBanner={handleRemoveHeroBanner}
+              />
+            </Suspense>
           ) : gameMode === 'regular' ? (
-            <RegularBingoStandaloneApp
-              onSwitchToFastApp={() => handleSwitchMode('fast')}
-              onBackToLobby={handleReturnToHub}
-              language={language}
-              onChangeLanguage={handleUpdateLanguage}
-              sharedUsers={sharedUsers}
-              onUpdateSharedUsers={setSharedUsers}
-              sharedTransactions={sharedTransactions}
-              onUpdateSharedTransactions={setSharedTransactions}
-              isAdminAuthenticated={false}
-              onToggleAdminAuthenticated={setIsAdminAuthenticated}
-              openSettingsTrigger={openSettingsTrigger}
-              isDark={isDark}
-              onToggleTheme={handleToggleTheme}
-              onLogout={handleLogout}
-              onOpenAdminPortal={() => {
-                if (isAdminAuthenticated) {
-                  setViewMode('admin');
-                } else {
-                  setIsAdminModalOpen(true);
-                }
-              }}
-              bankAccounts={bankAccounts}
-              onAddBankAccount={handleAddBankAccount}
-              onUpdateBankAccount={handleUpdateBankAccount}
-              onRemoveBankAccount={handleRemoveBankAccount}
-              heroBanners={heroBanners}
-              onAddHeroBanner={handleAddHeroBanner}
-              onUpdateHeroBanner={handleUpdateHeroBanner}
-              onRemoveHeroBanner={handleRemoveHeroBanner}
-            />
+            <Suspense
+              fallback={
+                <div className="min-h-screen flex items-center justify-center bg-[#06131A] text-amber-300 font-bold text-sm">
+                  Loading...
+                </div>
+              }
+            >
+              <RegularBingoStandaloneApp
+                onSwitchToFastApp={() => handleSwitchMode('fast')}
+                onBackToLobby={handleReturnToHub}
+                language={language}
+                onChangeLanguage={handleUpdateLanguage}
+                sharedUsers={sharedUsers}
+                onUpdateSharedUsers={setSharedUsers}
+                sharedTransactions={sharedTransactions}
+                onUpdateSharedTransactions={setSharedTransactions}
+                isAdminAuthenticated={false}
+                onToggleAdminAuthenticated={setIsAdminAuthenticated}
+                openSettingsTrigger={openSettingsTrigger}
+                isDark={isDark}
+                onToggleTheme={handleToggleTheme}
+                onLogout={handleLogout}
+                onOpenAdminPortal={() => {
+                  if (isAdminAuthenticated) {
+                    setViewMode('admin');
+                  } else {
+                    setIsAdminModalOpen(true);
+                  }
+                }}
+                bankAccounts={bankAccounts}
+                onAddBankAccount={handleAddBankAccount}
+                onUpdateBankAccount={handleUpdateBankAccount}
+                onRemoveBankAccount={handleRemoveBankAccount}
+                heroBanners={heroBanners}
+                onAddHeroBanner={handleAddHeroBanner}
+                onUpdateHeroBanner={handleUpdateHeroBanner}
+                onRemoveHeroBanner={handleRemoveHeroBanner}
+              />
+            </Suspense>
           ) : gameMode === 'keno' ? (
             <div data-scroll-reset="true" className="flex-1 w-full flex flex-col items-center justify-start overflow-y-auto overscroll-y-contain">
               <div className="w-full max-w-2xl min-h-full">
-                <FastKenoScreen
-                  language={language}
-                  onChangeLanguage={handleUpdateLanguage}
-                  initialBalance={sharedUsers[0]?.balance ?? 500}
-                  playerPhone={sharedUsers[0]?.phone}
-                  playerName={sharedUsers[0]?.name}
-                  onOpenWallet={(tab) => openGlobalWallet(tab || 'deposit')}
-                  onBalanceChange={(newBal, reason) => {
-                    const prevBal = sharedUsersRef.current[0]?.balance ?? 0;
-                    const clamped = Math.max(0, newBal);
-                    const delta = Number((clamped - prevBal).toFixed(2));
-                    if (delta !== 0) {
-                      recordGameWalletDelta(
-                        delta,
-                        'keno',
-                        reason || (delta > 0 ? 'Keno payout' : 'Keno wager')
-                      );
-                    }
-                  }}
-                  onBackToLudo={handleReturnToHub}
-                />
+                <Suspense
+                  fallback={
+                    <div className="min-h-screen flex items-center justify-center bg-[#06131A] text-amber-300 font-bold text-sm">
+                      Loading...
+                    </div>
+                  }
+                >
+                  <FastKenoScreen
+                    language={language}
+                    onChangeLanguage={handleUpdateLanguage}
+                    initialBalance={sharedUsers[0]?.balance ?? 500}
+                    playerPhone={sharedUsers[0]?.phone}
+                    playerName={sharedUsers[0]?.name}
+                    onOpenWallet={(tab) => openGlobalWallet(tab || 'deposit')}
+                    onBalanceChange={(newBal, reason) => {
+                      const prevBal = sharedUsersRef.current[0]?.balance ?? 0;
+                      const clamped = Math.max(0, newBal);
+                      const delta = Number((clamped - prevBal).toFixed(2));
+                      if (delta !== 0) {
+                        recordGameWalletDelta(
+                          delta,
+                          'keno',
+                          reason || (delta > 0 ? 'Keno payout' : 'Keno wager')
+                        );
+                      }
+                    }}
+                    onBackToLudo={handleReturnToHub}
+                  />
+                </Suspense>
               </div>
             </div>
           ) : (

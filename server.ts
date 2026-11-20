@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import fs from 'fs';
@@ -15,6 +16,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.use(compression({ threshold: 512 }));
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 app.use(express.text({ type: 'text/plain', limit: '25mb' }));
@@ -806,6 +808,9 @@ function deductLockedStakesOnGameStart(
 
 // High-Precision 100ms Server Loop for Zero-Jitter Ball Calling and Countdown Sync across ALL 4 Fast Bingo Stake Rooms + Regular Room!
 setInterval(() => {
+  if (!persistedGameVisibility.fast?.visible && !persistedGameVisibility.regular?.visible) {
+    return;
+  }
   const now = Date.now();
   const roomEntries: {
     mode: 'fast' | 'regular';
@@ -1197,9 +1202,9 @@ interface PersistedBotData {
 // Persistent Game Visibility State (Admin can hide/show games or mark Soon)
 type GameVisibilityKey = 'fast' | 'regular' | 'keno' | 'ramino';
 let persistedGameVisibility: Record<GameVisibilityKey, { visible: boolean; comingSoon?: boolean }> = {
-  fast: { visible: true, comingSoon: false },
-  regular: { visible: true, comingSoon: false },
-  keno: { visible: true, comingSoon: false },
+  fast: { visible: false, comingSoon: false },
+  regular: { visible: false, comingSoon: false },
+  keno: { visible: false, comingSoon: false },
   ramino: { visible: true, comingSoon: false },
 };
 
@@ -7937,7 +7942,7 @@ function broadcastKenoLiveState() {
 
 function startKenoServerLoop() {
   setInterval(() => {
-    if (kenoAdminConfig.isPaused) {
+    if (!persistedGameVisibility.keno?.visible || kenoAdminConfig.isPaused) {
       kenoLiveState.lastStepAt = Date.now();
       return;
     }
@@ -11849,9 +11854,27 @@ async function startServer() {
   });
 
   if (isProduction && hasBuiltDist) {
-    app.use(express.static(distPath));
+    app.use(
+      '/assets',
+      express.static(path.join(distPath, 'assets'), {
+        maxAge: '365d',
+        immutable: true,
+        etag: true,
+      })
+    );
+    app.use(
+      express.static(distPath, {
+        maxAge: '1h',
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('index.html')) {
+            res.setHeader('Cache-Control', 'no-cache');
+          }
+        },
+      })
+    );
     app.get('*', (_req, res) => {
       const indexPath = path.join(distPath, 'index.html');
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(indexPath);
     });
   } else if (!isProduction) {
