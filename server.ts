@@ -8178,6 +8178,9 @@ interface RaminoTableSession {
     rakeAmount: number;
     winAmount: number;
     bottomCardStr?: string;
+    winnerCards?: RaminoCard[];
+    winnerGroups?: { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[];
+    winnerClosingCard?: RaminoCard | null;
   } | null;
   postDayRequest: {
     requestedById: string;
@@ -8716,6 +8719,166 @@ function srvPartitionCollapsedFourSuitSets(melds: RaminoMeldGroup[], currentSeq:
   return { remainingMelds, badgesToAdd };
 }
 
+function srvBuildDopeyShowcaseGroups(
+  cards13: RaminoCard[]
+): { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[] {
+  if (cards13.length !== 13) {
+    return cards13.length > 0 ? [{ label: 'meld', cards: [...cards13] }] : [];
+  }
+  for (let i = 0; i < 11; i++) {
+    for (let j = i + 1; j < 12; j++) {
+      for (let k = j + 1; k < 13; k++) {
+        const triple = [cards13[i], cards13[j], cards13[k]];
+        const natCount = triple.filter((c) => !c.isJoker && c.rank !== 'JOKER').length;
+        if (natCount < 2 || !srvIsValidSet(triple)) continue;
+        const rem10: RaminoCard[] = [];
+        for (let m = 0; m < 13; m++) {
+          if (m !== i && m !== j && m !== k) rem10.push(cards13[m]);
+        }
+        if (!srvCanFormFivePairs(rem10, false)) continue;
+
+        const pairs: { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[] = [
+          { label: 'tris', cards: triple },
+        ];
+        const naturalsByKey = new Map<string, RaminoCard[]>();
+        const jokers: RaminoCard[] = [];
+        for (const c of rem10) {
+          if (c.isJoker || c.rank === 'JOKER') {
+            jokers.push(c);
+          } else {
+            const key = `${c.rank}|${c.suit}`;
+            const list = naturalsByKey.get(key) || [];
+            list.push(c);
+            naturalsByKey.set(key, list);
+          }
+        }
+        const singles: RaminoCard[] = [];
+        for (const list of naturalsByKey.values()) {
+          while (list.length >= 2) {
+            pairs.push({ label: 'pair', cards: [list.shift()!, list.shift()!] });
+          }
+          if (list.length === 1) singles.push(list[0]);
+        }
+        for (const s of singles) {
+          if (jokers.length > 0) pairs.push({ label: 'pair', cards: [s, jokers.shift()!] });
+        }
+        while (jokers.length >= 2) {
+          pairs.push({ label: 'pair', cards: [jokers.shift()!, jokers.shift()!] });
+        }
+        return pairs;
+      }
+    }
+  }
+  return [{ label: 'meld', cards: [...cards13] }];
+}
+
+function srvExtractWinnerShowcaseGroups(
+  session: RaminoTableSession,
+  winner: RaminoTablePlayer,
+  titleKey: string,
+  closingCard?: RaminoCard | null
+): {
+  winnerCards: RaminoCard[];
+  winnerGroups: { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[];
+  winnerClosingCard: RaminoCard | null;
+} {
+  if (
+    titleKey === 'dopey' ||
+    titleKey === 'dopey_joker' ||
+    titleKey === 'bottom_dopey' ||
+    titleKey === 'bottom_dopey_joker'
+  ) {
+    let cards13 = [...winner.hand];
+    if ((titleKey === 'bottom_dopey' || titleKey === 'bottom_dopey_joker') && closingCard) {
+      if (winner.hand.length === 12) {
+        cards13 = [...winner.hand, closingCard];
+      } else if (winner.hand.length === 13) {
+        const dropIdx = winner.hand.findIndex((_, idx) =>
+          srvIsExact13CardDopey([...winner.hand.filter((__, i) => i !== idx), closingCard], false)
+        );
+        if (dropIdx !== -1) {
+          cards13 = [...winner.hand.filter((__, i) => i !== dropIdx), closingCard];
+        }
+      }
+    } else if (cards13.length === 14) {
+      const dropIdx = cards13.findIndex((_, idx) =>
+        srvIsExact13CardDopey(cards13.filter((__, i) => i !== idx), false)
+      );
+      if (dropIdx !== -1) cards13 = cards13.filter((__, i) => i !== dropIdx);
+    }
+    const groups = srvBuildDopeyShowcaseGroups(cards13);
+    return {
+      winnerCards: cards13,
+      winnerGroups: groups,
+      winnerClosingCard: closingCard || null,
+    };
+  }
+
+  if (titleKey === 'bottom_normal' && closingCard) {
+    let meldPool = [...winner.hand, closingCard];
+    const directPart = srvPartitionValidMelds(meldPool);
+    if (directPart.remaining.length > 0 && winner.hand.length >= 12) {
+      const foundDrop = winner.hand.findIndex((_, dropIdx) => {
+        const sub = [...winner.hand.filter((__, i) => i !== dropIdx), closingCard];
+        const p = srvPartitionValidMelds(sub);
+        return p.remaining.length === 0 && p.melds.length > 0 && p.totalPoints >= 41;
+      });
+      if (foundDrop !== -1) {
+        meldPool = [...winner.hand.filter((__, i) => i !== foundDrop), closingCard];
+      }
+    }
+    const part = srvPartitionValidMelds(meldPool);
+    const groups: { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[] =
+      part.melds.length > 0
+        ? part.melds.map((m) => ({
+            label: m.type === 'run' ? 'catris' : 'tris',
+            cards: m.type === 'run' ? srvNormalizeRunCardsOrder(m.cards, false) : m.cards,
+          }))
+        : [{ label: 'meld', cards: meldPool }];
+    return {
+      winnerCards: meldPool,
+      winnerGroups: groups,
+      winnerClosingCard: closingCard,
+    };
+  }
+
+  // Normal / Joker Finish / Streak finish: gather winner's melds & collapsed 4-suit sets on table
+  const groups: { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[] = [];
+  for (const b of session.closedSetBadges) {
+    if (b.ownerId !== winner.id) continue;
+    groups.push({
+      label: 'tris',
+      cards: RAMINO_SUITS.map((s, idx) => ({
+        id: `closed_vis_${b.id}_${idx}`,
+        rank: b.rank,
+        suit: s.symbol,
+        suitName: s.name,
+        color: s.color,
+        value: 0,
+        points: 0,
+        isJoker: false,
+      })),
+    });
+  }
+  for (const m of session.tableMelds) {
+    if (m.ownerId !== winner.id) continue;
+    groups.push({
+      label: m.type === 'run' ? 'catris' : 'tris',
+      cards: [...m.cards],
+    });
+  }
+  const collectedCards = groups.flatMap((g) => g.cards);
+  if (groups.length === 0 && winner.hand.length > 0) {
+    groups.push({ label: 'meld', cards: [...winner.hand] });
+    collectedCards.push(...winner.hand);
+  }
+  return {
+    winnerCards: collectedCards,
+    winnerGroups: groups,
+    winnerClosingCard: closingCard || null,
+  };
+}
+
 const raminoPrivateRooms = new Map<string, RaminoPrivateRoomRecord>();
 const raminoPublicRooms = new Map<string, RaminoPublicRoomRecord>();
 const raminoTables = new Map<string, RaminoTableSession>();
@@ -9246,7 +9409,8 @@ function finishServerRaminoRound(
     | 'bottom_dopey_joker'
     | 'bottom_dopey'
     | 'bottom_normal',
-  bottomCardStr?: string
+  bottomCardStr?: string,
+  closingCard?: RaminoCard | null
 ) {
   const prevWinnerStreak = winner.winStreak;
   for (const p of session.players) {
@@ -9337,6 +9501,8 @@ function finishServerRaminoRound(
     }
   }
 
+  const showcase = srvExtractWinnerShowcaseGroups(session, winner, resolvedTitleKey, closingCard);
+
   session.ceremonyDealerId = winner.id;
   session.ceremonyDealerName = winner.name;
   session.phase = 'finished';
@@ -9355,6 +9521,9 @@ function finishServerRaminoRound(
     rakeAmount: rake,
     winAmount,
     bottomCardStr,
+    winnerCards: showcase.winnerCards,
+    winnerGroups: showcase.winnerGroups,
+    winnerClosingCard: showcase.winnerClosingCard,
   };
   session.lastEvent = {
     id: ++raminoEventSeq,
@@ -9743,7 +9912,7 @@ function handleServerRaminoAction(
         ? 'bottom_dopey_joker'
         : 'bottom_dopey'
       : 'bottom_normal';
-    finishServerRaminoRound(session, me, mult, titleKey, `${bc.rank}${bc.suit}`);
+    finishServerRaminoRound(session, me, mult, titleKey, `${bc.rank}${bc.suit}`, bc);
     return { ok: true };
   }
 
@@ -9751,8 +9920,32 @@ function handleServerRaminoAction(
     if (me.hasMelded) return { ok: false, error: 'ቀድመው ወርደዋል።' };
     const dopey = srvCheckDopey(me.hand, undefined, allowSameRankDopey);
     if (!dopey.isDopey) return { ok: false, error: 'ዶፔይ ገና አልተሟላም!' };
+    let closingCard: RaminoCard | null = null;
+    if (me.hand.length === 14) {
+      const dropIdx = dopey.isJokerFinished
+        ? me.hand.findIndex(
+            (c, idx) =>
+              (c.isJoker || c.rank === 'JOKER') &&
+              srvIsExact13CardDopey(me.hand.filter((_, i) => i !== idx), allowSameRankDopey)
+          )
+        : me.hand.findIndex((_, idx) =>
+            srvIsExact13CardDopey(me.hand.filter((_, i) => i !== idx), allowSameRankDopey)
+          );
+      if (dropIdx !== -1) {
+        const [dropped] = me.hand.splice(dropIdx, 1);
+        closingCard = dropped;
+        session.discardPile.push(dropped);
+      }
+    }
     const mult = dopey.isJokerFinished ? 3 : 2;
-    finishServerRaminoRound(session, me, mult, dopey.isJokerFinished ? 'dopey_joker' : 'dopey');
+    finishServerRaminoRound(
+      session,
+      me,
+      mult,
+      dopey.isJokerFinished ? 'dopey_joker' : 'dopey',
+      undefined,
+      closingCard
+    );
     return { ok: true };
   }
 
@@ -9920,11 +10113,13 @@ function handleServerRaminoAction(
     const nextHand = me.hand.filter((c) => c.id !== cardId);
     const closesDopey = !me.hasMelded && nextHand.length === 13 && srvIsExact13CardDopey(nextHand, allowSameRankDopey);
 
-    if (!me.hasMelded && session.drawnFromDiscardCardId !== null && !closesDopey && nextHand.length > 0) {
+    const isJoker = cardToDiscard.isJoker || cardToDiscard.rank === 'JOKER';
+    const closesDopeyWithJoker = closesDopey && isJoker;
+
+    if (!me.hasMelded && session.drawnFromDiscardCardId !== null && !closesDopeyWithJoker && nextHand.length > 0) {
       return { ok: false, error: 'ከተጣለ ካርታ ስለወሰዱ ግድ መውረድ ወይም "መልስ" መጫን አለብዎት!' };
     }
 
-    const isJoker = cardToDiscard.isJoker || cardToDiscard.rank === 'JOKER';
     const isLastCard = me.hand.length === 1;
     const allMatch = me.hand.every((c) => srvDoesCardMatchTableMelds(c, session.tableMelds));
     const matchesTable = srvDoesCardMatchTableMelds(cardToDiscard, session.tableMelds);
@@ -9938,23 +10133,21 @@ function handleServerRaminoAction(
     session.hasDrawn = false;
     session.drawnFromDiscardCardId = null;
 
-    if (nextHand.length === 0 || closesDopey) {
-      if (closesDopey) {
-        const dopey = srvCheckDopey(nextHand, cardToDiscard, allowSameRankDopey);
-        const mult = dopey.isJokerFinished ? 3 : 2;
-        finishServerRaminoRound(
-          session,
-          me,
-          mult,
-          dopey.isJokerFinished ? 'dopey_joker' : 'dopey'
-        );
+    // IMPORTANT: Discarding a normal (non-Joker) card while holding 13-card Dopey (5 pairs + 1 Tris)
+    // does NOT auto-end the round — it lets the player stay on 5 pairs + 1 Tris and wait for a Joker to win Golden (3x)!
+    // Only Joker discard closing Dopey (3x), emptying hand (0 cards), or explicit "dopey_win" ends the round.
+    if (nextHand.length === 0 || closesDopeyWithJoker) {
+      if (closesDopeyWithJoker) {
+        finishServerRaminoRound(session, me, 3, 'dopey_joker', undefined, cardToDiscard);
       } else {
         const isJokerFinish = Boolean(cardToDiscard.isJoker || cardToDiscard.rank === 'JOKER');
         finishServerRaminoRound(
           session,
           me,
           isJokerFinish ? 2 : 1,
-          isJokerFinish ? 'joker_finish' : 'normal'
+          isJokerFinish ? 'joker_finish' : 'normal',
+          undefined,
+          cardToDiscard
         );
       }
       return { ok: true };

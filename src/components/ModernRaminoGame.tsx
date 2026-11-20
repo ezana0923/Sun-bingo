@@ -637,7 +637,7 @@ function partitionValidMelds(cards: PlayingCard[]): {
 // Detect contiguous formed groups inside playerHand (used for visual highlight & whole-group tap elevation)
 interface ContiguousGroupInfo {
   groupId: string;
-  type: 'set' | 'run';
+  type: 'set' | 'run' | 'pair';
   cardIds: string[];
   colorClass: string;
   label: string;
@@ -649,14 +649,15 @@ function detectContiguousGroupsInHand(hand: PlayingCard[]): {
 } {
   const cardToGroupMap = new Map<string, ContiguousGroupInfo>();
   const firstCardOfGroupMap = new Map<string, { info: ContiguousGroupInfo; span: number }>();
+  const claimed = new Array<boolean>(hand.length).fill(false);
 
+  // Pass 1: Detect contiguous Sets (ትሪስ) & Runs (ካትሪስ) of length >= 3
   let i = 0;
   let gIdx = 0;
   while (i < hand.length) {
     let matchedLen = 0;
     let matchedType: 'set' | 'run' = 'set';
 
-    // Try longest window first (5 down to 3)
     for (let len = Math.min(6, hand.length - i); len >= 3; len--) {
       const slice = hand.slice(i, i + len);
       if (len <= 4 && isValidSet(slice)) {
@@ -686,6 +687,7 @@ function detectContiguousGroupsInHand(hand: PlayingCard[]): {
             : 'border-t-cyan-400 shadow-[0_-4px_12px_rgba(34,211,238,0.65)]',
         label: matchedType === 'run' ? 'ካትሪስ' : 'ትሪስ',
       };
+      for (let k = i; k < i + matchedLen; k++) claimed[k] = true;
       slice.forEach((c) => cardToGroupMap.set(c.id, info));
       firstCardOfGroupMap.set(slice[0].id, { info, span: matchedLen });
       gIdx++;
@@ -693,6 +695,40 @@ function detectContiguousGroupsInHand(hand: PlayingCard[]): {
     } else {
       i++;
     }
+  }
+
+  // Pass 2: Detect contiguous identical 2-card Pairs (ጥንድ) among unclaimed adjacent cards
+  let p = 0;
+  let pIdx = 0;
+  while (p < hand.length - 1) {
+    if (!claimed[p] && !claimed[p + 1]) {
+      const a = hand[p];
+      const b = hand[p + 1];
+      const isIdenticalPair =
+        (!a.isJoker && !b.isJoker && a.rank === b.rank && a.suit === b.suit) ||
+        (Boolean(a.isJoker) && Boolean(b.isJoker));
+      if (isIdenticalPair) {
+        const isPairEven = pIdx % 2 === 0;
+        const info: ContiguousGroupInfo = {
+          groupId: `pair_${p}`,
+          type: 'pair',
+          cardIds: [a.id, b.id],
+          colorClass: isPairEven
+            ? 'border-t-fuchsia-400 shadow-[0_-4px_12px_rgba(232,121,249,0.65)]'
+            : 'border-t-amber-400 shadow-[0_-4px_12px_rgba(251,191,36,0.65)]',
+          label: 'ጥንድ',
+        };
+        claimed[p] = true;
+        claimed[p + 1] = true;
+        cardToGroupMap.set(a.id, info);
+        cardToGroupMap.set(b.id, info);
+        firstCardOfGroupMap.set(a.id, { info, span: 2 });
+        pIdx++;
+        p += 2;
+        continue;
+      }
+    }
+    p++;
   }
 
   return { cardToGroupMap, firstCardOfGroupMap };
@@ -776,6 +812,174 @@ function checkDopey(
     isExact13CardDopey(hand.filter((__, idx) => idx !== dropIdx), allowSameRankPairs)
   );
   return { isDopey: anyDropCloses, isJokerFinished: false };
+}
+
+type WinnerShowcaseGroup = {
+  label: 'tris' | 'catris' | 'pair' | 'meld';
+  cards: PlayingCard[];
+};
+
+function buildDopeyShowcaseGroups(cards13: PlayingCard[]): WinnerShowcaseGroup[] {
+  if (cards13.length !== 13) {
+    return cards13.length > 0 ? [{ label: 'meld', cards: [...cards13] }] : [];
+  }
+  for (let i = 0; i < 11; i++) {
+    for (let j = i + 1; j < 12; j++) {
+      for (let k = j + 1; k < 13; k++) {
+        const triple = [cards13[i], cards13[j], cards13[k]];
+        const natCount = triple.filter((c) => !c.isJoker && c.rank !== 'JOKER').length;
+        if (natCount < 2 || !isValidSet(triple)) continue;
+        const rem10: PlayingCard[] = [];
+        for (let m = 0; m < 13; m++) {
+          if (m !== i && m !== j && m !== k) rem10.push(cards13[m]);
+        }
+        if (!canFormFivePairs(rem10, false)) continue;
+
+        const out: WinnerShowcaseGroup[] = [{ label: 'tris', cards: triple }];
+        const byKey = new Map<string, PlayingCard[]>();
+        const jokers: PlayingCard[] = [];
+        for (const c of rem10) {
+          if (c.isJoker || c.rank === 'JOKER') {
+            jokers.push(c);
+          } else {
+            const key = `${c.rank}|${c.suit}`;
+            const list = byKey.get(key) || [];
+            list.push(c);
+            byKey.set(key, list);
+          }
+        }
+        const singles: PlayingCard[] = [];
+        for (const list of byKey.values()) {
+          while (list.length >= 2) {
+            out.push({ label: 'pair', cards: [list.shift()!, list.shift()!] });
+          }
+          if (list.length === 1) singles.push(list[0]);
+        }
+        for (const s of singles) {
+          if (jokers.length > 0) out.push({ label: 'pair', cards: [s, jokers.shift()!] });
+        }
+        while (jokers.length >= 2) {
+          out.push({ label: 'pair', cards: [jokers.shift()!, jokers.shift()!] });
+        }
+        return out;
+      }
+    }
+  }
+  return [{ label: 'meld', cards: [...cards13] }];
+}
+
+function extractLocalWinnerShowcaseGroups({
+  winnerId,
+  winnerHand,
+  tableMelds,
+  closedSetBadges,
+  finishMode,
+  closingCard,
+}: {
+  winnerId: string;
+  winnerHand: PlayingCard[];
+  tableMelds: MeldGroup[];
+  closedSetBadges: ClosedSetBadge[];
+  finishMode: string;
+  closingCard?: PlayingCard | null;
+}): {
+  winnerCards: PlayingCard[];
+  winnerGroups: WinnerShowcaseGroup[];
+  winnerClosingCard: PlayingCard | null;
+} {
+  if (
+    finishMode === 'dopey' ||
+    finishMode === 'dopey_joker' ||
+    finishMode === 'bottom_dopey' ||
+    finishMode === 'bottom_dopey_joker'
+  ) {
+    let cards13 = [...winnerHand];
+    if ((finishMode === 'bottom_dopey' || finishMode === 'bottom_dopey_joker') && closingCard) {
+      if (winnerHand.length === 12) {
+        cards13 = [...winnerHand, closingCard];
+      } else if (winnerHand.length === 13) {
+        const dropIdx = winnerHand.findIndex((_, idx) =>
+          isExact13CardDopey([...winnerHand.filter((__, i) => i !== idx), closingCard], false)
+        );
+        if (dropIdx !== -1) {
+          cards13 = [...winnerHand.filter((__, i) => i !== dropIdx), closingCard];
+        }
+      }
+    } else if (cards13.length === 14) {
+      const dropIdx = cards13.findIndex((_, idx) =>
+        isExact13CardDopey(cards13.filter((__, i) => i !== idx), false)
+      );
+      if (dropIdx !== -1) cards13 = cards13.filter((__, i) => i !== dropIdx);
+    }
+    return {
+      winnerCards: cards13,
+      winnerGroups: buildDopeyShowcaseGroups(cards13),
+      winnerClosingCard: closingCard || null,
+    };
+  }
+
+  if (finishMode === 'bottom_normal' && closingCard) {
+    let meldPool = [...winnerHand, closingCard];
+    const directPart = partitionValidMelds(meldPool);
+    if (directPart.remaining.length > 0 && winnerHand.length >= 12) {
+      const foundDrop = winnerHand.findIndex((_, dropIdx) => {
+        const sub = [...winnerHand.filter((__, i) => i !== dropIdx), closingCard];
+        const p = partitionValidMelds(sub);
+        return p.remaining.length === 0 && p.melds.length > 0 && p.totalPoints >= 41;
+      });
+      if (foundDrop !== -1) {
+        meldPool = [...winnerHand.filter((__, i) => i !== foundDrop), closingCard];
+      }
+    }
+    const part = partitionValidMelds(meldPool);
+    const groups: WinnerShowcaseGroup[] =
+      part.melds.length > 0
+        ? part.melds.map((m) => ({
+            label: m.type === 'run' ? 'catris' : 'tris',
+            cards: m.type === 'run' ? normalizeRunCardsOrder(m.cards, false) : m.cards,
+          }))
+        : [{ label: 'meld', cards: meldPool }];
+    return {
+      winnerCards: meldPool,
+      winnerGroups: groups,
+      winnerClosingCard: closingCard,
+    };
+  }
+
+  const groups: WinnerShowcaseGroup[] = [];
+  for (const b of closedSetBadges) {
+    if (b.ownerId !== winnerId) continue;
+    groups.push({
+      label: 'tris',
+      cards: SUITS.map((s, idx) => ({
+        id: `closed_vis_${b.id}_${idx}`,
+        rank: b.rank,
+        suit: s.symbol,
+        suitName: s.name,
+        color: s.color,
+        value: 0,
+        points: 0,
+        isJoker: false,
+      })),
+    });
+  }
+  for (const m of tableMelds) {
+    if (m.ownerId !== winnerId) continue;
+    groups.push({
+      label: m.type === 'run' ? 'catris' : 'tris',
+      cards: [...m.cards],
+    });
+  }
+  const collected = groups.flatMap((g) => g.cards);
+  if (groups.length === 0 && winnerHand.length > 0) {
+    groups.push({ label: 'meld', cards: [...winnerHand] });
+    collected.push(...winnerHand);
+  }
+  return {
+    winnerCards: collected,
+    winnerGroups: groups,
+    winnerClosingCard: closingCard || null,
+  };
 }
 
 // Check if a card matches any existing table melds (Illegal Discard Rule)
@@ -1275,6 +1479,15 @@ const RAMINO_T: Record<Language, any> = {
     shareTelegramLabel: 'በቴሌግራም ላክ',
     shareWhatsappLabel: 'በዋትስአፕ ላክ',
     inviteTextHeader: '🎮 የ SUN ራሚኖ የግል ክፍል ግብዣ!',
+    notifyDopeyHoldGolden: '✨ 5 ጥንድ + 1 ትሪስ ይዘዋል! ጆከር ሲመጣ በጎልደን (3x) መዝጋት ወይም ተራዎ ሲደርስ "ዶፔይ" መዝጋት ይችላሉ።',
+    winnerCardsHeader: '🃏 የአሸናፊው ካርታዎች',
+    winnerCardsTrustNote: 'ለሁሉም ተጫዋቾች ታማኝነት በጠረጴዛው ላይ ታይቷል',
+    winnerGroupPair: 'ጥንድ',
+    winnerGroupTris: 'ትሪስ',
+    winnerGroupCatris: 'ካትሪስ',
+    winnerGroupClosing: 'መዝጊያ',
+    viewTableCardsBtn: '👁️ ጠረጴዛው ላይ እይ',
+    openWinSummaryBtn: '🏆 ውጤት ክፈት',
   },
   ti: {
     brandTitle: 'SUN ራሚኖ',
@@ -1545,6 +1758,15 @@ const RAMINO_T: Record<Language, any> = {
     shareTelegramLabel: 'ብቴሌግራም ስደድ',
     shareWhatsappLabel: 'ብዋትስኣፕ ስደድ',
     inviteTextHeader: '🎮 ብሕታዊ ክፍሊ SUN ራሚኖ ዕድመ!',
+    notifyDopeyHoldGolden: '✨ 5 ጽምዲ + 1 ትሪስ ሒዝኩም ኣለኹም! ጆከር ምስ መጸ ብጎልደን (3x) ወይ ብተራኹም "ዶፔይ" ክትዓጽዉ ትኽእሉ።',
+    winnerCardsHeader: '🃏 ካርታታት ተዓዋቲ',
+    winnerCardsTrustNote: 'ንተጻወትቲ ተኣማንነት ኣብ ጠረጴዛ ቀሪቡ ኣሎ',
+    winnerGroupPair: 'ጽምዲ',
+    winnerGroupTris: 'ትሪስ',
+    winnerGroupCatris: 'ካትሪስ',
+    winnerGroupClosing: 'መዕጸዊ',
+    viewTableCardsBtn: '👁️ ኣብ ጠረጴዛ ርአ',
+    openWinSummaryBtn: '🏆 ውጽኢት ክፈት',
   },
   om: {
     brandTitle: 'SUN Raaminoo',
@@ -1815,6 +2037,15 @@ const RAMINO_T: Record<Language, any> = {
     shareTelegramLabel: 'Telegram dhaan Ergi',
     shareWhatsappLabel: 'WhatsApp dhaan Ergi',
     inviteTextHeader: '🎮 Afeerraa Kutaa Dhuunfaa SUN Raaminoo!',
+    notifyDopeyHoldGolden: '✨ Cimdii 5 + Tiriisii 1 qabatteetta! Jookera (Golden 3x) eeggachuu ykn dabaree keetti "Dooppey" cufuu dandeessa.',
+    winnerCardsHeader: '🃏 Kaardiiwwan Injifataa',
+    winnerCardsTrustNote: 'Amantaa taphattootaaf gabatee irratti mul\'ateera',
+    winnerGroupPair: 'Cimdii',
+    winnerGroupTris: 'Tiriisii',
+    winnerGroupCatris: 'Kaatriisii',
+    winnerGroupClosing: 'Cufaa',
+    viewTableCardsBtn: '👁️ Gabatee Ilaali',
+    openWinSummaryBtn: '🏆 Bu\'aa Bani',
   },
   en: {
     brandTitle: 'SUN Ramino',
@@ -2085,6 +2316,15 @@ const RAMINO_T: Record<Language, any> = {
     shareTelegramLabel: 'Send via Telegram',
     shareWhatsappLabel: 'Send via WhatsApp',
     inviteTextHeader: '🎮 SUN Ramino Private Table Invite!',
+    notifyDopeyHoldGolden: '✨ Holding 5 Pairs + 1 Set! You can draw for Golden (3x) or tap Dopey anytime on your turn.',
+    winnerCardsHeader: '🃏 Winner\'s Revealed Cards',
+    winnerCardsTrustNote: 'Shown on the table for full player fairness & trust',
+    winnerGroupPair: 'Pair',
+    winnerGroupTris: 'Set',
+    winnerGroupCatris: 'Run',
+    winnerGroupClosing: 'Close',
+    viewTableCardsBtn: '👁️ View on Table',
+    openWinSummaryBtn: '🏆 Show Summary',
   },
 };
 
@@ -3186,7 +3426,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     winAmount: number;
     rakeAmount: number;
     lostPenalty?: number;
+    winnerCards?: PlayingCard[];
+    winnerGroups?: WinnerShowcaseGroup[];
+    winnerClosingCard?: PlayingCard | null;
   } | null>(null);
+  const [isWinnerModalMinimized, setIsWinnerModalMinimized] = useState<boolean>(false);
 
   // Temporary Exit & Rejoin Before Expiry State (supports both Multiplayer Server Tables & Solo/Bot Games)
   interface SuspendedLocalRaminoSnapshot {
@@ -3408,7 +3652,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     const nextMelds = Array.isArray(tbl.tableMelds) ? tbl.tableMelds : [];
     tableMeldsRef.current = nextMelds;
     setTableMelds(nextMelds);
-    if (Array.isArray(tbl.closedSetBadges)) setClosedSetBadges(tbl.closedSetBadges);
+    if (Array.isArray(tbl.closedSetBadges)) {
+      closedSetBadgesRef.current = tbl.closedSetBadges;
+      setClosedSetBadges(tbl.closedSetBadges);
+    }
 
     const nextOpps = Array.isArray(tbl.opponents) ? tbl.opponents : [];
     opponentsRef.current = nextOpps;
@@ -3513,10 +3760,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         winAmount: isMe ? Number(wc.winAmount || 0) : 0,
         rakeAmount: Number(wc.rakeAmount || 0),
         lostPenalty: appliedPenalty,
+        winnerCards: Array.isArray(wc.winnerCards) ? wc.winnerCards : [],
+        winnerGroups: Array.isArray(wc.winnerGroups) ? wc.winnerGroups : [],
+        winnerClosingCard: wc.winnerClosingCard || null,
       });
 
       if (wc.roundKey && creditedRoundKeyRef.current !== wc.roundKey) {
         creditedRoundKeyRef.current = wc.roundKey;
+        setIsWinnerModalMinimized(false);
         if (isMe) {
           raminoAudio.playVictory();
           adjustWalletBalance(Number(wc.winAmount || 0), `Ramino Win (${totalMult}x)`);
@@ -3533,6 +3784,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         }
       }
     } else {
+      setIsWinnerModalMinimized(false);
       setWinnerCelebration(null);
     }
 
@@ -4348,6 +4600,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   opponentsRef.current = opponents;
   const tableMeldsRef = useRef<MeldGroup[]>(tableMelds);
   tableMeldsRef.current = tableMelds;
+  const closedSetBadgesRef = useRef<ClosedSetBadge[]>(closedSetBadges);
+  closedSetBadgesRef.current = closedSetBadges;
   const meldTurnCounterRef = useRef<number>(meldTurnCounter);
   meldTurnCounterRef.current = meldTurnCounter;
   const hasDrawnRef = useRef<boolean>(hasDrawn);
@@ -4491,6 +4745,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     setTableMelds([]);
     tableMeldsRef.current = [];
     setClosedSetBadges([]);
+    closedSetBadgesRef.current = [];
     setMeldTurnCounter(0);
     meldTurnCounterRef.current = 0;
 
@@ -4502,6 +4757,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     setHasDiscarded(false);
     setTurnSeconds(120); // 90s thinking + 30s warning
     setIsBannedModalOpen(false);
+    setIsWinnerModalMinimized(false);
     setWinnerCelebration(null);
     setView('game');
     raminoAudio.playDraw();
@@ -4703,11 +4959,19 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         ));
     const isBottomJoker = Boolean(bottomCard.isJoker || bottomCard.rank === 'JOKER');
     const dopeyMult = isDopeyViaBottom ? (isBottomJoker ? 3 : 2) : 1;
+    const bottomMode: 'bottom_dopey_joker' | 'bottom_dopey' | 'bottom_normal' = isDopeyViaBottom
+      ? isBottomJoker
+        ? 'bottom_dopey_joker'
+        : 'bottom_dopey'
+      : 'bottom_normal';
     triggerRoundWin({
       winnerId: 'self',
       winnerName: playerName,
       dopeyMultiplier: dopeyMult,
       jokerFinish: isBottomJoker,
+      customFinishMode: bottomMode,
+      winnerCards: playerHand,
+      closingCard: bottomCard,
       customTitle: isDopeyViaBottom && isBottomJoker
         ? t.winBottomJokerDopey(bottomCard.suit)
         : isDopeyViaBottom
@@ -5312,7 +5576,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     raminoAudio.playVictory();
     setTableMelds(updatedTableMelds);
     if (badgesToAdd.length > 0) {
-      setClosedSetBadges((prev) => [...prev, ...badgesToAdd]);
+      const nextBadges = [...closedSetBadgesRef.current, ...badgesToAdd];
+      closedSetBadgesRef.current = nextBadges;
+      setClosedSetBadges(nextBadges);
     }
     setPlayerHand(nextHand);
     setSelectedCardIds(new Set());
@@ -5370,12 +5636,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
         raminoAudio.playCardSnap();
         const nextHand = playerHand.filter((c) => c.id !== selId);
+        const nextTableMelds = tableMeldsRef.current.map((m) =>
+          m.id === meldId ? { ...m, cards: updatedCards! } : m
+        );
+        tableMeldsRef.current = nextTableMelds;
         setPlayerHand(nextHand);
         setSelectedCardIds(new Set());
         setDrawnFromDiscardCard(null);
-        setTableMelds((prev) =>
-          prev.map((m) => (m.id === meldId ? { ...m, cards: updatedCards! } : m))
-        );
+        setTableMelds(nextTableMelds);
         triggerNotification(t.notifyJokerLaidOff);
         if (nextHand.length === 0) handleFinalWinCheck(nextHand);
         return;
@@ -5399,17 +5667,17 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             return;
           }
           raminoAudio.playSwap();
+          const nextTableMelds = tableMeldsRef.current.map((m) => {
+            if (m.id !== meldId) return m;
+            const updated = [...m.cards];
+            updated[cardIdx] = selCard;
+            return { ...m, cards: updated };
+          });
+          tableMeldsRef.current = nextTableMelds;
           setPlayerHand((prev) => prev.map((c) => (c.id === selId ? targetCard : c)));
           setSelectedCardIds(new Set());
           setDrawnFromDiscardCard(null);
-          setTableMelds((prev) =>
-            prev.map((m) => {
-              if (m.id !== meldId) return m;
-              const updated = [...m.cards];
-              updated[cardIdx] = selCard;
-              return { ...m, cards: updated };
-            })
-          );
+          setTableMelds(nextTableMelds);
           triggerNotification(t.notifyJokerSwapped);
           return;
         }
@@ -5439,12 +5707,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
       raminoAudio.playCardSnap();
       const nextHand = playerHand.filter((c) => c.id !== selId);
+      const nextTableMelds = tableMeldsRef.current.map((m) =>
+        m.id === meldId ? { ...m, cards: combined! } : m
+      );
+      tableMeldsRef.current = nextTableMelds;
       setPlayerHand(nextHand);
       setSelectedCardIds(new Set());
       setDrawnFromDiscardCard(null);
-      setTableMelds((prev) =>
-        prev.map((m) => (m.id === meldId ? { ...m, cards: combined! } : m))
-      );
+      setTableMelds(nextTableMelds);
       triggerNotification(t.notifyCardLaidOff(`${selCard.rank}${selCard.suit}`));
       if (nextHand.length === 0) handleFinalWinCheck(nextHand);
       return;
@@ -5503,14 +5773,29 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     dopeyMultiplier,
     jokerFinish = false,
     customTitle,
+    customFinishMode,
+    winnerCards = [],
+    closingCard = null,
   }: {
     winnerId: string;
     winnerName: string;
     dopeyMultiplier: number;
     jokerFinish?: boolean;
     customTitle?: string;
+    customFinishMode?:
+      | 'normal'
+      | 'joker_finish'
+      | 'streak_joker'
+      | 'dopey'
+      | 'dopey_joker'
+      | 'bottom_normal'
+      | 'bottom_dopey'
+      | 'bottom_dopey_joker';
+    winnerCards?: PlayingCard[];
+    closingCard?: PlayingCard | null;
   }) => {
     clearLocalSuspendedGame();
+    setIsWinnerModalMinimized(false);
     const pot = selectedStake * playerSeatCount;
     const rake = pot * 0.1;
 
@@ -5533,7 +5818,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         | 'joker_finish'
         | 'streak_joker'
         | 'dopey'
-        | 'dopey_joker' = 'normal';
+        | 'dopey_joker'
+        | 'bottom_normal'
+        | 'bottom_dopey'
+        | 'bottom_dopey_joker' = 'normal';
       let resolvedDopeyMult = 1;
       let resolvedStreakMult = 1;
       let resolvedTitle = t.winTitleNormal;
@@ -5541,12 +5829,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       if (isDopeyWin && isJoker) {
         totalMultiplier = 3;
         resolvedDopeyMult = 3;
-        finishMode = 'dopey_joker';
+        finishMode = customFinishMode || 'dopey_joker';
         resolvedTitle = t.winTitleDopeyJoker;
       } else if (isDopeyWin) {
         totalMultiplier = 2;
         resolvedDopeyMult = 2;
-        finishMode = 'dopey';
+        finishMode = customFinishMode || 'dopey';
         resolvedTitle = t.winTitleDopey;
       } else if (isThreePlusStreak && isJoker) {
         totalMultiplier = 3;
@@ -5560,8 +5848,20 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       } else if (isThreePlusStreak) {
         totalMultiplier = 2;
         resolvedStreakMult = 2;
+        finishMode = customFinishMode || 'normal';
         resolvedTitle = t.winTitleStreak(nextStreak);
+      } else if (customFinishMode) {
+        finishMode = customFinishMode;
       }
+
+      const showcase = extractLocalWinnerShowcaseGroups({
+        winnerId,
+        winnerHand: winnerCards,
+        tableMelds: tableMeldsRef.current,
+        closedSetBadges: closedSetBadgesRef.current,
+        finishMode,
+        closingCard,
+      });
 
       const netWin = (pot - rake) * totalMultiplier;
       adjustWalletBalance(netWin, `Ramino Win (${totalMultiplier}x)`);
@@ -5580,6 +5880,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         streakCount: nextStreak,
         winAmount: netWin,
         rakeAmount: rake,
+        winnerCards: showcase.winnerCards,
+        winnerGroups: showcase.winnerGroups,
+        winnerClosingCard: showcase.winnerClosingCard,
       });
     } else {
       // Loss resets consecutive win streak back to 0 AND deducts 2x (ዶፔይ/ሞንቴ) or 3x (ጎልደን) penalty from wallet!
@@ -5593,6 +5896,23 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           : isDopeyLoss || isJokerLoss
           ? 2
           : 1;
+      const resolvedLossMode =
+        customFinishMode ||
+        (lossMult >= 3
+          ? 'dopey_joker'
+          : isDopeyLoss
+          ? 'dopey'
+          : isJokerLoss
+          ? 'joker_finish'
+          : 'normal');
+      const showcase = extractLocalWinnerShowcaseGroups({
+        winnerId,
+        winnerHand: winnerCards,
+        tableMelds: tableMeldsRef.current,
+        closedSetBadges: closedSetBadgesRef.current,
+        finishMode: resolvedLossMode,
+        closingCard,
+      });
       const extraPenalty =
         lossMult > 1
           ? Math.min(balanceRef.current, Number((selectedStake * (lossMult - 1)).toFixed(2)))
@@ -5612,14 +5932,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         winnerId,
         winnerName,
         isOpponentWin: true,
-        finishMode:
-          lossMult >= 3
-            ? 'dopey_joker'
-            : isDopeyLoss
-            ? 'dopey'
-            : isJokerLoss
-            ? 'joker_finish'
-            : 'normal',
+        finishMode: resolvedLossMode,
         multiplier: lossMult,
         dopeyMultiplier: dopeyMultiplier >= 2 ? dopeyMultiplier : 1,
         streakMultiplier: 1,
@@ -5627,6 +5940,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         winAmount: 0,
         rakeAmount: rake,
         lostPenalty: extraPenalty,
+        winnerCards: showcase.winnerCards,
+        winnerGroups: showcase.winnerGroups,
+        winnerClosingCard: showcase.winnerClosingCard,
       });
     }
   };
@@ -5676,6 +5992,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         if (!oppHasMelded) {
           const oppDopey = checkDopey(oppHand, undefined, allowSameRankDopey);
           if (oppDopey.isDopey) {
+            let botDopeyClosing: PlayingCard | null = null;
             if (oppHand.length === 14) {
               const dropIdx = oppDopey.isJokerFinished
                 ? oppHand.findIndex(
@@ -5688,6 +6005,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   );
               if (dropIdx !== -1) {
                 const [dropped] = oppHand.splice(dropIdx, 1);
+                botDopeyClosing = dropped;
                 const nextDiscard = [...discardPileRef.current, dropped];
                 discardPileRef.current = nextDiscard;
                 setDiscardPile(nextDiscard);
@@ -5703,6 +6021,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               winnerName: latestOpp.name,
               dopeyMultiplier: oppDopey.isJokerFinished ? 3 : 2,
               jokerFinish: oppDopey.isJokerFinished,
+              winnerCards: oppHand,
+              closingCard: botDopeyClosing,
             });
             return;
           }
@@ -5732,7 +6052,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           setMeldTurnCounter(nextS);
           setTableMelds(nextMelds);
           if (badgesToAdd.length > 0) {
-            setClosedSetBadges((prev) => [...prev, ...badgesToAdd]);
+            const nextBadges = [...closedSetBadgesRef.current, ...badgesToAdd];
+            closedSetBadgesRef.current = nextBadges;
+            setClosedSetBadges(nextBadges);
           }
 
           const meldedBotIds = new Set(oppEval.melds.flatMap((m) => m.cards.map((c) => c.id)));
@@ -5743,10 +6065,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
         // Discard 1 real non-joker card from bot's actual hand (if cards left)
         let botDiscardedJoker = false;
+        let botClosingDiscard: PlayingCard | null = null;
         if (oppHand.length > 0) {
           const discardIdx = oppHand.findIndex((c) => !c.isJoker);
           const chosenIdx = discardIdx !== -1 ? discardIdx : 0;
           const [botDiscarded] = oppHand.splice(chosenIdx, 1);
+          botClosingDiscard = botDiscarded || null;
           if (botDiscarded?.isJoker || botDiscarded?.rank === 'JOKER') {
             botDiscardedJoker = true;
           }
@@ -5771,6 +6095,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             winnerName: latestOpp.name,
             dopeyMultiplier: 1,
             jokerFinish: botDiscardedJoker,
+            winnerCards: [],
+            closingCard: botClosingDiscard,
           });
           return;
         }
@@ -5809,16 +6135,18 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       nextHand.length === 13 &&
       isExact13CardDopey(nextHand, allowSameRankDopey);
 
+    const isJoker = cardToDiscard.isJoker || cardToDiscard.rank === 'JOKER';
+    const closesDopeyWithJoker = closesDopeyWithDiscard && isJoker;
+
     // Before opening meld (!hasMelded): if player picked up from discard pile this turn,
-    // they MUST meld OR return before discarding (unless closing Dopey).
+    // they MUST meld OR return before discarding (unless closing Dopey with a Joker).
     // Once melded (hasMelded === true), they can play & discard freely!
-    if (!hasMelded && drawnFromDiscardCard !== null && !closesDopeyWithDiscard && nextHand.length > 0) {
+    if (!hasMelded && drawnFromDiscardCard !== null && !closesDopeyWithJoker && nextHand.length > 0) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyMustMeldOrReturn);
       return;
     }
 
-    const isJoker = cardToDiscard.isJoker || cardToDiscard.rank === 'JOKER';
     const isLastCard = playerHand.length === 1;
     const allCardsMatch = playerHand.every((c) => doesCardMatchTableMelds(c, tableMelds));
     const matchesTable = doesCardMatchTableMelds(cardToDiscard, tableMelds);
@@ -5847,7 +6175,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     setDrawnFromDiscardCard(null);
     setHasDiscarded(true);
 
-    if (nextHand.length === 0 || closesDopeyWithDiscard) {
+    // IMPORTANT: Discarding a normal (non-Joker) card while holding 13-card Dopey (5 pairs + 1 Tris)
+    // does NOT auto-end the round — player stays on 5 pairs + 1 Tris and gets the chance to draw a Joker for Golden (3x)!
+    if (nextHand.length === 0 || closesDopeyWithJoker) {
       handleFinalWinCheck(nextHand, cardToDiscard);
       return;
     }
@@ -5856,7 +6186,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       reshuffleDiscardIntoDeck(nextDiscardPile);
     }
 
-    triggerNotification(t.notifyDiscarded(`${cardToDiscard.rank}${cardToDiscard.suit}`));
+    if (closesDopeyWithDiscard) {
+      triggerNotification(t.notifyDopeyHoldGolden);
+    } else {
+      triggerNotification(t.notifyDiscarded(`${cardToDiscard.rank}${cardToDiscard.suit}`));
+    }
     runOpponentTurnsFrom(0);
   };
 
@@ -5866,14 +6200,39 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       void sendRaminoGameAction('dopey_win');
       return;
     }
-    const dopey = checkDopey(handSnapshot, closingCard, allowSameRankDopey);
+    let cleanHand = [...handSnapshot];
+    let resolvedClosing = closingCard || null;
+    const dopey = checkDopey(cleanHand, resolvedClosing, allowSameRankDopey);
+    if (dopey.isDopey && cleanHand.length === 14 && !resolvedClosing) {
+      const dropIdx = dopey.isJokerFinished
+        ? cleanHand.findIndex(
+            (c, idx) =>
+              (c.isJoker || c.rank === 'JOKER') &&
+              isExact13CardDopey(cleanHand.filter((_, i) => i !== idx), allowSameRankDopey)
+          )
+        : cleanHand.findIndex((_, idx) =>
+            isExact13CardDopey(cleanHand.filter((_, i) => i !== idx), allowSameRankDopey)
+          );
+      if (dropIdx !== -1) {
+        const [dropped] = cleanHand.splice(dropIdx, 1);
+        resolvedClosing = dropped;
+        const nextDiscard = [...discardPileRef.current, dropped];
+        discardPileRef.current = nextDiscard;
+        setDiscardPile(nextDiscard);
+        setPlayerHand(cleanHand);
+      }
+    }
     const dopeyMultiplier = dopey.isJokerFinished ? 3 : dopey.isDopey ? 2 : 1;
-    const isJokerClosing = Boolean(closingCard && (closingCard.isJoker || closingCard.rank === 'JOKER'));
+    const isJokerClosing = Boolean(
+      resolvedClosing && (resolvedClosing.isJoker || resolvedClosing.rank === 'JOKER')
+    );
     triggerRoundWin({
       winnerId: 'self',
       winnerName: playerName,
       dopeyMultiplier,
       jokerFinish: isJokerClosing,
+      winnerCards: cleanHand,
+      closingCard: resolvedClosing,
     });
   };
 
@@ -5901,7 +6260,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     triggerNotification(t.notifyAutoSorted);
   };
 
-  // Tap Card: If card is inside a formed group, elevate ONLY formed groups; if tapping a single discard card, select cleanly for discard unless forming a manual set/run
+  // Tap Card: If card is inside a formed group (Set, Run, or Pair), elevate all cards in that group together;
+  // tapping a Set/Run clears stray Pair/Single selections so Meld button stays accurate!
   const toggleSelectCard = (id: string) => {
     if (dragMovedRef.current) {
       dragMovedRef.current = false;
@@ -5914,9 +6274,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       const allSelected = grp.cardIds.every((cid) => selectedCardIds.has(cid));
       setSelectedCardIds((prev) => {
         const next = new Set<string>();
-        // Keep other already-selected formed groups so players can combine 2+ groups for 41+ points, while dropping stray single discard selections
         prev.forEach((pid) => {
-          if (cardToGroupMap.has(pid)) next.add(pid);
+          const pGrp = cardToGroupMap.get(pid);
+          if (!pGrp) return;
+          if (grp.type === 'pair') {
+            next.add(pid);
+          } else if (pGrp.type !== 'pair') {
+            next.add(pid);
+          }
         });
         if (allSelected) {
           grp.cardIds.forEach((cid) => next.delete(cid));
@@ -7724,8 +8089,119 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   </div>
                 </div>
 
-                {/* Center Felt: Open Table Melds (IMG_3903 - Full 2-3 row visibility in 2, 3, 4 & 5 players!) */}
+                {/* Center Felt: Open Table Melds (IMG_3903 - Full 2-3 row visibility) + Revealed Winner Cards For Trust */}
                 <div className="flex-1 min-w-0 max-h-full flex flex-wrap items-center justify-center content-center gap-1 sm:gap-1.5 px-1 overflow-visible">
+                  {winnerCelebration?.show &&
+                    ((winnerCelebration.winnerGroups && winnerCelebration.winnerGroups.length > 0) ||
+                      winnerCelebration.winnerClosingCard) && (
+                      <div className="w-full max-w-xl mx-auto mb-1 p-1.5 sm:p-2 rounded-2xl bg-black/70 border-2 border-yellow-400/80 shadow-[0_0_24px_rgba(250,204,21,0.35)] backdrop-blur-md">
+                        <div className="flex items-center justify-between gap-2 px-1 pb-1 border-b border-yellow-400/20">
+                          <span className="text-[10px] sm:text-xs font-black text-yellow-300 truncate">
+                            {t.winnerCardsHeader} • {winnerCelebration.winnerName}
+                          </span>
+                          <span className="text-[9px] text-emerald-300 font-bold hidden sm:inline">
+                            {t.winnerCardsTrustNote}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1.5">
+                          {(winnerCelebration.winnerGroups || []).map((grp, gIdx) => {
+                            const grpBorder =
+                              grp.label === 'pair'
+                                ? 'border-fuchsia-400/60 bg-fuchsia-950/35'
+                                : grp.label === 'catris'
+                                ? 'border-sky-400/60 bg-sky-950/35'
+                                : 'border-emerald-400/60 bg-emerald-950/35';
+                            const grpText =
+                              grp.label === 'pair'
+                                ? t.winnerGroupPair
+                                : grp.label === 'catris'
+                                ? t.winnerGroupCatris
+                                : t.winnerGroupTris;
+                            return (
+                              <div
+                                key={gIdx}
+                                className={`flex flex-col items-center p-1 rounded-xl border ${grpBorder}`}
+                              >
+                                <div className="flex items-center -space-x-2.5 sm:-space-x-3">
+                                  {grp.cards.map((c, cIdx) => {
+                                    const cIsJ = Boolean(c.isJoker || c.rank === 'JOKER');
+                                    const rClr = cIsJ
+                                      ? 'text-red-700'
+                                      : c.suit === '♦'
+                                      ? 'text-blue-600'
+                                      : c.suit === '♣'
+                                      ? 'text-emerald-700'
+                                      : c.suit === '♥'
+                                      ? 'text-red-600'
+                                      : 'text-slate-950';
+                                    const sClr =
+                                      c.suit === '♥' || c.suit === '♦' ? 'text-red-600' : 'text-slate-950';
+                                    return (
+                                      <div
+                                        key={`${c.id}_${cIdx}`}
+                                        className={`w-7 h-10 sm:w-8 sm:h-11 rounded-md p-0.5 flex flex-col justify-between shadow border ${
+                                          cIsJ
+                                            ? 'bg-[#fef3c7] border-amber-400'
+                                            : 'bg-[#fcfbf7] border-slate-300'
+                                        }`}
+                                      >
+                                        <span className={`text-[9px] sm:text-[10px] font-black leading-none ${rClr}`}>
+                                          {cIsJ ? 'JOK' : c.rank}
+                                        </span>
+                                        <span className={`text-xs sm:text-sm leading-none self-end ${sClr}`}>
+                                          {cIsJ ? '🃏' : c.suit}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                <span className="text-[8px] font-black text-white/80 mt-0.5 leading-none">
+                                  {grpText}
+                                </span>
+                              </div>
+                            );
+                          })}
+                          {winnerCelebration.winnerClosingCard && (
+                            <div className="flex flex-col items-center p-1 rounded-xl border border-yellow-400/75 bg-amber-950/45">
+                              {(() => {
+                                const cc = winnerCelebration.winnerClosingCard;
+                                const ccIsJ = Boolean(cc.isJoker || cc.rank === 'JOKER');
+                                const rClr = ccIsJ
+                                  ? 'text-red-700'
+                                  : cc.suit === '♦'
+                                  ? 'text-blue-600'
+                                  : cc.suit === '♣'
+                                  ? 'text-emerald-700'
+                                  : cc.suit === '♥'
+                                  ? 'text-red-600'
+                                  : 'text-slate-950';
+                                const sClr =
+                                  cc.suit === '♥' || cc.suit === '♦' ? 'text-red-600' : 'text-slate-950';
+                                return (
+                                  <div
+                                    className={`w-7 h-10 sm:w-8 sm:h-11 rounded-md p-0.5 flex flex-col justify-between shadow border ${
+                                      ccIsJ
+                                        ? 'bg-[#fef3c7] border-amber-400'
+                                        : 'bg-[#fcfbf7] border-slate-300'
+                                    }`}
+                                  >
+                                    <span className={`text-[9px] sm:text-[10px] font-black leading-none ${rClr}`}>
+                                      {ccIsJ ? 'JOK' : cc.rank}
+                                    </span>
+                                    <span className={`text-xs sm:text-sm leading-none self-end ${sClr}`}>
+                                      {ccIsJ ? '🃏' : cc.suit}
+                                    </span>
+                                  </div>
+                                );
+                              })()}
+                              <span className="text-[8px] font-black text-yellow-300 mt-0.5 leading-none">
+                                {t.winnerGroupClosing}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   {tableMelds.map((meld) => {
                     const meldCount = tableMelds.length;
                     const meldCardSize =
@@ -8605,24 +9081,159 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       )}
 
       {/* ========================================================
-          WINNER CELEBRATION MODAL (Winner Deals Next Round + Dopey & 3+ Streak Multipliers)
+          WINNER CELEBRATION MODAL (Reveals Winner Cards + Table Peek Toggle)
          ======================================================== */}
       {winnerCelebration?.show && view !== 'postday_pick' && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100000] flex items-center justify-center p-2 sm:p-4 overflow-hidden">
+        isWinnerModalMinimized ? (
+          <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[100000] px-3 py-2 rounded-2xl bg-[#121626]/95 border-2 border-yellow-400 shadow-2xl flex items-center gap-2 max-w-[95vw]">
+            <span className="text-xs font-black text-yellow-300 truncate max-w-[180px] sm:max-w-[260px]">
+              {winnerCelebration.title}
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsWinnerModalMinimized(false)}
+              className="px-2.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-[11px] shrink-0 cursor-pointer"
+            >
+              {t.openWinSummaryBtn}
+            </button>
+          </div>
+        ) : (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-[100000] flex items-center justify-center p-2 sm:p-4 overflow-hidden">
           <div
             style={{ maxHeight: modalMaxHeightPx ? `${modalMaxHeightPx}px` : '88dvh' }}
-            className="bg-[#121626] border-2 border-yellow-400 rounded-[28px] p-4 sm:p-6 max-w-sm w-full text-center flex flex-col overflow-hidden shadow-2xl"
+            className="bg-[#121626] border-2 border-yellow-400 rounded-[28px] p-4 sm:p-5 max-w-md w-full text-center flex flex-col overflow-hidden shadow-2xl"
           >
             <div
               style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}
-              className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-3.5 pr-0.5"
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-3 pr-0.5"
             >
-            <span className="text-5xl block">{winnerCelebration.isOpponentWin ? '🃏' : '👑'}</span>
-            <h2 className="text-lg sm:text-xl font-black text-yellow-300 leading-snug">
+            <div className="flex items-start justify-between gap-2">
+              <span className="w-20" />
+              <span className="text-4xl leading-none">{winnerCelebration.isOpponentWin ? '🃏' : '👑'}</span>
+              <button
+                type="button"
+                onClick={() => setIsWinnerModalMinimized(true)}
+                className="px-2 py-1 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-[10px] font-black text-amber-200 whitespace-nowrap cursor-pointer"
+              >
+                {t.viewTableCardsBtn}
+              </button>
+            </div>
+            <h2 className="text-base sm:text-lg font-black text-yellow-300 leading-snug">
               {winnerCelebration.title}
             </h2>
 
-            <div className="p-3.5 rounded-2xl bg-black/60 border border-yellow-500/30 space-y-1.5 text-xs">
+            {((winnerCelebration.winnerGroups && winnerCelebration.winnerGroups.length > 0) ||
+              winnerCelebration.winnerClosingCard) && (
+              <div className="p-2.5 rounded-2xl bg-[#07261a]/95 border border-emerald-400/45 space-y-1.5 text-left">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-black text-yellow-300">
+                    {t.winnerCardsHeader} ({winnerCelebration.winnerName})
+                  </span>
+                  <span className="text-[9px] font-bold text-emerald-300/90">
+                    ✓ {t.winnerCardsTrustNote}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-1.5 pt-0.5">
+                  {(winnerCelebration.winnerGroups || []).map((grp, gIdx) => {
+                    const grpStyle =
+                      grp.label === 'pair'
+                        ? 'border-fuchsia-400/55 bg-fuchsia-950/35'
+                        : grp.label === 'catris'
+                        ? 'border-sky-400/55 bg-sky-950/35'
+                        : 'border-emerald-400/55 bg-emerald-950/35';
+                    const grpLbl =
+                      grp.label === 'pair'
+                        ? t.winnerGroupPair
+                        : grp.label === 'catris'
+                        ? t.winnerGroupCatris
+                        : t.winnerGroupTris;
+                    return (
+                      <div
+                        key={gIdx}
+                        className={`flex flex-col items-center p-1 rounded-xl border ${grpStyle}`}
+                      >
+                        <div className="flex items-center -space-x-2">
+                          {grp.cards.map((c, cIdx) => {
+                            const cIsJ = Boolean(c.isJoker || c.rank === 'JOKER');
+                            const rClr = cIsJ
+                              ? 'text-red-700'
+                              : c.suit === '♦'
+                              ? 'text-blue-600'
+                              : c.suit === '♣'
+                              ? 'text-emerald-700'
+                              : c.suit === '♥'
+                              ? 'text-red-600'
+                              : 'text-slate-950';
+                            const sClr =
+                              c.suit === '♥' || c.suit === '♦' ? 'text-red-600' : 'text-slate-950';
+                            return (
+                              <div
+                                key={`${c.id}_${cIdx}`}
+                                className={`w-7 h-10 rounded-md p-0.5 flex flex-col justify-between shadow border ${
+                                  cIsJ
+                                    ? 'bg-[#fef3c7] border-amber-400'
+                                    : 'bg-[#fcfbf7] border-slate-300'
+                                }`}
+                              >
+                                <span className={`text-[9px] font-black leading-none ${rClr}`}>
+                                  {cIsJ ? 'JOK' : c.rank}
+                                </span>
+                                <span className={`text-xs leading-none self-end ${sClr}`}>
+                                  {cIsJ ? '🃏' : c.suit}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <span className="text-[8px] font-black text-white/85 mt-0.5 leading-none">
+                          {grpLbl}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {winnerCelebration.winnerClosingCard && (
+                    <div className="flex flex-col items-center p-1 rounded-xl border border-yellow-400/75 bg-amber-950/45">
+                      {(() => {
+                        const cc = winnerCelebration.winnerClosingCard;
+                        const ccIsJ = Boolean(cc.isJoker || cc.rank === 'JOKER');
+                        const rClr = ccIsJ
+                          ? 'text-red-700'
+                          : cc.suit === '♦'
+                          ? 'text-blue-600'
+                          : cc.suit === '♣'
+                          ? 'text-emerald-700'
+                          : cc.suit === '♥'
+                          ? 'text-red-600'
+                          : 'text-slate-950';
+                        const sClr =
+                          cc.suit === '♥' || cc.suit === '♦' ? 'text-red-600' : 'text-slate-950';
+                        return (
+                          <div
+                            className={`w-7 h-10 rounded-md p-0.5 flex flex-col justify-between shadow border ${
+                              ccIsJ
+                                ? 'bg-[#fef3c7] border-amber-400'
+                                : 'bg-[#fcfbf7] border-slate-300'
+                            }`}
+                          >
+                            <span className={`text-[9px] font-black leading-none ${rClr}`}>
+                              {ccIsJ ? 'JOK' : cc.rank}
+                            </span>
+                            <span className={`text-xs leading-none self-end ${sClr}`}>
+                              {ccIsJ ? '🃏' : cc.suit}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                      <span className="text-[8px] font-black text-yellow-300 mt-0.5 leading-none">
+                        {t.winnerGroupClosing}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="p-3 rounded-2xl bg-black/60 border border-yellow-500/30 space-y-1.5 text-xs">
               <div className="flex justify-between text-gray-300">
                 <span>{t.potAmountLabel}</span>
                 <span className="font-mono">
@@ -8739,6 +9350,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             </div>
           </div>
         </div>
+        )
       )}
 
       {/* ========================================================
