@@ -8115,6 +8115,7 @@ interface RaminoTablePlayer {
   hasMelded: boolean;
   winStreak: number;
   isDealer: boolean;
+  isSuspended?: boolean;
 }
 interface RaminoPostDayCutEntry {
   id: string;
@@ -8166,7 +8167,8 @@ interface RaminoTableSession {
       | 'normal'
       | 'bottom_dopey_joker'
       | 'bottom_dopey'
-      | 'bottom_normal';
+      | 'bottom_normal'
+      | 'timeout_win';
     winnerId: string;
     winnerName: string;
     dopeyMultiplier: number;
@@ -9023,6 +9025,7 @@ function createOrSyncRaminoTableFromPrivateRoom(room: RaminoPrivateRoomRecord): 
     hasMelded: false,
     winStreak: 0,
     isDealer: false,
+    isSuspended: false,
   });
 
   if (!session) {
@@ -9094,6 +9097,7 @@ function serializeRaminoTableForPlayer(session: RaminoTableSession, playerId: st
     hasMelded: boolean;
     isHost: boolean;
     isBot: boolean;
+    isSuspended: boolean;
   }[] = [];
 
   if (meIdx !== -1) {
@@ -9109,6 +9113,7 @@ function serializeRaminoTableForPlayer(session: RaminoTableSession, playerId: st
         hasMelded: seat.hasMelded,
         isHost: seat.isHost,
         isBot: seat.isBot,
+        isSuspended: Boolean(seat.isSuspended),
       });
     }
   } else {
@@ -9123,6 +9128,7 @@ function serializeRaminoTableForPlayer(session: RaminoTableSession, playerId: st
         hasMelded: seat.hasMelded,
         isHost: seat.isHost,
         isBot: seat.isBot,
+        isSuspended: Boolean(seat.isSuspended),
       });
     }
   }
@@ -9163,6 +9169,7 @@ function serializeRaminoTableForPlayer(session: RaminoTableSession, playerId: st
     myHasMelded: Boolean(me?.hasMelded),
     myWinStreak: me?.winStreak ?? 0,
     myIsDealer: Boolean(me?.isDealer),
+    myIsSuspended: Boolean(me?.isSuspended),
     opponents,
     playersSummary: session.players.map((p) => ({
       id: p.id,
@@ -9279,6 +9286,7 @@ function dealServerRaminoRound(session: RaminoTableSession, dealerId: string) {
     offset += dealCount;
     p.hasMelded = false;
     p.isDealer = isDealerSeat;
+    p.isSuspended = false;
   }
 
   session.bottomCard = shuffled[offset];
@@ -9408,7 +9416,8 @@ function finishServerRaminoRound(
     | 'normal'
     | 'bottom_dopey_joker'
     | 'bottom_dopey'
-    | 'bottom_normal',
+    | 'bottom_normal'
+    | 'timeout_win',
   bottomCardStr?: string,
   closingCard?: RaminoCard | null
 ) {
@@ -9427,7 +9436,12 @@ function finishServerRaminoRound(
   let totalMultiplier = 1;
   let resolvedTitleKey = titleKey;
 
-  if (titleKey === 'dopey_joker' || titleKey === 'bottom_dopey_joker') {
+  if (titleKey === 'timeout_win') {
+    effectiveDopeyMult = 1;
+    effectiveStreakMult = 1;
+    totalMultiplier = 1;
+    resolvedTitleKey = 'timeout_win';
+  } else if (titleKey === 'dopey_joker' || titleKey === 'bottom_dopey_joker') {
     effectiveDopeyMult = 3;
     totalMultiplier = 3;
   } else if (titleKey === 'dopey' || titleKey === 'bottom_dopey') {
@@ -9534,6 +9548,16 @@ function finishServerRaminoRound(
   broadcastRaminoTableState(session);
 }
 
+function findNextActiveRaminoTurnIdx(session: RaminoTableSession, fromIdx: number): number {
+  const len = session.players.length;
+  if (len === 0) return 0;
+  for (let offset = 1; offset <= len; offset++) {
+    const idx = (fromIdx + offset) % len;
+    if (!session.players[idx]?.isSuspended) return idx;
+  }
+  return 0;
+}
+
 function handleServerRaminoAction(
   session: RaminoTableSession,
   playerId: string,
@@ -9544,6 +9568,7 @@ function handleServerRaminoAction(
 
   if (action === 'leave_table') {
     if (meIdx === -1) return { ok: true };
+    const wasCurrentTurn = session.phase === 'game' && meIdx === session.currentTurnIdx;
     const leaving = session.players[meIdx];
     session.players.splice(meIdx, 1);
 
@@ -9576,11 +9601,28 @@ function handleServerRaminoAction(
     }
 
     if (session.phase === 'game') {
-      if (session.players.length < 2) {
-        const survivor = session.players[0];
-        finishServerRaminoRound(session, survivor, 1, 'normal');
+      const activeRemaining = session.players.filter((p) => !p.isSuspended);
+      if (activeRemaining.length < 2) {
+        const survivor = activeRemaining[0] || session.players[0];
+        const anySuspended = session.players.some((p) => p.isSuspended);
+        finishServerRaminoRound(session, survivor, 1, anySuspended ? 'timeout_win' : 'normal');
       } else {
-        if (session.currentTurnIdx >= session.players.length) session.currentTurnIdx = 0;
+        if (wasCurrentTurn) {
+          const prevIdx = Math.min(meIdx - 1 + session.players.length, session.players.length - 1);
+          session.currentTurnIdx = findNextActiveRaminoTurnIdx(session, prevIdx);
+          session.hasDrawn = false;
+          session.drawnFromDiscardCardId = null;
+          session.hasDiscarded = false;
+          session.turnSeconds = 120;
+        } else {
+          if (meIdx < session.currentTurnIdx) {
+            session.currentTurnIdx = Math.max(0, session.currentTurnIdx - 1);
+          }
+          if (session.currentTurnIdx >= session.players.length) session.currentTurnIdx = 0;
+          if (session.players[session.currentTurnIdx]?.isSuspended) {
+            session.currentTurnIdx = findNextActiveRaminoTurnIdx(session, session.currentTurnIdx);
+          }
+        }
         session.lastEvent = {
           id: ++raminoEventSeq,
           type: 'player_left',
@@ -9792,6 +9834,7 @@ function handleServerRaminoAction(
   }
 
   if (session.phase !== 'game') return { ok: false, error: 'ጨዋታው አሁን በሂደት ላይ አይደለም።' };
+  if (me.isSuspended) return { ok: false, error: 'ጊዜዎ ስላለቀ በዚህ ዙር ታግደዋል፤ ጨዋታውን በመከታተል ላይ ነዎት።' };
   if (session.currentTurnIdx !== meIdx) return { ok: false, error: 'ተራዎ አይደለም!' };
 
   const allowSameRankDopey = false;
@@ -10165,7 +10208,7 @@ function handleServerRaminoAction(
       session.reshuffleCount += 1;
     }
 
-    session.currentTurnIdx = (session.currentTurnIdx + 1) % session.players.length;
+    session.currentTurnIdx = findNextActiveRaminoTurnIdx(session, session.currentTurnIdx);
     session.turnSeconds = 120;
     session.hasDiscarded = false;
     session.lastEvent = {
@@ -10233,19 +10276,39 @@ function startRaminoServerLoop() {
       if (session.turnSeconds === 0) {
         const timedOutPlayer = session.players[session.currentTurnIdx];
         if (!timedOutPlayer) continue;
-        // Auto-draw & discard 1 non-joker card so multiplayer human games recover cleanly, or notify timeout
+        const timedOutIdx = session.currentTurnIdx;
+
+        // Suspend ONLY the timed-out player so they remain seated as a spectator watching the live game
+        timedOutPlayer.isSuspended = true;
+        timedOutPlayer.winStreak = 0;
+        if (timedOutPlayer.hand.length > 0) {
+          session.deck.push(...timedOutPlayer.hand);
+          timedOutPlayer.hand = [];
+          for (let i = session.deck.length - 1; i > 0; i--) {
+            const j = crypto.randomInt(0, i + 1);
+            [session.deck[i], session.deck[j]] = [session.deck[j], session.deck[i]];
+          }
+        }
+
+        const activeSurvivors = session.players.filter((p) => !p.isSuspended);
         session.lastEvent = {
           id: ++raminoEventSeq,
-          type: 'turn_timeout',
+          type: 'player_suspended',
           actorId: timedOutPlayer.id,
           actorName: timedOutPlayer.name,
         };
-        if (session.players.length > 2) {
-          handleServerRaminoAction(session, timedOutPlayer.id, 'leave_table');
+
+        if (activeSurvivors.length >= 2) {
+          session.currentTurnIdx = findNextActiveRaminoTurnIdx(session, timedOutIdx);
+          session.hasDrawn = false;
+          session.drawnFromDiscardCardId = null;
+          session.hasDiscarded = false;
+          session.turnSeconds = 120;
+          broadcastRaminoTableState(session);
         } else {
-          const other = session.players.find((p) => p.id !== timedOutPlayer.id);
-          if (other) {
-            finishServerRaminoRound(session, other, 1, 'normal');
+          const survivor = activeSurvivors[0] || session.players.find((p) => p.id !== timedOutPlayer.id);
+          if (survivor) {
+            finishServerRaminoRound(session, survivor, 1, 'timeout_win');
           }
         }
       }

@@ -89,6 +89,7 @@ export interface RaminoOpponent {
   hand?: PlayingCard[];
   isDealer?: boolean;
   hasMelded?: boolean;
+  isSuspended?: boolean;
   avatarColor: string;
 }
 
@@ -1290,6 +1291,11 @@ const RAMINO_T: Record<Language, any> = {
     discardBtn: 'ጣል',
     bannedTitle: 'ከጨዋታው ታግደዋል!',
     bannedDesc: 'በተሰጠው 90 ሰከንድ የማሰቢያ ጊዜ እና 30 ሰከንድ ማስጠንቀቂያ ውስጥ ካርታ ባለመሳብዎ ወይም ባለማንሳትዎ ከጨዋታው ተሰርዘዋል።',
+    bannedSpectatorDesc: 'በተሰጠው የማሰቢያና ማስጠንቀቂያ ሰዓት ውስጥ ባለመጫወትዎ ከዚህ ዙር ታግደዋል። ሆኖም የተቀሩት ተጫዋቾች ሲጫወቱ ጨዋታውን በቀጥታ መከታተል ይችላሉ።',
+    watchGameBtn: '👁️ ጨዋታውን ተከታተል',
+    suspendedBadge: 'ታግዷል',
+    spectatorBanner: '🚫 ሰዓትዎ ስላለቀ በዚህ ዙር ታግደዋል — ጨዋታውን በቀጥታ እየተከታተሉ ነው 👁️',
+    notifyPlayerSuspended: (name: string) => `🚫 ${name} ሰዓቱ ስላለቀበት ታግዷል፤ ጨዋታውን እየተከታተለ ነው።`,
     backToLobbyBtn: 'ወደ ሎቢ ተመለስ',
     privateModalTitle: 'የግል ክፍል ፍጠር',
     chooseFriendsStep: '1. የሚጫወቷቸው ጓደኞች ብዛት ይምረጡ:',
@@ -1420,6 +1426,8 @@ const RAMINO_T: Record<Language, any> = {
     winTitleStreakJoker: (n: number) => `👑 ጎልደን (${n}ኛ ተከታታይ ድል በጆከር)! (3x)`,
     winTitleStreak: (n: number) => `🔥 ዶፔይ / ሞንቴ (${n}ኛ ተከታታይ ድል)! (2x)`,
     winTitleNormal: '🎉 እንኳን ደስ አለዎት! አሸንፈዋል!',
+    winTitleTimeout: '🏆 ተጋጣሚዎችዎ የተሰጣቸውን ሰዓት በአግባቡ ባለመጠቀማቸው እርስዎ የጨዋታው አሸናፊ ሆነዋል!',
+    loseTitleTimeout: (w: string) => `⏳ የተሰጠው የመጫወቻ ሰዓት በመጠናቀቁ ${w} የጨዋታው አሸናፊ ሆነዋል!`,
     loseTitle: (w: string, mult?: number) =>
       mult && mult >= 3
         ? `😔 ${w} ጎልደን (3x) አሸንፏል!`
@@ -1569,6 +1577,11 @@ const RAMINO_T: Record<Language, any> = {
     discardBtn: 'ደርቢ',
     bannedTitle: 'ካብ ጸወታ ተኣጊድኩም!',
     bannedDesc: 'ኣብ ዝተዋህበ 90 ሰከንድ መሕሰቢን 30 ሰከንድ መጠንቀቕታን ካርታ ብዘይምስሓብኩም ካብ ጸወታ ወጺእኩም።',
+    bannedSpectatorDesc: 'ኣብ ዝተዋህበ ሰዓት ብዘይምጽዋትኩም ኣብዚ ዙር ተኣጊድኩም። ዝተረፉ ተጻወትቲ ክጻወቱ እንከለዉ ግን ጸወታ ብቐጥታ ክትከታተሉ ትኽእሉ ኢኹም።',
+    watchGameBtn: '👁️ ጸወታ ተኸታተል',
+    suspendedBadge: 'ተኣጊዱ',
+    spectatorBanner: '🚫 ግዜኹም ስለዝተወድአ ኣብዚ ዙር ተኣጊድኩም — ጸወታ ብቐጥታ ትከታተሉ ኣለኹም 👁️',
+    notifyPlayerSuspended: (name: string) => `🚫 ${name} ሰዓቱ ስለዝተወድአ ተኣጊዱ፤ ጸወታ ይከታተል ኣሎ።`,
     backToLobbyBtn: 'ናብ ሎቢ ተመለስ',
     privateModalTitle: 'ብሕታዊ ክፍሊ ፍጠር',
     chooseFriendsStep: '1. ብዝሒ ዝጻወቱ ኣዕሩኽ ምረጹ:',
@@ -1699,6 +1712,8 @@ const RAMINO_T: Record<Language, any> = {
     winTitleStreakJoker: (n: number) => `👑 ጎልደን (${n}ይ ተኸታታሊ ዓወት ብጆከር)! (3x)`,
     winTitleStreak: (n: number) => `🔥 ዶፔይ / ሞንቴ (${n}ይ ተኸታታሊ ዓወት)! (2x)`,
     winTitleNormal: '🎉 እንቋዕ ሓጎሰኩም! ተዓዊትኩም!',
+    winTitleTimeout: '🏆 ተወዳደርትኹም ዝተዋህቦም ሰዓት ብግቡእ ብዘይምጥቃሞም ንስኹም ተዓዋቲ ናይዚ ጸወታ ኾይንኩም!',
+    loseTitleTimeout: (w: string) => `⏳ ዝተዋህበ ሰዓት ስለዝተወድአ ${w} ተዓዋቲ ኾይኖም!`,
     loseTitle: (w: string, mult?: number) =>
       mult && mult >= 3
         ? `😔 ${w} ጎልደን (3x) ተዓዊቱ!`
@@ -1848,6 +1863,11 @@ const RAMINO_T: Record<Language, any> = {
     discardBtn: 'Gati',
     bannedTitle: 'Tapha irraa dhorkamtaniittu!',
     bannedDesc: 'Yeroo sekondii 90 fi of eeggannoo sekondii 30 keessatti kaardii waan hin harkisneef taphaa baataniittu.',
+    bannedSpectatorDesc: 'Yeroo kenname keessatti waan hin taphanneef marsaa kana dhorkamtaniittu. Haa ta\'u malee taphattoonni hafan yoo taphatan kallattiin hordofuu ni dandeessu.',
+    watchGameBtn: '👁️ Tapha Hordofi',
+    suspendedBadge: 'Dhorkame',
+    spectatorBanner: '🚫 Yeroon keessan waan dhumeef marsaa kana dhorkamtaniittu — tapha kallattiin hordofaa jirtu 👁️',
+    notifyPlayerSuspended: (name: string) => `🚫 ${name} yeroon isaa waan dhumeef dhorkameera; tapha hordofaa jira.`,
     backToLobbyBtn: 'Gara Galmaatti Deebi\'i',
     privateModalTitle: 'Kutaa Dhuunfaa Uumi',
     chooseFriendsStep: '1. Baay\'ina hiriyootaa filadhu:',
@@ -1978,6 +1998,8 @@ const RAMINO_T: Record<Language, any> = {
     winTitleStreakJoker: (n: number) => `👑 Golden (Injifannoo ${n}ffaa Jookeraan)! (3x)`,
     winTitleStreak: (n: number) => `🔥 Dooppey / Monte (Injifannoo ${n}ffaa)! (2x)`,
     winTitleNormal: '🎉 Baga Gammaddan! Injifattaniittu!',
+    winTitleTimeout: '🏆 Mormitoonni keessan yeroo kennameef sirnaan waan hin fayyadamneef isin injifataa tapha kanaa taataniittu!',
+    loseTitleTimeout: (w: string) => `⏳ Yeroon taphaa waan dhumeef ${w} injifataa ta\'eera!`,
     loseTitle: (w: string, mult?: number) =>
       mult && mult >= 3
         ? `😔 ${w} Golden (3x) injifateera!`
@@ -2127,6 +2149,11 @@ const RAMINO_T: Record<Language, any> = {
     discardBtn: 'Discard',
     bannedTitle: 'Removed From Table!',
     bannedDesc: 'You did not draw within the 90s turn timer and 30s warning, so you have been removed from the table.',
+    bannedSpectatorDesc: 'Your turn timer and warning expired, so you are suspended for this round. You can stay at the table and watch the remaining players live!',
+    watchGameBtn: '👁️ Watch Game Live',
+    suspendedBadge: 'Suspended',
+    spectatorBanner: '🚫 Your turn time expired — you are suspended for this round and watching live 👁️',
+    notifyPlayerSuspended: (name: string) => `🚫 ${name} timed out and is now watching as a spectator.`,
     backToLobbyBtn: 'Back to Lobby',
     privateModalTitle: 'Create Private Room',
     chooseFriendsStep: '1. Select Number of Friends:',
@@ -2257,6 +2284,8 @@ const RAMINO_T: Record<Language, any> = {
     winTitleStreakJoker: (n: number) => `👑 Golden (${n}th Win Streak + Joker)! (3x)`,
     winTitleStreak: (n: number) => `🔥 Dopey / Monte (${n} Win Streak)! (2x)`,
     winTitleNormal: '🎉 Congratulations! You Won!',
+    winTitleTimeout: '🏆 Other players did not use their turn time, so you are the Winner of this round!',
+    loseTitleTimeout: (w: string) => `⏳ Turn time expired for remaining players — ${w} won the round!`,
     loseTitle: (w: string, mult?: number) =>
       mult && mult >= 3
         ? `😔 ${w} won Golden (3x)!`
@@ -3355,6 +3384,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const [telegramBotUsername, setTelegramBotUsername] = useState<string>('Sungamsbot');
   const [notificationBanner, setNotificationBanner] = useState<string | null>(null);
   const [isBannedModalOpen, setIsBannedModalOpen] = useState<boolean>(false);
+  const [isSelfSuspended, setIsSelfSuspended] = useState<boolean>(false);
+  const prevSelfSuspendedRef = useRef<boolean>(false);
 
   const [winStreak, setWinStreak] = useState<number>(0);
   const winStreakRef = useRef<number>(0);
@@ -3418,7 +3449,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       | 'dopey_joker'
       | 'bottom_normal'
       | 'bottom_dopey'
-      | 'bottom_dopey_joker';
+      | 'bottom_dopey_joker'
+      | 'timeout_win';
     multiplier: number;
     dopeyMultiplier: number;
     streakMultiplier: number;
@@ -3670,6 +3702,16 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     setHasDiscarded(Boolean(tbl.hasDiscarded));
     if (typeof tbl.turnSeconds === 'number') setTurnSeconds(tbl.turnSeconds);
 
+    const nextSuspended = Boolean(tbl.myIsSuspended);
+    if (tbl.phase === 'game' && nextSuspended && !prevSelfSuspendedRef.current && !tbl.winnerCelebration?.show) {
+      raminoAudio.playBuzzer();
+      setIsBannedModalOpen(true);
+    } else if (!nextSuspended || tbl.phase !== 'game') {
+      if (!nextSuspended) setIsBannedModalOpen(false);
+    }
+    prevSelfSuspendedRef.current = nextSuspended;
+    setIsSelfSuspended(nextSuspended);
+
     const srvRoundIdx = Number(tbl.roundIndex ?? 0);
     if (Array.isArray(tbl.myHand)) {
       if (srvRoundIdx !== lastSyncedRoundIndexRef.current) {
@@ -3721,7 +3763,11 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         wc.totalMultiplier || Number(wc.dopeyMultiplier || 1) * Number(wc.streakMultiplier || 1)
       );
       let resolvedTitle = t.winTitleNormal;
-      if (!isMe) {
+      if (wc.titleKey === 'timeout_win') {
+        resolvedTitle = isMe
+          ? t.winTitleTimeout
+          : t.loseTitleTimeout(String(wc.winnerName || 'Opponent'));
+      } else if (!isMe) {
         resolvedTitle = t.loseTitle(String(wc.winnerName || 'Opponent'), totalMult);
       } else if (wc.titleKey === 'bottom_dopey_joker') {
         resolvedTitle = t.winBottomJokerDopey(String(wc.bottomCardStr || '🃏').slice(-1));
@@ -3823,6 +3869,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         triggerNotification(t.notifyPostDayApplied);
       } else if (ev.type === 'player_left') {
         triggerNotification(t.notifyStreakResetLeft);
+      } else if (ev.type === 'player_suspended' && ev.actorId !== myPlayerIdRef.current) {
+        raminoAudio.playBuzzer();
+        triggerNotification(t.notifyPlayerSuspended(String(ev.actorName || '')));
       }
     }
 
@@ -4756,6 +4805,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     setHasMelded(false);
     setHasDiscarded(false);
     setTurnSeconds(120); // 90s thinking + 30s warning
+    prevSelfSuspendedRef.current = false;
+    setIsSelfSuspended(false);
     setIsBannedModalOpen(false);
     setIsWinnerModalMinimized(false);
     setWinnerCelebration(null);
@@ -4806,31 +4857,65 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     };
   }, [view, cutParticipants.length, playerSeatCount]);
 
-  // Turn Countdown Timer: 90s Thinking + 30s Warning -> Ban if no card drawn!
+  // Turn Countdown Timer: 90s Thinking + 30s Warning -> Suspend timed-out player!
   useEffect(() => {
-    if (view !== 'game' || currentTurn !== 0 || isBannedModalOpen || winnerCelebration?.show || activeMultiplayerRoomCode) return;
+    if (view !== 'game' || currentTurn !== 0 || isSelfSuspended || isBannedModalOpen || winnerCelebration?.show || activeMultiplayerRoomCode) return;
 
     const interval = setInterval(() => {
       setTurnSeconds((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [view, currentTurn, isBannedModalOpen, winnerCelebration, activeMultiplayerRoomCode]);
+  }, [view, currentTurn, isSelfSuspended, isBannedModalOpen, winnerCelebration, activeMultiplayerRoomCode]);
 
   useEffect(() => {
-    if (view !== 'game' || currentTurn !== 0 || isBannedModalOpen || winnerCelebration?.show) return;
+    if (view !== 'game' || currentTurn !== 0 || isSelfSuspended || isBannedModalOpen || winnerCelebration?.show) return;
 
     if (turnSeconds === 30) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyWarning30s);
-    } else if (turnSeconds === 0) {
+    } else if (turnSeconds === 0 && !activeMultiplayerRoomCode) {
       raminoAudio.playBuzzer();
-      clearLocalSuspendedGame();
       winStreakRef.current = 0;
       setWinStreak(0);
-      setIsBannedModalOpen(true);
+      const activeOpps = opponentsRef.current.filter((o) => !o.isSuspended);
+      if (playerSeatCount >= 3 && activeOpps.length >= 2) {
+        // Suspend ONLY self; return self cards to deck and continue bots so user can watch live!
+        prevSelfSuspendedRef.current = true;
+        setIsSelfSuspended(true);
+        if (playerHand.length > 0) {
+          const nextDeck = [...deckCardsRef.current, ...playerHand];
+          for (let i = nextDeck.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [nextDeck[i], nextDeck[j]] = [nextDeck[j], nextDeck[i]];
+          }
+          deckCardsRef.current = nextDeck;
+          setDeckCards(nextDeck);
+          setPlayerHand([]);
+        }
+        setSelectedCardIds(new Set());
+        setHasDrawn(false);
+        setDrawnFromDiscardCard(null);
+        setIsBannedModalOpen(true);
+        const firstActiveOppIdx = opponentsRef.current.findIndex((o) => !o.isSuspended);
+        runOpponentTurnsFrom(firstActiveOppIdx !== -1 ? firstActiveOppIdx : 0, false);
+      } else {
+        clearLocalSuspendedGame();
+        const survivor = activeOpps[0] || opponentsRef.current[0];
+        if (survivor) {
+          triggerRoundWin({
+            winnerId: survivor.id,
+            winnerName: survivor.name,
+            dopeyMultiplier: 1,
+            customFinishMode: 'timeout_win',
+            customTitle: t.loseTitleTimeout(survivor.name),
+          });
+        } else {
+          setIsBannedModalOpen(true);
+        }
+      }
     }
-  }, [turnSeconds, view, currentTurn, isBannedModalOpen, winnerCelebration]);
+  }, [turnSeconds, view, currentTurn, isSelfSuspended, isBannedModalOpen, winnerCelebration, activeMultiplayerRoomCode, playerSeatCount, playerHand]);
 
   // Contiguous Groups in Hand (for top bar & group elevation on tap)
   const { cardToGroupMap, firstCardOfGroupMap } = useMemo(
@@ -4936,6 +5021,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Bottom Card Finisher Click -> Instant Win!
   const handleBottomCardFinisherClick = () => {
+    if (isSelfSuspended) return;
     if (!isBottomCardFinisherReady) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyBottomNotReady);
@@ -5403,6 +5489,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Draw from Deck (auto-reshuffles discard pile as many times as needed until someone wins)
   const handleDrawFromDeck = () => {
+    if (isSelfSuspended) return;
     if (currentTurn !== 0) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyWaitTurn);
@@ -5446,6 +5533,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Draw from Discard Pile
   const handleDrawFromDiscard = () => {
+    if (isSelfSuspended) return;
     if (currentTurn !== 0) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyWaitTurn);
@@ -5503,6 +5591,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Meld
   const handleMeldClick = () => {
+    if (isSelfSuspended) return;
     if (currentTurn !== 0) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyMeldTurnOnly);
@@ -5790,7 +5879,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       | 'dopey_joker'
       | 'bottom_normal'
       | 'bottom_dopey'
-      | 'bottom_dopey_joker';
+      | 'bottom_dopey_joker'
+      | 'timeout_win';
     winnerCards?: PlayingCard[];
     closingCard?: PlayingCard | null;
   }) => {
@@ -5821,7 +5911,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         | 'dopey_joker'
         | 'bottom_normal'
         | 'bottom_dopey'
-        | 'bottom_dopey_joker' = 'normal';
+        | 'bottom_dopey_joker'
+        | 'timeout_win' = 'normal';
       let resolvedDopeyMult = 1;
       let resolvedStreakMult = 1;
       let resolvedTitle = t.winTitleNormal;
@@ -5953,7 +6044,18 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     const stepTurn = (oppIdx: number, skipDrawForOpeningDealer = false) => {
       if (epochAtStart !== localGameEpochRef.current) return;
       const activeOpps = opponentsRef.current;
-      if (oppIdx >= activeOpps.length) {
+      let nextIdx = oppIdx;
+      while (nextIdx < activeOpps.length && activeOpps[nextIdx]?.isSuspended) {
+        nextIdx += 1;
+      }
+      if (nextIdx >= activeOpps.length) {
+        if (prevSelfSuspendedRef.current) {
+          const firstBot = activeOpps.findIndex((o) => !o.isSuspended);
+          if (firstBot !== -1) {
+            stepTurn(firstBot, false);
+          }
+          return;
+        }
         setCurrentTurn(0);
         setHasDiscarded(false);
         setHasDrawn(false);
@@ -5962,14 +6064,14 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         return;
       }
 
-      const opp = activeOpps[oppIdx];
-      setCurrentTurn(oppIdx + 1);
+      const opp = activeOpps[nextIdx];
+      setCurrentTurn(nextIdx + 1);
 
       setTimeout(() => {
         if (epochAtStart !== localGameEpochRef.current) return;
         raminoAudio.playCardSnap();
 
-        const latestOpp = opponentsRef.current[oppIdx] || opp;
+        const latestOpp = opponentsRef.current[nextIdx] || opp;
         let oppHand = [...(latestOpp.hand || [])];
 
         if (!skipDrawForOpeningDealer) {
@@ -6012,7 +6114,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
               }
             }
             const updatedDopeyOpps = opponentsRef.current.map((o, idx) =>
-              idx === oppIdx ? { ...o, hand: oppHand, cardCount: oppHand.length, hasMelded: oppHasMelded } : o
+              idx === nextIdx ? { ...o, hand: oppHand, cardCount: oppHand.length, hasMelded: oppHasMelded } : o
             );
             opponentsRef.current = updatedDopeyOpps;
             setOpponents(updatedDopeyOpps);
@@ -6083,7 +6185,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         }
 
         const updatedOpps = opponentsRef.current.map((o, idx) =>
-          idx === oppIdx ? { ...o, hand: oppHand, cardCount: oppHand.length, hasMelded: oppHasMelded } : o
+          idx === nextIdx ? { ...o, hand: oppHand, cardCount: oppHand.length, hasMelded: oppHasMelded } : o
         );
         opponentsRef.current = updatedOpps;
         setOpponents(updatedOpps);
@@ -6101,7 +6203,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           return;
         }
 
-        stepTurn(oppIdx + 1, false);
+        stepTurn(nextIdx + 1, false);
       }, 1400);
     };
 
@@ -6110,6 +6212,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
   // Discard Attempt (Strict Single Discard + Discard-Pickup Rule + Illegal Discard Rule + Opponent Turn Simulation)
   const handleDiscardAttempt = (cardId: string) => {
+    if (isSelfSuspended) return;
     if (hasDiscarded) {
       raminoAudio.playBuzzer();
       triggerNotification(t.notifyAlreadyDiscarded);
@@ -6595,11 +6698,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       );
     }
     const isSpeaking = !isDeafened && speakingOpponentId === opp.id;
-    const isTurn = currentTurn === seatNum;
+    const isTurn = !opp.isSuspended && currentTurn === seatNum;
     return (
       <div
         className={`relative flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/80 border shadow-lg transition ${
-          isTurn
+          opp.isSuspended
+            ? 'border-rose-500/50 opacity-65'
+            : isTurn
             ? 'border-amber-400 ring-2 ring-amber-400/50'
             : 'border-white/20'
         }`}
@@ -6621,11 +6726,19 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         <div className="flex flex-col leading-tight">
           <div className="flex items-center gap-1">
             <span className="text-[11px] font-black text-white">{opp.name}</span>
-            {opp.hasMelded && (
-              <span className="px-1 rounded bg-emerald-500/30 text-emerald-300 text-[8px] font-bold">{t.meldedBadge}</span>
+            {opp.isSuspended ? (
+              <span className="px-1 rounded bg-rose-500/35 text-rose-300 text-[8px] font-black">
+                {t.suspendedBadge}
+              </span>
+            ) : (
+              opp.hasMelded && (
+                <span className="px-1 rounded bg-emerald-500/30 text-emerald-300 text-[8px] font-bold">{t.meldedBadge}</span>
+              )
             )}
           </div>
-          <span className="text-[9px] text-gray-400 font-bold">{opp.cardCount} {t.cardWord}</span>
+          <span className="text-[9px] text-gray-400 font-bold">
+            {opp.isSuspended ? '👁️' : `${opp.cardCount} ${t.cardWord}`}
+          </span>
         </div>
       </div>
     );
@@ -8368,9 +8481,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                       </span>
                       <div className="flex items-center gap-0.5">
                         <span className="text-[8px] sm:text-[9px] font-semibold text-[#a58e76]">
-                          {playerHand.length} {t.cardWord}
+                          {isSelfSuspended ? t.suspendedBadge : `${playerHand.length} ${t.cardWord}`}
                         </span>
-                        {hasMelded && (
+                        {!isSelfSuspended && hasMelded && (
                           <span className="px-0.5 rounded bg-emerald-500/30 text-emerald-300 text-[6px] font-black">
                             ✓
                           </span>
@@ -8382,7 +8495,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                   {/* Overlapping Glossy Circular Timer Ring (Compact) */}
                   <div
                     className={`-ml-5 sm:-ml-5.5 relative w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-b from-[#2b221e] to-[#0d0908] border-[1.5px] flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(227,181,104,0.45)] ${
-                      currentTurn === 0 && turnSeconds <= 30
+                      isSelfSuspended
+                        ? 'border-rose-500/70 opacity-75'
+                        : currentTurn === 0 && turnSeconds <= 30
                         ? 'border-rose-500 animate-pulse shadow-[0_0_14px_rgba(244,63,94,0.65)]'
                         : 'border-[#e3b568]'
                     }`}
@@ -8405,14 +8520,22 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                     <div className="absolute inset-x-1 top-0.5 h-1/2 rounded-t-full bg-gradient-to-b from-white/15 to-transparent pointer-events-none" />
                     <span
                       className={`relative z-10 text-[9px] sm:text-[10px] font-black font-sans tracking-tight ${
-                        currentTurn === 0 && turnSeconds <= 30 ? 'text-rose-400' : 'text-[#f4c67a]'
+                        isSelfSuspended || (currentTurn === 0 && turnSeconds <= 30) ? 'text-rose-400' : 'text-[#f4c67a]'
                       }`}
                     >
-                      {formatTimer(turnSeconds)}
+                      {isSelfSuspended ? '👁️' : formatTimer(turnSeconds)}
                     </span>
                   </div>
                 </div>
 
+                {isSelfSuspended ? (
+                  <div className="flex-1 min-w-0 flex items-center justify-center px-2 py-2">
+                    <div className="px-4 py-2 rounded-2xl bg-rose-950/80 border border-rose-400/50 text-rose-100 text-[11px] sm:text-xs font-black text-center shadow-xl backdrop-blur-md">
+                      {t.spectatorBanner}
+                    </div>
+                  </div>
+                ) : (
+                <>
                 {/* Bottom-Center: Hand-Held Curved Card Fan (IMG_3933) with Smooth Non-Jittery Sliding */}
                 <div className="flex-1 min-w-0 flex items-end justify-center overflow-visible -mb-3 sm:-mb-4 pt-5">
                   <div
@@ -8606,6 +8729,8 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                     );
                   })()}
                 </div>
+                </>
+                )}
               </div>
             </div>
           </main>
@@ -8613,28 +8738,55 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       )}
 
       {/* ========================================================
-          BANNED FOR TIMEOUT WITHOUT DRAWING MODAL
+          BANNED / SUSPENDED FOR TIMEOUT MODAL (WITH LIVE SPECTATOR OPTION)
          ======================================================== */}
-      {isBannedModalOpen && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100000] flex items-center justify-center p-4">
+      {isBannedModalOpen && !winnerCelebration?.show && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100000] flex items-center justify-center p-4">
           <div className="bg-[#1b0b18] border-2 border-rose-500 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl">
             <Ban className="w-12 h-12 text-rose-500 mx-auto" />
             <h3 className="text-lg font-black text-rose-400">{t.bannedTitle}</h3>
-            <p className="text-xs text-gray-300 leading-relaxed">{t.bannedDesc}</p>
-            <button
-              onClick={() => {
-                setIsBannedModalOpen(false);
-                clearLocalSuspendedGame();
-                if (activeMultiplayerRoomCode) {
-                  void leaveMultiplayerTable(false);
-                  return;
-                }
-                setView('lobby');
-              }}
-              className="w-full py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs cursor-pointer"
-            >
-              {t.backToLobbyBtn}
-            </button>
+            <p className="text-xs text-gray-300 leading-relaxed">
+              {isSelfSuspended ? t.bannedSpectatorDesc : t.bannedDesc}
+            </p>
+            {isSelfSuspended ? (
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => setIsBannedModalOpen(false)}
+                  className="w-full py-2.5 rounded-2xl bg-gradient-to-r from-amber-400 to-yellow-400 hover:brightness-105 text-slate-950 font-black text-xs cursor-pointer shadow-lg"
+                >
+                  {t.watchGameBtn}
+                </button>
+                <button
+                  onClick={() => {
+                    setIsBannedModalOpen(false);
+                    clearLocalSuspendedGame();
+                    if (activeMultiplayerRoomCode) {
+                      void leaveMultiplayerTable(false);
+                      return;
+                    }
+                    setView('lobby');
+                  }}
+                  className="w-full py-2 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/15 text-gray-300 font-bold text-xs cursor-pointer"
+                >
+                  {t.backToLobbyBtn}
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  setIsBannedModalOpen(false);
+                  clearLocalSuspendedGame();
+                  if (activeMultiplayerRoomCode) {
+                    void leaveMultiplayerTable(false);
+                    return;
+                  }
+                  setView('lobby');
+                }}
+                className="w-full py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs cursor-pointer"
+              >
+                {t.backToLobbyBtn}
+              </button>
+            )}
           </div>
         </div>
       )}
