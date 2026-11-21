@@ -4655,6 +4655,7 @@ function computeCrc32(buf: Buffer): number {
 function collectProjectFilesForZip(
   dirPath: string,
   baseDir: string,
+  rootFolder = 'Sun-Ramino-Project',
   out: { relPath: string; data: Buffer }[] = []
 ): { relPath: string; data: Buffer }[] {
   const SKIP_DIRS = new Set([
@@ -4662,6 +4663,16 @@ function collectProjectFilesForZip(
     '.git',
     '.vite',
     '.aistudio',
+    'aistudio',
+    'dist',
+  ]);
+  const SKIP_FILES = new Set([
+    '.telegram-bots.json',
+    '.render-deploy.json',
+    'package-lock.json',
+    'bun.lock',
+    'fast_keno_source_code.zip',
+    'server.js',
   ]);
   let entries: fs.Dirent[] = [];
   try {
@@ -4671,65 +4682,18 @@ function collectProjectFilesForZip(
   }
   for (const entry of entries) {
     if (SKIP_DIRS.has(entry.name)) continue;
-    if (entry.name === '.telegram-bots.json' || entry.name === 'package-lock.json') continue;
+    if (SKIP_FILES.has(entry.name)) continue;
+    if (entry.name.startsWith('.bots-') || entry.name.startsWith('.server-state')) continue;
     const fullPath = path.join(dirPath, entry.name);
     const relPath = path.relative(baseDir, fullPath).split(path.sep).join('/');
     if (entry.isDirectory()) {
-      collectProjectFilesForZip(fullPath, baseDir, out);
+      collectProjectFilesForZip(fullPath, baseDir, rootFolder, out);
     } else if (entry.isFile()) {
       try {
-        if (relPath === 'package.json') {
-          // Ensure exported package.json uses standard public npm registry versions so `npm install` works everywhere outside AI Studio
-          const prodPkg = {
-            name: 'ezi-bingo-platform',
-            private: true,
-            version: '2.0.0',
-            description: 'Ezi Bingo & Ezi Fast Bingo Full-Stack Real-Time Multiplayer Platform (Node.js + Express + WebSocket + React + Telegram Bot)',
-            type: 'module',
-            engines: {
-              node: '>=18.0.0',
-            },
-            scripts: {
-              dev: 'tsx server.ts',
-              start: 'tsx server.ts',
-              build: 'vite build',
-              preview: 'vite preview',
-            },
-            dependencies: {
-              '@tailwindcss/vite': '^4.0.9',
-              '@vitejs/plugin-react': '^4.3.4',
-              dotenv: '^16.4.7',
-              express: '^4.21.2',
-              firebase: '^11.3.1',
-              'lucide-react': '^0.475.0',
-              motion: '^12.4.7',
-              react: '^19.0.0',
-              'react-dom': '^19.0.0',
-              tailwindcss: '^4.0.9',
-              tsx: '^4.19.2',
-              typescript: '^5.7.3',
-              vite: '^6.2.0',
-              ws: '^8.18.0',
-            },
-            devDependencies: {
-              '@types/express': '^4.17.21',
-              '@types/node': '^22.13.4',
-              '@types/react': '^19.0.8',
-              '@types/react-dom': '^19.0.3',
-              '@types/ws': '^8.5.14',
-              'vite-plugin-pwa': '^0.21.1',
-            },
-          };
-          out.push({
-            relPath: 'Ezi-Bingo-Full-Project/package.json',
-            data: Buffer.from(JSON.stringify(prodPkg, null, 2), 'utf8'),
-          });
-          continue;
-        }
         const stat = fs.statSync(fullPath);
         if (stat.size <= 15 * 1024 * 1024) {
           out.push({
-            relPath: `Ezi-Bingo-Full-Project/${relPath}`,
+            relPath: `${rootFolder}/${relPath}`,
             data: fs.readFileSync(fullPath),
           });
         }
@@ -4741,50 +4705,30 @@ function collectProjectFilesForZip(
   return out;
 }
 
-function buildFullProjectZipBuffer(): Buffer {
-  const files = collectProjectFilesForZip(__dirname, __dirname);
-  const readmeText = `# Ezi Bingo & Ezi Fast Bingo — Full-Stack Production Server (v2.0)
+function buildFullProjectZipBuffer(rootFolder = 'Sun-Ramino-Project'): Buffer {
+  const files = collectProjectFilesForZip(__dirname, __dirname, rootFolder);
+  const readmeText = `# SUN Ramino — Full-Stack Production Server
 
-ይህ ሙሉ የ Ezi Bingo (መደበኛ 27-ሕግ ቢንጎ + ፈጣን ቢንጎ 10/20/50/100 ብር ክፍሎች + የቴሌግራም ቦት + የቁጥጥር ፓነል + WebSocket Real-Time Server) 100% የሚሰራ ሙሉ Production Server እና Source Code ነው።
+ይህ ሙሉ የ SUN Ramino (ራሚኖ ብቻ + የቴሌግራም ቦት + Voice Chat + Wallet & Admin Panel + WebSocket Real-Time Server) የሚሰራ ሙሉ ፕሮጀክት ነው።
 
-⚠️ **ማሳሰቢያ፦**
-- አንድ ነጠላ \`.html\` ፋይል ብቻውን ሲወርድ የ Frontend (UI) ፋይል ብቻ ስለሆነ የራሱ Backend Server አይኖረውም።
-- **ይህ \`.ZIP\` ፎልደር ግን ሙሉውን Backend Server (\`server.ts\`)፣ Frontend (\`src/\`)፣ የተዘጋጀውን Production Build (\`dist/\`)፣ \`Dockerfile\` እና የቴሌግራም ቦት ሞተሩን በሙሉ የያዘ ዋናው ፕሮጀክት ነው!**
+## 1. በ Render.com ላይ ለመጫን (Deploy on Render):
+1. ይህንን \`.ZIP\` ፋይል Unzip (Extract) ያድርጉ።
+2. \`${rootFolder}\` ፎልደር ውስጥ ያሉትን ፋይሎች ወደ GitHub Repository ይጫኑ።
+3. በ Render.com ላይ **New Web Service** ይፍጠሩ እና GitHub repo-ውን ይምረጡ፦
+   - **Build Command:** \`npm install --legacy-peer-deps && npm run build\`
+   - **Start Command:** \`npm start\`
+4. ከተጫነ በኋላ አዲሱን URL ከ \`@Sungamsbot\` / Admin Panel ጋር ያገናኙ።
 
-## 1. በኮምፒውተር ወይም በ VPS ሰርቨር (Ubuntu / Windows) ላይ ለማስጀመር:
-1. **Node.js (v18 ወይም v20+)** መጫኑን ያረጋግጡ።
-2. ይህንን \`.ZIP\` ፋይል Extract (Unzip) ያድርጉት።
-3. በዚህ ፎልደር ውስጥ Terminal / Command Prompt ከፍተው የሚከተሉትን ትዕዛዞች ይጻፉ፦
+## 2. በኮምፒውተር ወይም VPS ላይ ለማስጀመር:
 \`\`\`bash
 npm install
 npm run build
 npm start
 \`\`\`
-4. ሰርቨሩ በ \`http://localhost:3000\` ላይ ወዲያውኑ ይከፈታል!
-
-## 2. በ Railway.app / Render.com / DigitalOcean ላይ Host ለማድረግ:
-- ይህንን ፎልደር ወደ **GitHub** (Private Repository) ይጫኑት።
-- በ **Railway.app** ወይም **Render.com** ላይ **"Deploy from GitHub repo"** ይበሉት።
-- \`Dockerfile\`, \`railway.json\`, እና \`render.yaml\` በውስጡ ተዘጋጅተው ስለተቀመጡ ምንም ተጨማሪ ሴቲንግ ሳይጠይቅ በራሱ Build አድርጎ Online ያወጣዋል!
 `;
   files.push({
-    relPath: 'Ezi-Bingo-Full-Project/README.md',
+    relPath: `${rootFolder}/DEPLOY_GUIDE.md`,
     data: Buffer.from(readmeText, 'utf8'),
-  });
-  files.push({
-    relPath: 'Ezi-Bingo-Full-Project/ecosystem.config.cjs',
-    data: Buffer.from(
-      `module.exports = {\n  apps: [\n    {\n      name: 'ezi-bingo-server',\n      script: 'npx',\n      args: 'tsx server.ts',\n      env: {\n        NODE_ENV: 'production',\n        PORT: 3000,\n      },\n    },\n  ],\n};\n`,
-      'utf8'
-    ),
-  });
-  files.push({
-    relPath: 'Ezi-Bingo-Full-Project/START_WINDOWS.bat',
-    data: Buffer.from('@echo off\r\necho Installing Ezi Bingo dependencies...\r\ncall npm install\r\necho Building production bundle...\r\ncall npm run build\r\necho Starting Ezi Bingo Production Server on http://localhost:3000 ...\r\ncall npm start\r\npause\r\n', 'utf8'),
-  });
-  files.push({
-    relPath: 'Ezi-Bingo-Full-Project/START_LINUX_MAC.sh',
-    data: Buffer.from('#!/usr/bin/env bash\nnpm install && npm run build && npm start\n', 'utf8'),
   });
 
   const localFileChunks: Buffer[] = [];
@@ -4858,11 +4802,11 @@ npm start
 
 const serveFullProjectZip = (_req: express.Request, res: express.Response) => {
   try {
-    const zipBuffer = buildFullProjectZipBuffer();
+    const zipBuffer = buildFullProjectZipBuffer('Sun-Ramino-Project');
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
       'Content-Disposition',
-      'attachment; filename="Ezi-Bingo-Full-Project.zip"'
+      'attachment; filename="Sun-Ramino-Project.zip"'
     );
     res.setHeader('Content-Length', String(zipBuffer.length));
     res.send(zipBuffer);
@@ -4873,6 +4817,8 @@ const serveFullProjectZip = (_req: express.Request, res: express.Response) => {
 };
 
 app.get('/api/download-full-project', serveFullProjectZip);
+app.get('/api/download-ramino-project', serveFullProjectZip);
+app.get('/Sun-Ramino-Project.zip', serveFullProjectZip);
 app.get('/Ezi-Bingo-Full-Project.zip', serveFullProjectZip);
 
 const RENDER_DEPLOY_CONFIG_PATH = path.join(__dirname, '.render-deploy.json');

@@ -2138,19 +2138,27 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 </div>
               )}
 
-              {/* Direct 2-Part Non-ZIP Standalone Ramino Code Download */}
+              {/* Direct Standalone Ramino & Full Project Export */}
               <div className="pt-3 border-t border-purple-500/25 flex flex-wrap items-center justify-between gap-2">
                 <div className="text-xs text-slate-300 font-bold">
-                  📦 የራሚኖ ሙሉ ፋይል ያለ ZIP በ 2 ከፍለህ አውርድ (Standalone Export):
+                  📦 የራሚኖ ሙሉ ፋይል (ለሌላ Render / GitHub / VPS መጫኛ):
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href={buildApiUrl('/api/download-ramino-project')}
+                    download="Sun-Ramino-Project.zip"
+                    className="px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-white text-xs font-black flex items-center gap-1.5 shadow"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>ሙሉ ፕሮጀክት ZIP (.zip)</span>
+                  </a>
                   <a
                     href={buildApiUrl('/api/ramino/export/part1')}
                     download="ramino-part1-server-setup.ts"
                     className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    <span>Part 1: Server & Setup (.ts)</span>
+                    <span>Part 1: Server (.ts)</span>
                   </a>
                   <a
                     href={buildApiUrl('/api/ramino/export/part2')}
@@ -2158,7 +2166,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                     className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1.5"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    <span>Part 2: ModernRaminoGame (.tsx)</span>
+                    <span>Part 2: Game (.tsx)</span>
                   </a>
                 </div>
               </div>
