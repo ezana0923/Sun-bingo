@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
 import crypto from 'crypto';
+import { Pool } from 'pg';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { generateProvablyFairRound } from './src/utils/provablyFair';
@@ -1236,6 +1237,166 @@ let persistedBotTokensCache: {
 let isExplicitBotDisconnect = false;
 let lastSavedStateHash = '';
 
+let lastSavedDbHash = '';
+let pgPool: Pool | null = null;
+let pgReady = false;
+let pgWriteLoopRunning = false;
+let pendingPgSnapshot: { serialized: string; players: ServerPlayerRecord[]; stateHash: string } | null = null;
+
+function getPostgresConnectionString(): string {
+  return (
+    process.env.DATABASE_URL ||
+    process.env.NEON_DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    ''
+  ).trim();
+}
+
+async function initPostgresPoolIfConfigured(): Promise<boolean> {
+  const connStr = getPostgresConnectionString();
+  if (!connStr) return false;
+  try {
+    if (!pgPool) {
+      const lower = connStr.toLowerCase();
+      const useSsl =
+        !lower.includes('sslmode=disable') &&
+        !lower.includes('localhost') &&
+        !lower.includes('127.0.0.1');
+      pgPool = new Pool({
+        connectionString: connStr,
+        max: 3,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+        ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+      });
+      pgPool.on('error', (err) => {
+        console.error('PostgreSQL pool error (kept alive):', err?.message || err);
+      });
+    }
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS sun_app_state (
+        id TEXT PRIMARY KEY,
+        state_json JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS sun_player_wallets (
+        phone TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        withdrawable_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        bonus_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        non_withdrawable_bonus DOUBLE PRECISION NOT NULL DEFAULT 0,
+        referral_earnings DOUBLE PRECISION NOT NULL DEFAULT 0,
+        referred_count INTEGER NOT NULL DEFAULT 0,
+        is_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+        chat_id BIGINT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    pgReady = true;
+    return true;
+  } catch (err) {
+    console.error('PostgreSQL init warning (falling back safely):', (err as Error)?.message || err);
+    pgReady = false;
+    return false;
+  }
+}
+
+async function flushPostgresQueue(): Promise<void> {
+  if (!pgPool || !pgReady || pgWriteLoopRunning) return;
+  pgWriteLoopRunning = true;
+  try {
+    while (pendingPgSnapshot) {
+      const snap = pendingPgSnapshot;
+      pendingPgSnapshot = null;
+      if (snap.stateHash === lastSavedDbHash) continue;
+      try {
+        await pgPool.query(
+          `INSERT INTO sun_app_state (id, state_json, updated_at)
+           VALUES ($1, $2::jsonb, NOW())
+           ON CONFLICT (id) DO UPDATE
+           SET state_json = EXCLUDED.state_json, updated_at = NOW()`,
+          ['main_state', snap.serialized]
+        );
+        if (snap.players.length > 0) {
+          const phones: string[] = [];
+          const names: string[] = [];
+          const balances: number[] = [];
+          const withdrawables: number[] = [];
+          const bonuses: number[] = [];
+          const nonWithdrawables: number[] = [];
+          const refEarnings: number[] = [];
+          const refCounts: number[] = [];
+          const blockedList: boolean[] = [];
+          const chatIds: (number | null)[] = [];
+          const seenPhones = new Set<string>();
+          for (const p of snap.players) {
+            const cleanPh = p?.phone ? String(p.phone).trim() : '';
+            if (!cleanPh || seenPhones.has(cleanPh)) continue;
+            seenPhones.add(cleanPh);
+            phones.push(cleanPh);
+            names.push(String(p.name || ''));
+            balances.push(Number(p.balance || 0));
+            withdrawables.push(Number(p.withdrawableBalance ?? 0));
+            bonuses.push(Number(p.bonusBalance ?? 0));
+            nonWithdrawables.push(Number(p.nonWithdrawableBonus ?? 0));
+            refEarnings.push(Number(p.referralEarnings ?? 0));
+            refCounts.push(Math.round(Number(p.referredCount ?? 0)));
+            blockedList.push(Boolean(p.isBlocked));
+            chatIds.push(typeof p.chatId === 'number' && Number.isFinite(p.chatId) ? Math.trunc(p.chatId) : null);
+          }
+          if (phones.length > 0) {
+            await pgPool.query(
+              `INSERT INTO sun_player_wallets (
+                 phone, name, balance, withdrawable_balance, bonus_balance,
+                 non_withdrawable_bonus, referral_earnings, referred_count,
+                 is_blocked, chat_id, updated_at
+               )
+               SELECT t.phone, t.name, t.balance, t.withdrawable_balance, t.bonus_balance,
+                      t.non_withdrawable_bonus, t.referral_earnings, t.referred_count,
+                      t.is_blocked, t.chat_id, NOW()
+               FROM UNNEST(
+                 $1::text[], $2::text[], $3::double precision[], $4::double precision[],
+                 $5::double precision[], $6::double precision[], $7::double precision[],
+                 $8::integer[], $9::boolean[], $10::bigint[]
+               ) AS t(
+                 phone, name, balance, withdrawable_balance, bonus_balance,
+                 non_withdrawable_bonus, referral_earnings, referred_count,
+                 is_blocked, chat_id
+               )
+               ON CONFLICT (phone) DO UPDATE SET
+                 name = EXCLUDED.name,
+                 balance = EXCLUDED.balance,
+                 withdrawable_balance = EXCLUDED.withdrawable_balance,
+                 bonus_balance = EXCLUDED.bonus_balance,
+                 non_withdrawable_bonus = EXCLUDED.non_withdrawable_bonus,
+                 referral_earnings = EXCLUDED.referral_earnings,
+                 referred_count = EXCLUDED.referred_count,
+                 is_blocked = EXCLUDED.is_blocked,
+                 chat_id = COALESCE(EXCLUDED.chat_id, sun_player_wallets.chat_id),
+                 updated_at = NOW()`,
+              [phones, names, balances, withdrawables, bonuses, nonWithdrawables, refEarnings, refCounts, blockedList, chatIds]
+            );
+          }
+        }
+        lastSavedDbHash = snap.stateHash;
+      } catch (err) {
+        console.error('PostgreSQL persist warning:', (err as Error)?.message || err);
+      }
+    }
+  } finally {
+    pgWriteLoopRunning = false;
+  }
+}
+
+function schedulePostgresPersist(serialized: string, players: ServerPlayerRecord[], stateHash: string) {
+  if (!pgPool || !pgReady) return;
+  pendingPgSnapshot = { serialized, players, stateHash };
+  void flushPostgresQueue();
+}
+
 function saveBotsToDisk() {
   try {
     const activeTokenList = Array.from(activeBots.entries()).map(([token, info]) => ({
@@ -1330,7 +1491,7 @@ function saveBotsToDisk() {
       homeHeroAds: persistedHomeHeroAds.slice(0, 25),
     };
     const serialized = JSON.stringify(payload);
-    // Hash excluding volatile room seq/timestamp counters so 15s idle timer skips needless synchronous disk writes
+    // Hash excluding volatile room seq/timestamp counters so 15s idle timer skips needless synchronous disk/DB writes
     const stablePayload = {
       ...payload,
       fastRoomState: payload.fastRoomState ? { ...payload.fastRoomState, seq: 0 } : undefined,
@@ -1372,23 +1533,14 @@ function saveBotsToDisk() {
       // ignore backup write errors
     }
     lastSavedStateHash = nextHash;
+    schedulePostgresPersist(serialized, payload.players || [], nextHash);
   } catch {
     // ignore disk write errors
   }
 }
 
-function loadBotsFromDisk() {
-  try {
-    const sourcePath = fs.existsSync(BOT_STORE_PATH)
-      ? BOT_STORE_PATH
-      : fs.existsSync(BOT_STORE_BACKUP_PATH)
-      ? BOT_STORE_BACKUP_PATH
-      : null;
-    if (!sourcePath) {
-      return;
-    }
-    const raw = fs.readFileSync(sourcePath, 'utf-8');
-    const parsed = JSON.parse(raw) as Partial<PersistedBotData>;
+function applyPersistedState(parsed: Partial<PersistedBotData>) {
+  if (!parsed || typeof parsed !== 'object') return;
     if (Array.isArray(parsed.persistedBankAccounts) && parsed.persistedBankAccounts.length > 0) {
       persistedBankAccounts = parsed.persistedBankAccounts.map((b) => ({
         ...b,
@@ -1621,7 +1773,90 @@ function loadBotsFromDisk() {
       }
       persistedBotTokensCache = uniqueTokens;
     }
+}
 
+async function hydratePersistedStateAndBots() {
+  let hydratedFromPostgres = false;
+  const hasPg = await initPostgresPoolIfConfigured();
+
+  if (hasPg && pgPool) {
+    try {
+      const stateRes = await pgPool.query(
+        'SELECT state_json FROM sun_app_state WHERE id = $1 LIMIT 1',
+        ['main_state']
+      );
+      if (stateRes.rows.length > 0 && stateRes.rows[0]?.state_json) {
+        const dbParsed = stateRes.rows[0].state_json as Partial<PersistedBotData>;
+        applyPersistedState(dbParsed);
+        hydratedFromPostgres = true;
+        console.log(`✅ Loaded persistent state & ${playersByPhone.size} player wallets from PostgreSQL.`);
+      }
+    } catch (err) {
+      console.error('PostgreSQL state load warning:', (err as Error)?.message || err);
+    }
+  }
+
+  if (!hydratedFromPostgres) {
+    try {
+      const sourcePath = fs.existsSync(BOT_STORE_PATH)
+        ? BOT_STORE_PATH
+        : fs.existsSync(BOT_STORE_BACKUP_PATH)
+        ? BOT_STORE_BACKUP_PATH
+        : null;
+      if (sourcePath) {
+        const raw = fs.readFileSync(sourcePath, 'utf-8');
+        const parsed = JSON.parse(raw) as Partial<PersistedBotData>;
+        applyPersistedState(parsed);
+      }
+    } catch {
+      // ignore disk read errors
+    }
+  }
+
+  // Also merge any wallets from sun_player_wallets table that may be newer or missing
+  if (hasPg && pgPool) {
+    try {
+      const wRes = await pgPool.query(
+        `SELECT phone, name, balance, withdrawable_balance, bonus_balance,
+                non_withdrawable_bonus, referral_earnings, referred_count,
+                is_blocked, chat_id
+         FROM sun_player_wallets`
+      );
+      for (const row of wRes.rows) {
+        const cleanPh = normalizeEthiopianPhone(String(row.phone || '')) || String(row.phone || '').trim();
+        if (!cleanPh) continue;
+        if (!playersByPhone.has(cleanPh)) {
+          const rec: ServerPlayerRecord = {
+            id: `u-${cleanPh}`,
+            phone: cleanPh,
+            name: String(row.name || `Player_${cleanPh.slice(-4)}`),
+            passwordHash: '****',
+            balance: Number(row.balance || 0),
+            withdrawableBalance: Number(row.withdrawable_balance || 0),
+            bonusBalance: Number(row.bonus_balance || 0),
+            nonWithdrawableBonus: Number(row.non_withdrawable_bonus || 0),
+            referralEarnings: Number(row.referral_earnings || 0),
+            referredCount: Number(row.referred_count || 0),
+            isBlocked: Boolean(row.is_blocked),
+            chatId: row.chat_id ? Number(row.chat_id) : undefined,
+            updatedAt: new Date().toLocaleString(),
+          };
+          playersByPhone.set(cleanPh, rec);
+        }
+        if (row.chat_id && !registeredChatPhones.has(Number(row.chat_id))) {
+          registeredChatPhones.set(Number(row.chat_id), cleanPh);
+        }
+      }
+      if (!hydratedFromPostgres && (playersByPhone.size > 0 || serverTransactions.length > 0)) {
+        saveBotsToDisk();
+      }
+    } catch (err) {
+      console.error('PostgreSQL wallets merge warning:', (err as Error)?.message || err);
+    }
+  }
+
+  // Always auto-connect TELEGRAM_BOT_TOKEN from env if configured (even on clean ephemeral boot!)
+  try {
     const envBotToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
     if (envBotToken && envBotToken.includes(':') && !activeBots.has(envBotToken)) {
       fetch(`https://api.telegram.org/bot${envBotToken}/getMe`)
@@ -1664,7 +1899,7 @@ function loadBotsFromDisk() {
         .catch(() => {});
     }
   } catch {
-    // ignore disk read errors
+    // ignore env bot startup errors
   }
 }
 
@@ -5154,6 +5389,13 @@ app.get('/api/health', (_req, res) => {
     },
     wsClients: wsClients.size,
     sseClients: sseClients.size,
+    storageBackend: pgReady ? 'postgresql' : 'local-disk',
+    database: pgReady
+      ? 'postgresql-connected'
+      : getPostgresConnectionString()
+      ? 'postgresql-reconnecting'
+      : 'local-disk',
+    playersCount: playersByPhone.size,
     timestamp: Date.now(),
     dateTime: new Date().toISOString(),
   });
@@ -11429,10 +11671,30 @@ async function startServer() {
   const isRender = Boolean(process.env.RENDER) || Boolean(process.env.RENDER_EXTERNAL_URL);
   const PORT = isRender ? Number(process.env.PORT) || 3000 : 3000;
 
-  // Automatically restore and poll any saved Telegram bots across server restarts
-  loadBotsFromDisk();
+  // Automatically restore persistent PostgreSQL / disk state and bots BEFORE opening HTTP traffic
+  await hydratePersistedStateAndBots();
   startKenoServerLoop();
   startRaminoServerLoop();
+
+  const gracefulFlushAndExit = async () => {
+    try {
+      saveBotsToDisk();
+      await Promise.race([
+        flushPostgresQueue(),
+        new Promise((resolve) => setTimeout(resolve, 3500)),
+      ]);
+      if (pgPool) {
+        await pgPool.end().catch(() => {});
+      }
+    } catch {}
+    process.exit(0);
+  };
+  process.once('SIGTERM', () => {
+    void gracefulFlushAndExit();
+  });
+  process.once('SIGINT', () => {
+    void gracefulFlushAndExit();
+  });
 
   // Render.com Free Tier Keep-Alive / Wake-Up Self-Ping (runs every 4 minutes, drains body cleanly)
   setInterval(() => {

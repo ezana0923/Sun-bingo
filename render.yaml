@@ -19,3 +19,7 @@ services:
         value: 7788
       - key: RENDER_DEPLOY_HOOK_URL
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
