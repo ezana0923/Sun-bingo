@@ -87,6 +87,7 @@ export interface RealtimeRoomSyncMessage {
     referredCount: number;
     isBlocked: boolean;
   }[];
+  homeAdsEnabled?: boolean;
   homeHeroAds?: HeroBannerAd[];
   homeHeroAdsVersion?: number;
   requireDepositApproval?: boolean;
@@ -399,6 +400,7 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSyncMessage: RealtimeRoomSyncMessage | null = null;
 let lastKnownHomeAdsVersion = -1;
 let cachedHomeHeroAds: HeroBannerAd[] | undefined = undefined;
+let cachedHomeAdsEnabled: boolean | undefined = undefined;
 const seenNotifyIds = new Set<string>();
 
 function emitGameNotifyToListeners(event?: GameStartNotificationEvent) {
@@ -420,6 +422,9 @@ function emitGameNotifyToListeners(event?: GameStartNotificationEvent) {
 
 function notifyListeners(rawMsg: RealtimeRoomSyncMessage, fromStream = false) {
   if (!rawMsg) return;
+  if (typeof rawMsg.homeAdsEnabled === 'boolean') {
+    cachedHomeAdsEnabled = rawMsg.homeAdsEnabled;
+  }
   if (Array.isArray(rawMsg.homeHeroAds)) {
     cachedHomeHeroAds = rawMsg.homeHeroAds;
     if (typeof rawMsg.homeHeroAdsVersion === 'number') {
@@ -428,10 +433,13 @@ function notifyListeners(rawMsg: RealtimeRoomSyncMessage, fromStream = false) {
       lastKnownHomeAdsVersion = Math.max(1, lastKnownHomeAdsVersion);
     }
   }
-  const msg: RealtimeRoomSyncMessage =
-    !Array.isArray(rawMsg.homeHeroAds) && cachedHomeHeroAds
-      ? { ...rawMsg, homeHeroAds: cachedHomeHeroAds }
-      : rawMsg;
+  const msg: RealtimeRoomSyncMessage = {
+    ...rawMsg,
+    ...(!Array.isArray(rawMsg.homeHeroAds) && cachedHomeHeroAds ? { homeHeroAds: cachedHomeHeroAds } : {}),
+    ...(typeof rawMsg.homeAdsEnabled !== 'boolean' && typeof cachedHomeAdsEnabled === 'boolean'
+      ? { homeAdsEnabled: cachedHomeAdsEnabled }
+      : {}),
+  };
   const fRoom = msg.fastRoom;
   const rRoom = msg.regularRoom;
 
@@ -554,6 +562,10 @@ function connectEventSource() {
           isWsConnected = true;
           notifyListeners(parsed as unknown as RealtimeRoomSyncMessage, true);
         } else if (parsed && parsed.type === 'home:ads:sync') {
+          const parsedEnabled = (parsed as { homeAdsEnabled?: boolean }).homeAdsEnabled;
+          if (typeof parsedEnabled === 'boolean') {
+            cachedHomeAdsEnabled = parsedEnabled;
+          }
           const adsList = Array.isArray(parsed.heroBanners)
             ? parsed.heroBanners
             : Array.isArray(parsed.ads)
@@ -565,12 +577,28 @@ function connectEventSource() {
               lastKnownHomeAdsVersion = (parsed as { homeHeroAdsVersion?: number }).homeHeroAdsVersion!;
             }
           }
-          if (adsList && lastSyncMessage) {
-            notifyListeners({ ...lastSyncMessage, homeHeroAds: adsList, timestamp: Date.now() }, true);
-          } else if (adsList) {
+          if ((adsList || typeof parsedEnabled === 'boolean') && lastSyncMessage) {
+            notifyListeners(
+              {
+                ...lastSyncMessage,
+                ...(adsList ? { homeHeroAds: adsList } : {}),
+                ...(typeof parsedEnabled === 'boolean' ? { homeAdsEnabled: parsedEnabled } : {}),
+                timestamp: Date.now(),
+              },
+              true
+            );
+          } else if (adsList || typeof parsedEnabled === 'boolean') {
             listeners.forEach((cb) => {
               try {
-                cb({ type: 'room:sync', homeHeroAds: adsList, timestamp: Date.now() } as RealtimeRoomSyncMessage, true);
+                cb(
+                  {
+                    type: 'room:sync',
+                    ...(adsList ? { homeHeroAds: adsList } : {}),
+                    ...(typeof parsedEnabled === 'boolean' ? { homeAdsEnabled: parsedEnabled } : {}),
+                    timestamp: Date.now(),
+                  } as RealtimeRoomSyncMessage,
+                  true
+                );
               } catch {}
             });
           }
@@ -642,6 +670,7 @@ function startPollingBackup() {
               regularLockedCartelas: data.regularLockedCartelas || [],
               transactions: data.transactions,
               players: data.players,
+              homeAdsEnabled: data.homeAdsEnabled,
               homeHeroAds: data.homeHeroAds,
               homeHeroAdsVersion: data.homeHeroAdsVersion,
               requireDepositApproval: data.requireDepositApproval,
@@ -696,6 +725,10 @@ function connectWebSocket() {
           isWsConnected = true;
           notifyListeners(parsed as unknown as RealtimeRoomSyncMessage, true);
         } else if (parsed && parsed.type === 'home:ads:sync') {
+          const parsedEnabled = (parsed as { homeAdsEnabled?: boolean }).homeAdsEnabled;
+          if (typeof parsedEnabled === 'boolean') {
+            cachedHomeAdsEnabled = parsedEnabled;
+          }
           const adsList = Array.isArray(parsed.heroBanners)
             ? parsed.heroBanners
             : Array.isArray(parsed.ads)
@@ -707,12 +740,28 @@ function connectWebSocket() {
               lastKnownHomeAdsVersion = (parsed as { homeHeroAdsVersion?: number }).homeHeroAdsVersion!;
             }
           }
-          if (adsList && lastSyncMessage) {
-            notifyListeners({ ...lastSyncMessage, homeHeroAds: adsList, timestamp: Date.now() }, true);
-          } else if (adsList) {
+          if ((adsList || typeof parsedEnabled === 'boolean') && lastSyncMessage) {
+            notifyListeners(
+              {
+                ...lastSyncMessage,
+                ...(adsList ? { homeHeroAds: adsList } : {}),
+                ...(typeof parsedEnabled === 'boolean' ? { homeAdsEnabled: parsedEnabled } : {}),
+                timestamp: Date.now(),
+              },
+              true
+            );
+          } else if (adsList || typeof parsedEnabled === 'boolean') {
             listeners.forEach((cb) => {
               try {
-                cb({ type: 'room:sync', homeHeroAds: adsList, timestamp: Date.now() } as RealtimeRoomSyncMessage, true);
+                cb(
+                  {
+                    type: 'room:sync',
+                    ...(adsList ? { homeHeroAds: adsList } : {}),
+                    ...(typeof parsedEnabled === 'boolean' ? { homeAdsEnabled: parsedEnabled } : {}),
+                    timestamp: Date.now(),
+                  } as RealtimeRoomSyncMessage,
+                  true
+                );
               } catch {}
             });
           }

@@ -237,6 +237,8 @@ interface AdminPanelViewProps {
   jackpotPool?: number;
   houseEarningsTotal?: number;
   onUpdateJackpotPool?: (amount: number) => void;
+  homeAdsEnabled?: boolean;
+  onToggleHomeAdsEnabled?: (next: boolean) => void;
   heroBanners?: HeroBannerAd[];
   bankAccounts?: BankPaymentAccount[];
   users: UserAccount[];
@@ -310,6 +312,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   jackpotPool = 850,
   houseEarningsTotal = 420,
   onUpdateJackpotPool,
+  homeAdsEnabled = true,
+  onToggleHomeAdsEnabled,
   heroBanners = [],
   bankAccounts = PAYMENT_ACCOUNTS,
   users,
@@ -1054,7 +1058,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     id: AdminSubTab;
     label: string;
     icon: React.ReactNode;
-    badge?: number;
+    badge?: number | string;
   }[] = [
     {
       id: 'overview',
@@ -1070,7 +1074,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       id: 'banners',
       label: 'Ads Creator (ማስታወቂያ)',
       icon: <Megaphone className="w-4 h-4" />,
-      badge: heroBanners.length > 0 ? heroBanners.length : undefined,
+      badge: !homeAdsEnabled ? 'OFF' : heroBanners.length > 0 ? heroBanners.length : undefined,
     },
     {
       id: 'banks',
@@ -1503,10 +1507,13 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             >
               {tab.icon}
               <span>{tab.label}</span>
-              {typeof tab.badge === 'number' && tab.badge > 0 && (
+              {((typeof tab.badge === 'number' && tab.badge > 0) ||
+                (typeof tab.badge === 'string' && tab.badge.length > 0)) && (
                 <span
                   className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
-                    isActive
+                    tab.badge === 'OFF'
+                      ? 'bg-rose-500 text-white'
+                      : isActive
                       ? 'bg-white text-indigo-700'
                       : tab.id === 'deposits' || tab.id === 'withdrawals'
                       ? 'bg-amber-500 text-slate-950'
@@ -1754,6 +1761,30 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   ለማስተካከል የፈለጉትን ጨዋታ ከተጫዋቾች ዋና ገጽ (Home) ላይ መደበቅ (Hide) ወይም መልሶ ማሳየት (Show) ይችላሉ።
                 </p>
               </div>
+              {onToggleHomeAdsEnabled && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !homeAdsEnabled;
+                    onToggleHomeAdsEnabled(next);
+                    showToast(
+                      next
+                        ? '📢 የፊት ገጽ ማስታወቂያ (Front Ads) በርቷል (ON)!'
+                        : '🙈 የፊት ገጽ ማስታወቂያ (Front Ads) ጠፍቷል (OFF)!'
+                    );
+                  }}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-black border flex items-center gap-2 cursor-pointer transition-colors ${
+                    homeAdsEnabled
+                      ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/40'
+                      : 'bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border-rose-500/50'
+                  }`}
+                >
+                  <Megaphone className="w-3.5 h-3.5" />
+                  <span>
+                    የፊት Ads: {homeAdsEnabled ? 'ON (ይታያል)' : 'OFF (ጠፍቷል)'}
+                  </span>
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -2960,6 +2991,60 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
          ===================================================================== */}
       {activeSubTab === 'banners' && (
         <div className="space-y-4">
+          {onToggleHomeAdsEnabled && (
+            <div
+              className={`rounded-2xl border p-4 flex flex-wrap items-center justify-between gap-3 ${
+                homeAdsEnabled
+                  ? isDark
+                    ? 'bg-emerald-950/25 border-emerald-500/40 text-white'
+                    : 'bg-emerald-50 border-emerald-300 text-slate-900'
+                  : isDark
+                  ? 'bg-rose-950/30 border-rose-500/40 text-white'
+                  : 'bg-rose-50 border-rose-300 text-slate-900'
+              }`}
+            >
+              <div>
+                <div className="text-sm sm:text-base font-black flex items-center gap-2">
+                  <Megaphone className={`w-4 h-4 ${homeAdsEnabled ? 'text-emerald-400' : 'text-rose-400'}`} />
+                  <span>የፊት ገጽ ማስታወቂያ (Front Home Page Ads)</span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                      homeAdsEnabled
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                        : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                    }`}
+                  >
+                    {homeAdsEnabled ? 'ON • ይታያል' : 'OFF • ጠፍቷል'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {homeAdsEnabled
+                    ? 'አሁን እፊት (Home Page ላይ) ያለው የማስታወቂያ ባነር ለተጫዋቾች ይታያል። ለማጥፋት OFF የሚለውን ይጫኑ።'
+                    : 'አሁን እፊት (Home Page ላይ) ያለው ማስታወቂያ ሙሉ በሙሉ ጠፍቷል (ተደብቋል)።'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !homeAdsEnabled;
+                  onToggleHomeAdsEnabled(next);
+                  showToast(
+                    next
+                      ? '📢 የፊት ገጽ ማስታወቂያ (Front Ads) በርቷል (ON)!'
+                      : '🙈 የፊት ገጽ ማስታወቂያ (Front Ads) ጠፍቷል (OFF)!'
+                  );
+                }}
+                className={`px-4 py-2.5 rounded-xl text-xs sm:text-sm font-black cursor-pointer transition-colors shadow-md ${
+                  homeAdsEnabled
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                    : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                }`}
+              >
+                {homeAdsEnabled ? '🚫 Ads OFF አድርግ (ደብቅ)' : '👁️ Ads ON አድርግ (አሳይ)'}
+              </button>
+            </div>
+          )}
+
           <div
             className={`rounded-2xl border p-5 space-y-4 ${
               isDark

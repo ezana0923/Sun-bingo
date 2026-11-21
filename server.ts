@@ -615,6 +615,7 @@ function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
     transactions: serverTransactions,
     players: Array.from(playersByPhone.values()),
     bankAccounts: persistedBankAccounts,
+    homeAdsEnabled: persistedHomeAdsEnabled,
     homeHeroAdsVersion,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
     depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
@@ -1185,6 +1186,7 @@ interface PersistedBotData {
   receivedWebhookSmsLogs?: ReceivedWebhookSmsLog[];
   persistedBankAccounts?: typeof persistedBankAccounts;
   gameVisibility?: Record<string, { visible: boolean; comingSoon?: boolean }>;
+  homeAdsEnabled?: boolean;
   homeHeroAds?: {
     id: string;
     title: string;
@@ -1208,6 +1210,7 @@ let persistedGameVisibility: Record<GameVisibilityKey, { visible: boolean; comin
   ramino: { visible: true, comingSoon: false },
 };
 
+let persistedHomeAdsEnabled = true;
 let persistedHomeHeroAds: {
   id: string;
   title: string;
@@ -1323,6 +1326,7 @@ function saveBotsToDisk() {
       receivedWebhookSmsLogs: receivedWebhookSmsLogs.slice(0, 100),
       persistedBankAccounts,
       gameVisibility: persistedGameVisibility,
+      homeAdsEnabled: persistedHomeAdsEnabled,
       homeHeroAds: persistedHomeHeroAds.slice(0, 25),
     };
     const serialized = JSON.stringify(payload);
@@ -1403,6 +1407,9 @@ function loadBotsFromDisk() {
         keno: gv.keno ?? persistedGameVisibility.keno,
         ramino: gv.ramino ?? persistedGameVisibility.ramino,
       };
+    }
+    if (typeof parsed.homeAdsEnabled === 'boolean') {
+      persistedHomeAdsEnabled = parsed.homeAdsEnabled;
     }
     if (Array.isArray(parsed.homeHeroAds)) {
       persistedHomeHeroAds = parsed.homeHeroAds;
@@ -5108,6 +5115,7 @@ app.get('/api/live-room/stream', (req, res) => {
     transactions: serverTransactions,
     players: Array.from(playersByPhone.values()),
     bankAccounts: persistedBankAccounts,
+    homeAdsEnabled: persistedHomeAdsEnabled,
     homeHeroAds: persistedHomeHeroAds,
     homeHeroAdsVersion,
     requireDepositApproval: adminPinConfig.requireDepositApproval,
@@ -5256,6 +5264,7 @@ app.get('/api/live-room/state', (req, res) => {
     accountToken: playersByPhone.has(player.phone) ? createSignedPlayerToken(player) : undefined,
     players: Array.from(playersByPhone.values()),
     bankAccounts: persistedBankAccounts,
+    homeAdsEnabled: persistedHomeAdsEnabled,
     ...(includeHomeAds ? { homeHeroAds: persistedHomeHeroAds } : {}),
     homeHeroAdsVersion,
     transactions: serverTransactions,
@@ -5751,6 +5760,7 @@ app.post('/api/live-room/action', (req, res) => {
       saveBotsToDisk();
       const adsPayload = JSON.stringify({
         type: 'home:ads:sync',
+        homeAdsEnabled: persistedHomeAdsEnabled,
         heroBanners: persistedHomeHeroAds,
         ads: persistedHomeHeroAds,
         homeHeroAdsVersion,
@@ -7356,6 +7366,7 @@ app.get('/api/admin/state-backup', (req, res) => {
       registeredPhones: Array.from(registeredChatPhones.entries()),
       bonusClaimed: Array.from(chatWelcomeBonusClaimed.values()),
       persistedBankAccounts,
+      homeAdsEnabled: persistedHomeAdsEnabled,
       homeHeroAds: persistedHomeHeroAds,
       gameVisibility: persistedGameVisibility,
       adminPinConfig,
@@ -7452,6 +7463,10 @@ app.post('/api/admin/state-restore', (req, res) => {
       if (fastRoomsByStake[stk]) fastRoomsByStake[stk].bankAccounts = [...persistedBankAccounts];
     }
     if (regularLiveRoomState) regularLiveRoomState.bankAccounts = [...persistedBankAccounts];
+  }
+
+  if (typeof b.homeAdsEnabled === 'boolean') {
+    persistedHomeAdsEnabled = b.homeAdsEnabled;
   }
 
   if (Array.isArray(b.homeHeroAds)) {
@@ -11075,10 +11090,20 @@ app.post('/api/games/visibility', (req, res) => {
 
 // Home Hub Ads & Banners (Admin Ad Creator - Synced Live Across All Connected Devices)
 app.get('/api/home-ads', (_req, res) => {
-  res.json({ ok: true, heroBanners: persistedHomeHeroAds, ads: persistedHomeHeroAds });
+  res.json({
+    ok: true,
+    homeAdsEnabled: persistedHomeAdsEnabled,
+    heroBanners: persistedHomeHeroAds,
+    ads: persistedHomeHeroAds,
+  });
 });
 
 app.post('/api/home-ads', (req, res) => {
+  let changed = false;
+  if (typeof req.body?.homeAdsEnabled === 'boolean') {
+    persistedHomeAdsEnabled = req.body.homeAdsEnabled;
+    changed = true;
+  }
   const incomingAds = Array.isArray(req.body?.heroBanners)
     ? req.body.heroBanners
     : Array.isArray(req.body?.ads)
@@ -11107,14 +11132,18 @@ app.post('/api/home-ads', (req, res) => {
             : undefined,
       }));
     persistedHomeHeroAds = sanitized;
-    homeHeroAdsVersion += 1;
     for (const stk of FAST_STAKE_TIERS) {
       if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [];
     }
     if (regularLiveRoomState) regularLiveRoomState.heroBanners = [];
+    changed = true;
+  }
+  if (changed) {
+    homeHeroAdsVersion += 1;
     saveBotsToDisk();
     const payload = JSON.stringify({
       type: 'home:ads:sync',
+      homeAdsEnabled: persistedHomeAdsEnabled,
       heroBanners: persistedHomeHeroAds,
       ads: persistedHomeHeroAds,
       homeHeroAdsVersion,
@@ -11127,7 +11156,12 @@ app.post('/api/home-ads', (req, res) => {
     }
     broadcastRealtimeSync('both');
   }
-  res.json({ ok: true, heroBanners: persistedHomeHeroAds, ads: persistedHomeHeroAds });
+  res.json({
+    ok: true,
+    homeAdsEnabled: persistedHomeAdsEnabled,
+    heroBanners: persistedHomeHeroAds,
+    ads: persistedHomeHeroAds,
+  });
 });
 
 // Non-ZIP 2-Part Full Standalone Ramino Export (Part 1: Server & Setup, Part 2: Complete ModernRaminoGame.tsx)
@@ -11488,6 +11522,7 @@ async function startServer() {
           transactions: serverTransactions,
           players: Array.from(playersByPhone.values()),
           bankAccounts: persistedBankAccounts,
+          homeAdsEnabled: persistedHomeAdsEnabled,
           homeHeroAds: persistedHomeHeroAds,
           homeHeroAdsVersion,
           requireDepositApproval: adminPinConfig.requireDepositApproval,

@@ -672,6 +672,16 @@ export default function App() {
     return [];
   });
 
+  const [homeAdsEnabled, setHomeAdsEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('sun_home_ads_enabled_v1');
+        if (saved === 'false') return false;
+      } catch {}
+    }
+    return true;
+  });
+
   const lastHomeAdsWriteAtRef = useRef<number>(0);
 
   useEffect(() => {
@@ -696,6 +706,12 @@ export default function App() {
         .then((r) => r.json())
         .then((data) => {
           if (lastHomeAdsWriteAtRef.current > reqStartedAt) return;
+          if (data?.ok && typeof data.homeAdsEnabled === 'boolean') {
+            setHomeAdsEnabled(data.homeAdsEnabled);
+            try {
+              localStorage.setItem('sun_home_ads_enabled_v1', String(data.homeAdsEnabled));
+            } catch {}
+          }
           const incomingAds = Array.isArray(data?.heroBanners)
             ? data.heroBanners
             : Array.isArray(data?.ads)
@@ -718,6 +734,29 @@ export default function App() {
       fetchHomeAds();
     }, 30000);
     return () => window.clearInterval(syncTimer);
+  }, []);
+
+  const handleToggleHomeAdsEnabled = useCallback((nextEnabled: boolean) => {
+    lastHomeAdsWriteAtRef.current = Date.now();
+    setHomeAdsEnabled(nextEnabled);
+    try {
+      localStorage.setItem('sun_home_ads_enabled_v1', String(nextEnabled));
+    } catch {}
+    fetch(buildApiUrl('/api/home-ads'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ homeAdsEnabled: nextEnabled }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.ok && typeof data.homeAdsEnabled === 'boolean') {
+          setHomeAdsEnabled(data.homeAdsEnabled);
+          try {
+            localStorage.setItem('sun_home_ads_enabled_v1', String(data.homeAdsEnabled));
+          } catch {}
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const persistHomeAdsToServer = useCallback((nextAds: HeroBannerAd[]) => {
@@ -1375,6 +1414,12 @@ export default function App() {
         if (typeof data.requireDepositApproval === 'boolean') {
           setRequireDepositApproval(data.requireDepositApproval);
         }
+        if (typeof data.homeAdsEnabled === 'boolean') {
+          setHomeAdsEnabled(data.homeAdsEnabled);
+          try {
+            localStorage.setItem('sun_home_ads_enabled_v1', String(data.homeAdsEnabled));
+          } catch {}
+        }
         const incomingBanks =
           (Array.isArray(data.bankAccounts) && data.bankAccounts.length > 0 && data.bankAccounts) ||
           (Array.isArray(data.fastRoom?.bankAccounts) &&
@@ -1468,6 +1513,12 @@ export default function App() {
       }
       if (typeof msg?.requireDepositApproval === 'boolean') {
         setRequireDepositApproval(msg.requireDepositApproval);
+      }
+      if (typeof msg?.homeAdsEnabled === 'boolean') {
+        setHomeAdsEnabled(msg.homeAdsEnabled);
+        try {
+          localStorage.setItem('sun_home_ads_enabled_v1', String(msg.homeAdsEnabled));
+        } catch {}
       }
       if (Array.isArray(msg?.homeHeroAds)) {
         setHeroBanners(msg.homeHeroAds);
@@ -2248,6 +2299,8 @@ export default function App() {
                       isAdminOverride: true,
                     }).then(() => refreshAdminLiveState());
                   }}
+                  homeAdsEnabled={homeAdsEnabled}
+                  onToggleHomeAdsEnabled={handleToggleHomeAdsEnabled}
                   heroBanners={heroBanners}
                   onAddHeroBanner={handleAddHeroBanner}
                   onUpdateHeroBanner={handleUpdateHeroBanner}
@@ -2739,8 +2792,8 @@ export default function App() {
                 </div>
               )}
 
-              {/* Split Featured Hero Carousel Card (Synced with Admin Ads Creator) */}
-              {(() => {
+              {/* Split Featured Hero Carousel Card (Synced with Admin Ads Creator; Hidden when Admin turns Front Ads OFF) */}
+              {homeAdsEnabled && (() => {
                 const totalOnline =
                   liveGameCounts.fast +
                   liveGameCounts.regular +
