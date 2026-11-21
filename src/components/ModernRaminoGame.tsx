@@ -1257,8 +1257,8 @@ const RAMINO_T: Record<Language, any> = {
     twoDecksShort: '2 ዴክ',
     oneDeckDesc: '1 ዴክ (54 ካርታ)',
     twoDecksDesc: '2 ዴኮች (108 ካርታ)',
-    cancelRefundBtn: 'ሰርዝ እና መልስ',
-    cancelRefundTip: 'ክፍሉን ሰርዝ እና ብር መልስ',
+    cancelRefundBtn: 'ዝም ብለህ ውጣ',
+    cancelRefundTip: 'ምንም ብር ሳይቆረጥ ክፍሉን ዘግተህ ውጣ',
     startBtn: 'ጀምር',
     joinBtn: 'ግባ',
     choosePlayersLabel: 'የተጫዋቾች ብዛት ይምረጡ:',
@@ -1341,7 +1341,7 @@ const RAMINO_T: Record<Language, any> = {
     waitingPlayersNeeded: 'ጨዋታውን ለመጀመር ቢያንስ 2 እውነተኛ ተጫዋቾች መግባት አለባቸው',
     waitingHostStartBtn: (stake: number, curr: number) => `▶️ አሁኑኑ ጀምር (${curr} ተጫዋቾች • ${stake} ብር)`,
     waitingForHostMsg: 'ጋባዡ ወይም የተቀሩት ተጫዋቾች ሲገቡ ጨዋታው በራሱ ይጀምራል...',
-    cancelLeaveRefundBtn: 'ውጣ እና ብር መልስ',
+    cancelLeaveRefundBtn: 'ዝም ብለህ ውጣ',
     startPrivateRoomBtn: (stake: number, seats: number) => `ክፍሉን ጀምር (${stake} ብር • ${seats} ተጫዋቾች)`,
     joinModalTitle: 'በኮድ ወይም በሊንክ ተቀላቀል',
     enterCodeLabel: 'የክፍሉን ኮድ ያስገቡ:',
@@ -1408,7 +1408,7 @@ const RAMINO_T: Record<Language, any> = {
     notifyAdminClosedRoom: '🛡️ አድሚን ይህን የግል ክፍል ዘግቶታል።',
     notifyAdminResetGame: '🔄 አድሚን ጨዋታውን ከአዲስ ጀምሮታል።',
     notifyJoinLookupErr: 'በዚህ ኮድ የተፈጠረ ክፍል አልተገኘም ወይም ሊንኩን በትክክል ያረጋግጡ።',
-    notifyRoomExpired: (name: string, refund: number) => `⏰ ${name} ሰዓቱ ስላለቀ ተዘግቷል፤ ${refund} ብር ወደ ዋሌትዎ ተመልሷል!`,
+    notifyRoomExpired: (name: string, _refund: number) => `⏰ ${name} ሰዓቱ ስላለቀ ተዘግቷል፤ ከዋሌትዎ ምንም አልተቆረጠም!`,
     notifyDealerStarted: (dealer: string) => `👑 ${dealer} (አከፋፋይ • 14 ካርታ) ጨዋታውን በመጣል ይጀምራል!`,
     notifyDealerFirstDiscard: (dealer: string) => `👑 ${dealer} (14 ካርታ ወስደዋል) — 1 ካርታ በመጣል ጨዋታውን ይጀምሩ!`,
     discardSlotLabel: 'መጣያ',
@@ -1466,8 +1466,8 @@ const RAMINO_T: Record<Language, any> = {
     notifyAutoSorted: 'ትሪስና ካትሪሶች በአንድነት ከፊት ተደርድረዋል!',
     notifyCardReordered: 'ካርታው በፈለጉበት ቦታ ተሰክቷል!',
     notifyInsufficientStake: (s: number) => `❌ ቀሪ ሂሳብዎ በቂ አይደለም (${s} ብር ያስፈልጋል)!`,
-    notifyRoomCreated: (n: number, s: number) => `ክፍል #${n} ተፈጥሯል! (${s} ብር ተይዟል፤ ከመጀመሩ በፊት "ሰርዝ" ማለት ይቻላል)`,
-    notifyRoomCancelled: (name: string, s: number) => `✅ ${name} ተሰርዟል፤ ${s} ብር ወደ ዋሌትዎ ተመልሷል!`,
+    notifyRoomCreated: (n: number, s: number) => `ክፍል #${n} ተፈጥሯል! (${s} ብር የሚቆረጠው ጨዋታው ሲጀምር ብቻ ነው)`,
+    notifyRoomCancelled: (name: string, _s: number) => `✅ ${name} ተዘግቷል፤ ከዋሌትዎ ምንም ብር አልተቆረጠም!`,
     notifyInsufficientJoin: (s: number) => `❌ ለመቀላቀል ${s} ብር በዋሌትዎ ሊኖር ይገባል!`,
     notifyInviteCopied: 'የመጋበዣ ሊንክ እና ኮድ ተቀድቷል! ለጓደኞችዎ ይላኩ።',
     notifyLinkCopied: 'የመጋበዣ ሊንክ ተቀድቷል!',
@@ -1545,8 +1545,8 @@ const RAMINO_T: Record<Language, any> = {
     twoDecksShort: '2 ዴክ',
     oneDeckDesc: '1 ዴክ (54 ካርታ)',
     twoDecksDesc: '2 ዴካት (108 ካርታ)',
-    cancelRefundBtn: 'ሰርዝ እሞ ምለስ',
-    cancelRefundTip: 'ክፍሊ ሰርዝ እሞ ብር ምለስ',
+    cancelRefundBtn: 'ዝም ኢልካ ውጻእ',
+    cancelRefundTip: 'ዝኾነ ብር ከይተቘርጸ ክፍሊ ዓጺኻ ውጻእ',
     startBtn: 'ጀምር',
     joinBtn: 'እቶ',
     choosePlayersLabel: 'ብዝሒ ተጻወትቲ ምረጹ:',
@@ -1629,7 +1629,7 @@ const RAMINO_T: Record<Language, any> = {
     waitingPlayersNeeded: 'ጸወታ ንምጅማር ብውሑዱ 2 ናይ ብሓቂ ተጻወትቲ ክኣትዉ ኣለዎም',
     waitingHostStartBtn: (stake: number, curr: number) => `▶️ ሕጂ ጀምር (${curr} ተጻወትቲ • ${stake} ብር)`,
     waitingForHostMsg: 'ዓዳሚ ወይ ዝተረፉ ተጻወትቲ ምስ ኣተዉ ጸወታ ብቀጥታ ክጅምር እዩ...',
-    cancelLeaveRefundBtn: 'ውጻእ እሞ ብር ምለስ',
+    cancelLeaveRefundBtn: 'ዝም ኢልካ ውጻእ',
     startPrivateRoomBtn: (stake: number, seats: number) => `ክፍሊ ጀምር (${stake} ብር • ${seats} ተጻወትቲ)`,
     joinModalTitle: 'ብኮድ ወይ ብሊንክ ተጸንበር',
     enterCodeLabel: 'ኮድ ክፍሊ ኣእትዉ:',
@@ -1696,7 +1696,7 @@ const RAMINO_T: Record<Language, any> = {
     notifyAdminClosedRoom: '🛡️ ኣድሚን ነዚ ብሕታዊ ክፍሊ ዓጽይዎ።',
     notifyAdminResetGame: '🔄 ኣድሚን ጸወታ ካብ ሓድሽ ጀሚሩዎ።',
     notifyJoinLookupErr: 'ብዚ ኮድ ዝተፈጥረ ክፍሊ ኣይተረኽበን።',
-    notifyRoomExpired: (name: string, refund: number) => `⏰ ${name} ግዜኡ ስለዝኣኸለ ተዓጽዩ፤ ${refund} ብር ናብ ዋሌትኩም ተመሊሱ!`,
+    notifyRoomExpired: (name: string, _refund: number) => `⏰ ${name} ግዜኡ ስለዝኣኸለ ተዓጽዩ፤ ካብ ዋሌትኩም ዝተቘርጸ የለን!`,
     notifyDealerStarted: (dealer: string) => `👑 ${dealer} (ኣከፋፋሊ • 14 ካርታ) ብምድርባይ ይጅምር!`,
     notifyDealerFirstDiscard: (dealer: string) => `👑 ${dealer} (14 ካርታ ወሲድኩም) — 1 ካርታ ብምድርባይ ጸወታ ጀምሩ!`,
     discardSlotLabel: 'መደርበዪ',
@@ -1754,8 +1754,8 @@ const RAMINO_T: Record<Language, any> = {
     notifyAutoSorted: 'ትሪስን ካትሪስን ብቅደም ተኸተል ተሰሪዖም!',
     notifyCardReordered: 'ካርታ ኣብ ዝደለኹምዎ ቦታ ተቐሚጡ!',
     notifyInsufficientStake: (s: number) => `❌ ቀሪ ሕሳብኩም እኹል ኣይኮነን (${s} ብር የድሊ)!`,
-    notifyRoomCreated: (n: number, s: number) => `ክፍሊ #${n} ተፈጢሩ! (${s} ብር ተታሒዙ)`,
-    notifyRoomCancelled: (name: string, s: number) => `✅ ${name} ተሰሪዙ፤ ${s} ብር ናብ ዋሌትኩም ተመሊሱ!`,
+    notifyRoomCreated: (n: number, s: number) => `ክፍሊ #${n} ተፈጢሩ! (${s} ብር ጸወታ ክጅምር ከሎ ጥራይ ይቍረጽ)`,
+    notifyRoomCancelled: (name: string, _s: number) => `✅ ${name} ተሰሪዙ፤ ካብ ዋሌትኩም ዝተቘርጸ የለን!`,
     notifyInsufficientJoin: (s: number) => `❌ ንምጽንባር ${s} ብር የድሊ!`,
     notifyInviteCopied: 'ሊንክን ኮድን ተቐዲሑ! ንኣዕሩኽኩም ስደዱ።',
     notifyLinkCopied: 'ናይ ዕድመ ሊንክ ተቐዲሑ!',
@@ -1833,8 +1833,8 @@ const RAMINO_T: Record<Language, any> = {
     twoDecksShort: 'Tuutaa 2',
     oneDeckDesc: 'Tuutaa 1 (Kaardii 54)',
     twoDecksDesc: 'Tuutaa 2 (Kaardii 108)',
-    cancelRefundBtn: 'Haqi & Deebisi',
-    cancelRefundTip: 'Kutaa haqii qarshii deebisi',
+    cancelRefundBtn: 'Caluma Jedhii Bahi',
+    cancelRefundTip: 'Qarshii osoo hin kutamin kutaa cufi',
     startBtn: 'Jalqabi',
     joinBtn: 'Seeni',
     choosePlayersLabel: 'Baay\'ina taphattootaa filadhu:',
@@ -1917,7 +1917,7 @@ const RAMINO_T: Record<Language, any> = {
     waitingPlayersNeeded: 'Tapha jalqabuuf yoo xiqqaate taphattoonni dhugaa 2 seenuu qabu',
     waitingHostStartBtn: (stake: number, curr: number) => `▶️ Amma Jalqabi (Taphattoota ${curr} • ${stake} ETB)`,
     waitingForHostMsg: 'Yeroo hundi seenan ykn abbaan kutaa jalqabu taphni kallattiin ni jalqaba...',
-    cancelLeaveRefundBtn: 'Bahi & Qarshii Deebisi',
+    cancelLeaveRefundBtn: 'Caluma Jedhii Bahi',
     startPrivateRoomBtn: (stake: number, seats: number) => `Kutaa Jalqabi (${stake} ETB • Taphattoota ${seats})`,
     joinModalTitle: 'Koodii ykn Liinkiidhaan Seeni',
     enterCodeLabel: 'Koodii kutaa galchi:',
@@ -1984,7 +1984,7 @@ const RAMINO_T: Record<Language, any> = {
     notifyAdminClosedRoom: '🛡️ Bulchaan kutaa dhuunfaa kana cufeera.',
     notifyAdminResetGame: '🔄 Bulchaan tapha haaraa jalqabeera.',
     notifyJoinLookupErr: 'Kutaan koodii kanaan uumame hin argamne.',
-    notifyRoomExpired: (name: string, refund: number) => `⏰ ${name} yeroon isaa waan xumurameef cufameera; ${refund} ETB deebi\'eera!`,
+    notifyRoomExpired: (name: string, _refund: number) => `⏰ ${name} yeroon isaa waan xumurameef cufameera; qarshiin hin cinne!`,
     notifyDealerStarted: (dealer: string) => `👑 ${dealer} (Raabsaa • Kaardii 14) gatuudhaan jalqaba!`,
     notifyDealerFirstDiscard: (dealer: string) => `👑 ${dealer} (Kaardii 14 fudhatteetta) — kaardii 1 gatuun tapha jalqabi!`,
     discardSlotLabel: 'Gataa',
@@ -2042,8 +2042,8 @@ const RAMINO_T: Record<Language, any> = {
     notifyAutoSorted: 'Tiriisii fi kaatriisii tartiibaan dura kaa\'amaniiru!',
     notifyCardReordered: 'Kaardiin bakka barbaaddetti kaa\'ameera!',
     notifyInsufficientStake: (s: number) => `❌ Hafteen qarshii keetii hin ga\'u (${s} ETB barbaachisa)!`,
-    notifyRoomCreated: (n: number, s: number) => `Kutaa #${n} uumameera! (${s} ETB qabameera)`,
-    notifyRoomCancelled: (name: string, s: number) => `✅ ${name} haqameera; ${s} ETB gara waaleetii keetii deebi\'eera!`,
+    notifyRoomCreated: (n: number, s: number) => `Kutaa #${n} uumameera! (${s} ETB yeroo taphni jalqabu qofa cita)`,
+    notifyRoomCancelled: (name: string, _s: number) => `✅ ${name} cufameera; waaleetii keessaa homtuu hin citne!`,
     notifyInsufficientJoin: (s: number) => `❌ Seenuuf ${s} ETB waaleetii keessa jiraachuu qaba!`,
     notifyInviteCopied: 'Liinkii fi koodiin afeerraa waraabameera!',
     notifyLinkCopied: 'Liinkiin afeerraa waraabameera!',
@@ -2121,8 +2121,8 @@ const RAMINO_T: Record<Language, any> = {
     twoDecksShort: '2 Decks',
     oneDeckDesc: '1 Deck (54 Cards)',
     twoDecksDesc: '2 Decks (108 Cards)',
-    cancelRefundBtn: 'Cancel & Refund',
-    cancelRefundTip: 'Cancel room and refund stake',
+    cancelRefundBtn: 'Just Exit',
+    cancelRefundTip: 'Close room and exit without deducting stake',
     startBtn: 'Start',
     joinBtn: 'Join',
     choosePlayersLabel: 'Choose Number of Players:',
@@ -2205,7 +2205,7 @@ const RAMINO_T: Record<Language, any> = {
     waitingPlayersNeeded: 'At least 2 real players must join to start the match',
     waitingHostStartBtn: (stake: number, curr: number) => `▶️ Start Now (${curr} Players • ${stake} ETB)`,
     waitingForHostMsg: 'Game starts automatically once friends join or host starts...',
-    cancelLeaveRefundBtn: 'Leave & Refund Stake',
+    cancelLeaveRefundBtn: 'Just Exit',
     startPrivateRoomBtn: (stake: number, seats: number) => `Start Room (${stake} ETB • ${seats} Players)`,
     joinModalTitle: 'Join by Code or Invite Link',
     enterCodeLabel: 'Enter Room Code:',
@@ -2272,7 +2272,7 @@ const RAMINO_T: Record<Language, any> = {
     notifyAdminClosedRoom: '🛡️ Admin closed this Private Room.',
     notifyAdminResetGame: '🔄 Admin reset the game.',
     notifyJoinLookupErr: 'No private room found for that code — please check the code or link.',
-    notifyRoomExpired: (name: string, refund: number) => `⏰ ${name} expired and closed; ${refund} ETB refunded to your wallet!`,
+    notifyRoomExpired: (name: string, _refund: number) => `⏰ ${name} expired and closed; nothing was deducted from your wallet!`,
     notifyDealerStarted: (dealer: string) => `👑 ${dealer} (Dealer • 14 cards) opens by discarding!`,
     notifyDealerFirstDiscard: (dealer: string) => `👑 ${dealer} (14 cards dealt) — discard 1 card to start play!`,
     discardSlotLabel: 'Discard',
@@ -2330,8 +2330,8 @@ const RAMINO_T: Record<Language, any> = {
     notifyAutoSorted: 'Valid sets and runs sorted to the front!',
     notifyCardReordered: 'Card moved to your chosen position!',
     notifyInsufficientStake: (s: number) => `❌ Insufficient balance (${s} ETB required)!`,
-    notifyRoomCreated: (n: number, s: number) => `Room #${n} created! (${s} ETB reserved; cancel anytime before start)`,
-    notifyRoomCancelled: (name: string, s: number) => `✅ ${name} cancelled; ${s} ETB refunded to your wallet!`,
+    notifyRoomCreated: (n: number, s: number) => `Room #${n} created! (${s} ETB is deducted only when the game starts)`,
+    notifyRoomCancelled: (name: string, _s: number) => `✅ ${name} closed cleanly; nothing was deducted!`,
     notifyInsufficientJoin: (s: number) => `❌ You need ${s} ETB in your wallet to join!`,
     notifyInviteCopied: 'Invite link & code copied! Share with friends.',
     notifyLinkCopied: 'Invite link copied!',
@@ -3573,7 +3573,33 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   const debitedRoundIndexRef = useRef<number>(0);
   const creditedRoundKeyRef = useRef<string | null>(null);
   const lastProcessedEventIdRef = useRef<number>(0);
-  const heldWaitingStakeRef = useRef<number>(0);
+  const DEBITED_ROUND_KEYS_STORAGE_KEY = 'sun_ramino_debited_round_keys_v1';
+  const debitedRoundKeysRef = useRef<Set<string>>(
+    (() => {
+      try {
+        const raw = localStorage.getItem('sun_ramino_debited_round_keys_v1');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) return new Set(parsed.map(String));
+        }
+      } catch {}
+      return new Set<string>();
+    })()
+  );
+  const markRoundKeyDebited = (key: string) => {
+    if (!key) return;
+    debitedRoundKeysRef.current.add(key);
+    if (debitedRoundKeysRef.current.size > 30) {
+      const trimmed = Array.from(debitedRoundKeysRef.current).slice(-30);
+      debitedRoundKeysRef.current = new Set(trimmed);
+    }
+    try {
+      localStorage.setItem(
+        DEBITED_ROUND_KEYS_STORAGE_KEY,
+        JSON.stringify(Array.from(debitedRoundKeysRef.current))
+      );
+    } catch {}
+  };
   const balanceRef = useRef<number>(balance);
   balanceRef.current = balance;
   const viewRef = useRef(view);
@@ -3752,14 +3778,21 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       }
     }
 
-    // Charge stake once per new round (>1) if triggered by another player at the table
-    if (tbl.phase === 'game' && srvRoundIdx > 1 && debitedRoundIndexRef.current !== srvRoundIdx) {
+    // Charge stake strictly once per round ONLY when the round actually starts dealing cards
+    const srvRoundKey = String(
+      tbl.currentRoundKey || (srvRoundIdx > 0 ? `${tbl.roomCode}_r${srvRoundIdx}` : '')
+    );
+    if (
+      tbl.phase === 'game' &&
+      srvRoundIdx >= 1 &&
+      srvRoundKey &&
+      !debitedRoundKeysRef.current.has(srvRoundKey)
+    ) {
+      markRoundKeyDebited(srvRoundKey);
       debitedRoundIndexRef.current = srvRoundIdx;
-      heldWaitingStakeRef.current = 0;
       adjustWalletBalance(-stk, `Ramino Round #${srvRoundIdx} (${stk} ETB)`);
-    } else if (tbl.phase === 'game' && srvRoundIdx === 1) {
-      debitedRoundIndexRef.current = 1;
-      heldWaitingStakeRef.current = 0;
+    } else if (tbl.phase === 'game' && srvRoundIdx >= 1) {
+      debitedRoundIndexRef.current = srvRoundIdx;
     }
 
     // Post Day Request & 1-Card Cut Seat Pick Sync
@@ -4024,9 +4057,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }
   };
 
-  const leaveMultiplayerTable = async (refundWaitingStake = true) => {
+  const leaveMultiplayerTable = async (_unusedArg = true) => {
+    void _unusedArg;
     const code = activeMultiplayerRoomCodeRef.current;
-    const held = heldWaitingStakeRef.current;
     if (code) {
       if (gameWsRef.current?.readyState === WebSocket.OPEN) {
         try {
@@ -4043,12 +4076,6 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           }),
         });
       } catch {}
-    }
-    if (refundWaitingStake && held > 0 && viewRef.current === 'waiting') {
-      heldWaitingStakeRef.current = 0;
-      adjustWalletBalance(held, `Ramino Leave Waiting Refund (${code || ''})`);
-    } else {
-      heldWaitingStakeRef.current = 0;
     }
     stopVoiceChatSession();
     isMinimizedToLobbyRef.current = false;
@@ -4530,8 +4557,6 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         if (room.status === 'started' && activeMultiplayerRoomCodeRef.current !== room.code.trim().toUpperCase()) {
           const cleanCode = room.code.trim().toUpperCase();
           if (balanceRef.current >= room.stake) {
-            heldWaitingStakeRef.current = room.stake;
-            adjustWalletBalance(-room.stake, `Ramino Private ${cleanCode}`);
             setIsPrivateRoomGame(true);
             setActivePrivateRoomCode(cleanCode);
             setActiveMultiplayerRoomCode(cleanCode);
@@ -4551,6 +4576,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 applyServerTableSnapshotRef.current(stData.table);
               }
             } catch {}
+          } else {
+            raminoAudio.playBuzzer();
+            triggerNotification(t.notifyInsufficientWallet);
           }
         }
       }
@@ -4905,6 +4933,13 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
   };
 
   const enterGameFromCeremony = () => {
+    if (balanceRef.current < activeTableStake) {
+      raminoAudio.playBuzzer();
+      triggerNotification(t.notifyInsufficientStake(activeTableStake));
+      setView('lobby');
+      return;
+    }
+    adjustWalletBalance(-activeTableStake, `Ramino Round #1 (${activeTableStake} ETB)`);
     dealRoundWithDealer(ceremonyDealer);
   };
 
@@ -6635,7 +6670,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }, 80);
   };
 
-  // Lobby Actions: Create Server-Synced Public Room (+ Deduct Stake + Cancelable Refund)
+  // Lobby Actions: Create Server-Synced Public Room (Deducts ONLY when game starts)
   const handleCreateRoom = async () => {
     clearLocalSuspendedGame();
     if (balance < selectedStake) {
@@ -6662,8 +6697,6 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
         triggerNotification(data?.error || t.notifyInsufficientStake(selectedStake));
         return;
       }
-      heldWaitingStakeRef.current = selectedStake;
-      adjustWalletBalance(-selectedStake, `Ramino Room ${data.room.name}`);
       if (Array.isArray(data.rooms)) {
         setOpenRooms(mapServerLobbyRooms(data.rooms));
       }
@@ -6682,7 +6715,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
     }
   };
 
-  // Cancel Created Room -> Server Delete & Immediate Refund
+  // Cancel Created Room -> Server Delete & Clean Exit (Zero Deduction, Zero Refund)
   const handleCancelCreatedRoom = async (room: RaminoRoom) => {
     try {
       const res = await fetch(buildApiUrl(`/api/ramino/rooms/${encodeURIComponent(room.id)}/cancel`), {
@@ -6702,14 +6735,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       setActiveMultiplayerRoomCode(null);
       activeMultiplayerRoomCodeRef.current = null;
     }
-    heldWaitingStakeRef.current = 0;
-    adjustWalletBalance(room.stake, `Ramino Cancel Refund ${room.name}`);
     raminoAudio.playSwap();
     const dispName = room.name.startsWith('#') ? `${t.roomPrefix}${room.name.slice(1)}` : room.name;
     triggerNotification(t.notifyRoomCancelled(dispName, room.stake));
   };
 
-  // Join or Enter Public Room -> Server-Synced Human Table (enters Waiting Room or Ceremony when full)
+  // Join or Enter Public Room -> Server-Synced Human Table (Stake deducted ONLY when game starts)
   const handleJoinOrStartRoom = async (room: RaminoRoom) => {
     clearLocalSuspendedGame();
     const pubTableCode = `PUB_${room.id.toUpperCase()}`;
@@ -6736,8 +6767,6 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
           fetchServerOpenRooms();
           return;
         }
-        heldWaitingStakeRef.current = room.stake;
-        adjustWalletBalance(-room.stake, `Ramino Join ${room.name}`);
         setIsPrivateRoomGame(false);
         setActivePrivateRoomCode(null);
         setIsMicMuted(true);
@@ -9235,8 +9264,6 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                     triggerNotification(data?.error || t.notifyJoinLookupErr);
                     return;
                   }
-                  heldWaitingStakeRef.current = targetStake;
-                  adjustWalletBalance(-targetStake, `Ramino Private ${cleanCode}`);
                   setIsPrivateRoomGame(true);
                   setActivePrivateRoomCode(cleanCode);
                   setActiveMultiplayerRoomCode(cleanCode);
@@ -9370,8 +9397,6 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                     syncVoiceAccessKey(resolvedVoiceKey);
                   }
                   saveLocalPrivateRoom(data.room);
-                  heldWaitingStakeRef.current = targetStake;
-                  adjustWalletBalance(-targetStake, `Ramino Private Join ${cleanCode}`);
                   setPlayerSeatCount(targetSeats);
                   setActiveTableStake(targetStake);
                   setIsPrivateRoomGame(true);
@@ -9661,15 +9686,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                           return;
                         }
                         if (activeMultiplayerRoomCode) {
-                          const nextIdx = (lastSyncedRoundIndexRef.current >= 0 ? lastSyncedRoundIndexRef.current : 1) + 1;
-                          debitedRoundIndexRef.current = nextIdx;
-                          adjustWalletBalance(-tableStakeAmt, `Ramino Next Round (${tableStakeAmt} ETB)`);
-                          void sendRaminoGameAction('next_round').then((ok) => {
-                            if (!ok) {
-                              debitedRoundIndexRef.current = lastSyncedRoundIndexRef.current;
-                              adjustWalletBalance(tableStakeAmt, `Ramino Next Round Revert`);
-                            }
-                          });
+                          void sendRaminoGameAction('next_round');
                           return;
                         }
                         if (isPrivateRoomGame) {

@@ -8347,6 +8347,7 @@ interface RaminoTableSession {
   stake: number;
   phase: 'waiting' | 'ceremony' | 'postday_pick' | 'game' | 'finished';
   roundIndex: number;
+  currentRoundKey?: string;
   privateRoundCount: number;
   reshuffleCount: number;
   players: RaminoTablePlayer[];
@@ -9390,6 +9391,7 @@ function serializeRaminoTableForPlayer(session: RaminoTableSession, playerId: st
     stake: session.stake,
     phase: session.phase,
     roundIndex: session.roundIndex,
+    currentRoundKey: session.currentRoundKey,
     privateRoundCount: session.privateRoundCount,
     reshuffleCount: session.reshuffleCount,
     myPlayerId: playerId,
@@ -9533,6 +9535,7 @@ function dealServerRaminoRound(session: RaminoTableSession, dealerId: string) {
   session.postDayRequest = null;
   session.postDaySeatPick = null;
   session.roundIndex += 1;
+  session.currentRoundKey = `${session.roomCode}_r${session.roundIndex}_${Date.now()}_${crypto.randomInt(1000, 9999)}`;
 
   session.ceremonyDealerId = session.players[validDealerIdx].id;
   session.ceremonyDealerName = session.players[validDealerIdx].name;
@@ -9818,6 +9821,20 @@ function handleServerRaminoAction(
           }
         }
         broadcastPrivateRoomSnapshot(privRoom);
+      }
+    }
+
+    if (session.roomCode.startsWith('PUB_')) {
+      for (const [pubId, pubRm] of raminoPublicRooms.entries()) {
+        if (`PUB_${pubId.toUpperCase()}` === session.roomCode) {
+          pubRm.players = pubRm.players.filter((p) => p.id !== playerId);
+          pubRm.current = pubRm.players.length;
+          if (pubRm.players.length === 0) {
+            raminoPublicRooms.delete(pubId);
+          }
+          broadcastRaminoLobbySync();
+          break;
+        }
       }
     }
 
@@ -10465,29 +10482,12 @@ function startRaminoServerLoop() {
       for (const [id, rm] of raminoPublicRooms.entries()) {
         if (rm.timeRemaining <= 1) {
           raminoPublicRooms.delete(id);
-          lobbyChanged = true;
-          if (!rm.isDemo) {
-            for (const p of rm.players) {
-              if (p.phone) {
-                const pl = ensurePlayerRecord(p.phone, p.name);
-                pl.balance = Number((pl.balance + rm.stake).toFixed(2));
-                serverTransactions.unshift({
-                  id: `rref-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-                  userId: pl.id,
-                  userName: pl.name,
-                  userPhone: pl.phone,
-                  type: 'win',
-                  method: 'SUN Ramino',
-                  amount: rm.stake,
-                  referenceNumber: `Room Refund ${rm.name}`,
-                  status: 'approved',
-                  timestamp: new Date().toLocaleString(),
-                });
-              }
-            }
-            saveBotsToDisk();
-            broadcastRealtimeSync();
+          const waitingTableCode = `PUB_${id.toUpperCase()}`;
+          const waitingTbl = raminoTables.get(waitingTableCode);
+          if (waitingTbl && waitingTbl.phase === 'waiting') {
+            raminoTables.delete(waitingTableCode);
           }
+          lobbyChanged = true;
         } else {
           rm.timeRemaining -= 1;
           lobbyChanged = true;

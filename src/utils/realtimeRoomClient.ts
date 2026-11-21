@@ -246,12 +246,27 @@ interface TgCloudStorageLike {
 
 function getTgCloudStorage(): TgCloudStorageLike | null {
   try {
-    const cs = (
+    const wa = (
       window as unknown as {
-        Telegram?: { WebApp?: { CloudStorage?: TgCloudStorageLike } };
+        Telegram?: {
+          WebApp?: {
+            version?: string;
+            isVersionAtLeast?: (ver: string) => boolean;
+            CloudStorage?: TgCloudStorageLike;
+          };
+        };
       }
-    )?.Telegram?.WebApp?.CloudStorage;
-    return cs || null;
+    )?.Telegram?.WebApp;
+    if (!wa) return null;
+    if (typeof wa.isVersionAtLeast === 'function') {
+      if (!wa.isVersionAtLeast('6.9')) return null;
+    } else if (wa.version) {
+      const [maj = 0, min = 0] = String(wa.version).split('.').map(Number);
+      if (maj < 6 || (maj === 6 && min < 9)) return null;
+    } else {
+      return null;
+    }
+    return wa.CloudStorage || null;
   } catch {
     return null;
   }
