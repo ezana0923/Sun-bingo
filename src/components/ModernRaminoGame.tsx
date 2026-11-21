@@ -1257,7 +1257,7 @@ const RAMINO_T: Record<Language, any> = {
     twoDecksShort: '2 ዴክ',
     oneDeckDesc: '1 ዴክ (54 ካርታ)',
     twoDecksDesc: '2 ዴኮች (108 ካርታ)',
-    cancelRefundBtn: 'ዝም ብለህ ውጣ',
+    cancelRefundBtn: 'ውጣ',
     cancelRefundTip: 'ምንም ብር ሳይቆረጥ ክፍሉን ዘግተህ ውጣ',
     startBtn: 'ጀምር',
     joinBtn: 'ግባ',
@@ -1341,7 +1341,7 @@ const RAMINO_T: Record<Language, any> = {
     waitingPlayersNeeded: 'ጨዋታውን ለመጀመር ቢያንስ 2 እውነተኛ ተጫዋቾች መግባት አለባቸው',
     waitingHostStartBtn: (stake: number, curr: number) => `▶️ አሁኑኑ ጀምር (${curr} ተጫዋቾች • ${stake} ብር)`,
     waitingForHostMsg: 'ጋባዡ ወይም የተቀሩት ተጫዋቾች ሲገቡ ጨዋታው በራሱ ይጀምራል...',
-    cancelLeaveRefundBtn: 'ዝም ብለህ ውጣ',
+    cancelLeaveRefundBtn: 'ውጣ',
     startPrivateRoomBtn: (stake: number, seats: number) => `ክፍሉን ጀምር (${stake} ብር • ${seats} ተጫዋቾች)`,
     joinModalTitle: 'በኮድ ወይም በሊንክ ተቀላቀል',
     enterCodeLabel: 'የክፍሉን ኮድ ያስገቡ:',
@@ -1545,7 +1545,7 @@ const RAMINO_T: Record<Language, any> = {
     twoDecksShort: '2 ዴክ',
     oneDeckDesc: '1 ዴክ (54 ካርታ)',
     twoDecksDesc: '2 ዴካት (108 ካርታ)',
-    cancelRefundBtn: 'ዝም ኢልካ ውጻእ',
+    cancelRefundBtn: 'ውጻእ',
     cancelRefundTip: 'ዝኾነ ብር ከይተቘርጸ ክፍሊ ዓጺኻ ውጻእ',
     startBtn: 'ጀምር',
     joinBtn: 'እቶ',
@@ -1629,7 +1629,7 @@ const RAMINO_T: Record<Language, any> = {
     waitingPlayersNeeded: 'ጸወታ ንምጅማር ብውሑዱ 2 ናይ ብሓቂ ተጻወትቲ ክኣትዉ ኣለዎም',
     waitingHostStartBtn: (stake: number, curr: number) => `▶️ ሕጂ ጀምር (${curr} ተጻወትቲ • ${stake} ብር)`,
     waitingForHostMsg: 'ዓዳሚ ወይ ዝተረፉ ተጻወትቲ ምስ ኣተዉ ጸወታ ብቀጥታ ክጅምር እዩ...',
-    cancelLeaveRefundBtn: 'ዝም ኢልካ ውጻእ',
+    cancelLeaveRefundBtn: 'ውጻእ',
     startPrivateRoomBtn: (stake: number, seats: number) => `ክፍሊ ጀምር (${stake} ብር • ${seats} ተጻወትቲ)`,
     joinModalTitle: 'ብኮድ ወይ ብሊንክ ተጸንበር',
     enterCodeLabel: 'ኮድ ክፍሊ ኣእትዉ:',
@@ -1833,7 +1833,7 @@ const RAMINO_T: Record<Language, any> = {
     twoDecksShort: 'Tuutaa 2',
     oneDeckDesc: 'Tuutaa 1 (Kaardii 54)',
     twoDecksDesc: 'Tuutaa 2 (Kaardii 108)',
-    cancelRefundBtn: 'Caluma Jedhii Bahi',
+    cancelRefundBtn: 'Bahi',
     cancelRefundTip: 'Qarshii osoo hin kutamin kutaa cufi',
     startBtn: 'Jalqabi',
     joinBtn: 'Seeni',
@@ -1917,7 +1917,7 @@ const RAMINO_T: Record<Language, any> = {
     waitingPlayersNeeded: 'Tapha jalqabuuf yoo xiqqaate taphattoonni dhugaa 2 seenuu qabu',
     waitingHostStartBtn: (stake: number, curr: number) => `▶️ Amma Jalqabi (Taphattoota ${curr} • ${stake} ETB)`,
     waitingForHostMsg: 'Yeroo hundi seenan ykn abbaan kutaa jalqabu taphni kallattiin ni jalqaba...',
-    cancelLeaveRefundBtn: 'Caluma Jedhii Bahi',
+    cancelLeaveRefundBtn: 'Bahi',
     startPrivateRoomBtn: (stake: number, seats: number) => `Kutaa Jalqabi (${stake} ETB • Taphattoota ${seats})`,
     joinModalTitle: 'Koodii ykn Liinkiidhaan Seeni',
     enterCodeLabel: 'Koodii kutaa galchi:',
@@ -2121,7 +2121,7 @@ const RAMINO_T: Record<Language, any> = {
     twoDecksShort: '2 Decks',
     oneDeckDesc: '1 Deck (54 Cards)',
     twoDecksDesc: '2 Decks (108 Cards)',
-    cancelRefundBtn: 'Just Exit',
+    cancelRefundBtn: 'Exit',
     cancelRefundTip: 'Close room and exit without deducting stake',
     startBtn: 'Start',
     joinBtn: 'Join',
@@ -2205,7 +2205,7 @@ const RAMINO_T: Record<Language, any> = {
     waitingPlayersNeeded: 'At least 2 real players must join to start the match',
     waitingHostStartBtn: (stake: number, curr: number) => `▶️ Start Now (${curr} Players • ${stake} ETB)`,
     waitingForHostMsg: 'Game starts automatically once friends join or host starts...',
-    cancelLeaveRefundBtn: 'Just Exit',
+    cancelLeaveRefundBtn: 'Exit',
     startPrivateRoomBtn: (stake: number, seats: number) => `Start Room (${stake} ETB • ${seats} Players)`,
     joinModalTitle: 'Join by Code or Invite Link',
     enterCodeLabel: 'Enter Room Code:',
@@ -4333,6 +4333,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
 
         ws.onopen = () => {
           wsOpen = true;
+          fetchServerOpenRooms();
           const activeCode = activeMultiplayerRoomCodeRef.current;
           if (activeCode) {
             ws?.send(
@@ -4408,10 +4409,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
             applyServerTableSnapshotRef.current(data.table);
           }
         } catch {}
-      } else if (!code && !wsOpen) {
+      } else if (!code) {
         fetchServerOpenRooms();
       }
-    }, 2500);
+    }, 3000);
 
     return () => {
       active = false;
@@ -6710,6 +6711,12 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
       raminoAudio.playDraw();
       const roomNum = parseInt(String(data.room.name || '').replace('#', ''), 10) || 1000;
       triggerNotification(t.notifyRoomCreated(roomNum, selectedStake));
+      try {
+        window.scrollTo?.({ top: 0, behavior: 'smooth' });
+        document
+          .querySelectorAll<HTMLElement>('[data-app-scroll="true"]')
+          .forEach((el) => el.scrollTo?.({ top: 0, behavior: 'smooth' }));
+      } catch {}
     } catch {
       raminoAudio.playBuzzer();
     }
@@ -7203,9 +7210,9 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 {openRooms.map((room) => (
                   <div
                     key={room.id}
-                    className="p-3 rounded-2xl bg-[#221045] border border-purple-400/20 hover:border-purple-400/40 flex items-center justify-between gap-2 transition shadow-md"
+                    className="p-3 rounded-2xl bg-[#221045] border border-purple-400/25 hover:border-purple-400/45 flex flex-wrap items-center justify-between gap-2.5 transition shadow-md"
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="flex items-center gap-2.5 min-w-[170px] flex-1">
                       <div
                         className={`w-9 h-9 rounded-full shrink-0 ${
                           room.avatarColor || 'bg-amber-500'
@@ -7213,18 +7220,28 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                       >
                         {room.avatarLetter || room.creator[0] || 'R'}
                       </div>
-                      <div className="min-w-0">
-                        <h4 className="text-xs sm:text-sm font-black text-white leading-tight truncate">
-                          {room.name} {room.isUserCreated ? `(${t.yoursTag})` : ''}
-                        </h4>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h4 className="text-xs sm:text-sm font-black text-white leading-tight">
+                            {room.name}
+                          </h4>
+                          {room.isUserCreated && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-amber-400/20 border border-amber-400/40 text-amber-300 text-[10px] font-black leading-none">
+                              {t.yoursTag}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-purple-200/80 font-bold truncate max-w-[100px]">
+                            • {room.creator}
+                          </span>
+                        </div>
                         <p className="text-[11px] text-yellow-300 font-semibold mt-0.5">
-                          {room.stake} {t.currencyUnit} • {room.current}/{room.max} {t.playersWord} •{' '}
+                          🪙 {room.stake} {t.currencyUnit} • {room.current}/{room.max} {t.playersWord} •{' '}
                           {t.twoDecksShort}
                         </p>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-2 shrink-0 ml-auto">
                       <div
                         className={`flex items-center gap-1 text-[11px] font-mono font-bold ${
                           room.timeRemaining <= 15 ? 'text-rose-400 animate-pulse' : 'text-gray-300'
@@ -7238,7 +7255,7 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                         <div className="flex items-center gap-1.5">
                           <button
                             onClick={() => handleCancelCreatedRoom(room)}
-                            className="px-2.5 py-1.5 rounded-xl bg-rose-600/90 hover:bg-rose-500 text-white font-black text-[11px] transition shadow cursor-pointer flex items-center gap-1"
+                            className="px-3 py-1.5 rounded-xl bg-rose-600/90 hover:bg-rose-500 text-white font-black text-[11px] transition shadow cursor-pointer flex items-center gap-1"
                             title={t.cancelRefundTip}
                           >
                             <X className="w-3 h-3" />
@@ -7976,6 +7993,10 @@ export const ModernRaminoGame: React.FC<ModernRaminoGameProps> = ({
                 <ArrowLeft className="w-3.5 h-3.5" />
                 <span>{t.backBtn}</span>
               </button>
+
+              <span className="px-2 py-0.5 rounded-xl bg-amber-400/15 border border-amber-400/35 text-amber-300 font-black text-[10px]">
+                🪙 {activeTableStake.toLocaleString()} {t.currencyUnit}
+              </span>
 
               {winStreak > 0 && (
                 <span
