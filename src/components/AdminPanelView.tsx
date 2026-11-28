@@ -2571,14 +2571,6 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <h3 className="text-base sm:text-lg font-black">
                 ⚡ Fast Bingo Live Rooms Monitor (10 / 20 / 50 / 100 Br)
               </h3>
-              <button
-                type="button"
-                onClick={onOpenAll16RulesModal}
-                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>የጨዋታ ሕጎች እይ</span>
-              </button>
             </div>
 
             {/* 4 Live Stake Room Cards (Room 10 Br, Room 20 Br, Room 50 Br, Room 100 Br) */}

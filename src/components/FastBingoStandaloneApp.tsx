@@ -500,7 +500,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
       });
   }, []);
 
-  // Fast Bingo Game State (Rule is ALWAYS: 1 Line Horizontal, Vertical, Diagonal AND 4 Corners)
+  // Fast Bingo Game State (Rule is ALWAYS: 1 Line Horizontal, Vertical, Diagonal OR 4 Corners)
   // 4 Independent Live Rooms by Stake: 10, 20, 50, 100 ETB
   // When selectedStakeRoom is null, the player sees the 4-Room Lobby (like IMG_3525.png)
   // When selectedStakeRoom is 10, 20, 50, or 100, the player enters that room's 1-500 cartela board & plays!
@@ -2414,7 +2414,7 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
     );
   };
 
-  // Strict Claim Verification for Fast Bingo (1 Line Horizontal/Vertical/Diagonal AND 4 Corners)
+  // Strict Claim Verification for Fast Bingo (1 Line Horizontal/Vertical/Diagonal OR 4 Corners)
   // Plus 80% Derash + 15% House + 5% Jackpot (if Jackpot reaches >= 500 ETB, the final winner takes it!)
   const handleClaimBingo = (cartela: CartelaCard) => {
     if (cartela.isBlocked || blockedCartelaIds.includes(cartela.id)) return;
@@ -2607,8 +2607,8 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
     }
   };
 
-  // Simulate Fast Bingo Win (1 Horizontal Line AND all 4 Corners together)
-  const handleSimulateFastWin = (_mode: 'corners' | 'line') => {
+  // Simulate Fast Bingo Win (4 Corners OR 1 Horizontal Line)
+  const handleSimulateFastWin = (mode: 'corners' | 'line') => {
     const firstActive = cartelas.find((c) => !c.isBlocked && c.isRegistered) || cartelas[0];
     if (!firstActive) return;
     if (!firstActive.isRegistered) {
@@ -2618,18 +2618,20 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
       lockOrUnlockCartelaOnServer(firstActive.id, 'lock');
     }
 
-    const neededBalls: number[] = Array.from(
-      new Set([
-        firstActive.numbers[0][0],
-        firstActive.numbers[0][4],
-        firstActive.numbers[4][0],
-        firstActive.numbers[4][4],
-        firstActive.numbers[2][0],
-        firstActive.numbers[2][1],
-        firstActive.numbers[2][3],
-        firstActive.numbers[2][4],
-      ])
-    );
+    const neededBalls: number[] =
+      mode === 'corners'
+        ? [
+            firstActive.numbers[0][0],
+            firstActive.numbers[0][4],
+            firstActive.numbers[4][0],
+            firstActive.numbers[4][4],
+          ]
+        : [
+            firstActive.numbers[2][0],
+            firstActive.numbers[2][1],
+            firstActive.numbers[2][3],
+            firstActive.numbers[2][4],
+          ];
 
     const lastActive = neededBalls[neededBalls.length - 1];
     dispatchServerRoomAction({
@@ -4957,29 +4959,14 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3.5">
                 {FAST_BINGO_RULE_PATTERN.variations.map((v) => {
-                  const localizedVarLabel = v.id.startsWith('fast-h-')
-                    ? trLang(
-                        language,
-                        'የተኛ መስመር + 4ቱ ማዕዘን',
-                        'ግድም መስመር + 4 መኣዝን',
-                        'Sarara Dalgaa + Golee 4',
-                        'Horizontal Line + 4 Corners'
-                      )
-                    : v.id.startsWith('fast-v-')
-                    ? trLang(
-                        language,
-                        'የቆመ መስመር + 4ቱ ማዕዘን',
-                        'ቁመት መስመር + 4 መኣዝን',
-                        "Sarara Olka'aa + Golee 4",
-                        'Vertical Line + 4 Corners'
-                      )
-                    : trLang(
-                        language,
-                        'ሰያፍ መስመር + 4ቱ ማዕዘን',
-                        'ሰያፍ መስመር + 4 መኣዝን',
-                        'Sarara Qaxxaamuraa + Golee 4',
-                        'Diagonal Line + 4 Corners'
-                      );
+                  const localizedVarLabel =
+                    v.id === 'fast-corners'
+                      ? trLang(language, '4ቱ ማዕዘን ካስ', '4 መኣዝን ካስ', 'Golee 4', '4 Corners')
+                      : v.id.startsWith('fast-h-')
+                      ? trLang(language, 'የተኛ መስመር', 'ግድም መስመር', 'Sarara Dalgaa', 'Horizontal Line')
+                      : v.id.startsWith('fast-v-')
+                      ? trLang(language, 'የቆመ መስመር', 'ቁመት መስመር', "Sarara Olka'aa", 'Vertical Line')
+                      : trLang(language, 'ሰያፍ መስመር', 'ሰያፍ መስመር', 'Sarara Qaxxaamuraa', 'Diagonal Line');
                   return (
                   <div
                     key={v.id}
@@ -5006,8 +4993,6 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                       {v.grid.map((row, rIdx) =>
                         row.map((isHit, cIdx) => {
                           const isCenterFree = rIdx === 2 && cIdx === 2;
-                          const isCornerCell =
-                            (rIdx === 0 || rIdx === 4) && (cIdx === 0 || cIdx === 4);
                           return (
                             <div
                               key={`${rIdx}-${cIdx}`}
@@ -5017,8 +5002,8 @@ export const FastBingoStandaloneApp: React.FC<FastBingoStandaloneAppProps> = ({
                                   : isCenterFree
                                   ? 'bg-emerald-600/80 text-white'
                                   : isHit
-                                  ? isCornerCell
-                                    ? 'bg-amber-500 text-slate-950 ring-2 ring-white scale-105'
+                                  ? v.id === 'fast-corners'
+                                    ? 'bg-amber-500 text-slate-950 scale-105'
                                     : 'bg-blue-600 text-white scale-105'
                                   : isDark
                                   ? 'bg-slate-800 text-slate-500 border border-slate-700'

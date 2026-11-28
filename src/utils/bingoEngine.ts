@@ -292,37 +292,21 @@ export function verifyCartelaBingo(
 
   if (
     rulePattern.isFastBingo ||
-    rulePattern.code === 'FAST_ONE_LINE_AND_FOUR_CORNERS' ||
-    rulePattern.code === 'FAST_ONE_LINE_OR_FOUR_CORNERS'
+    rulePattern.code === 'FAST_ONE_LINE_OR_FOUR_CORNERS' ||
+    rulePattern.code === 'FAST_ONE_LINE_AND_FOUR_CORNERS'
   ) {
-    // Fast Bingo Rule: BOTH at least 1 completed line AND all 4 corners ([0,0], [0,4], [4,0], [4,4])
-    const hasFourCorners = Boolean(
-      marked[0][0] && marked[0][4] && marked[4][0] && marked[4][4]
-    );
-    const hasAnyLine = rows.length > 0 || cols.length > 0 || diag1 || diag2;
-    if (hasFourCorners && hasAnyLine) {
-      const cornerCells: [number, number][] = [
+    // Fast Bingo Rule: ANY 1 completed line OR all 4 corners ([0,0], [0,4], [4,0], [4,4])
+    rows.forEach((r) => candidateCoordsList.push(getCoordsForLines([r], [], false, false)));
+    cols.forEach((c) => candidateCoordsList.push(getCoordsForLines([], [c], false, false)));
+    if (diag1) candidateCoordsList.push(getCoordsForLines([], [], true, false));
+    if (diag2) candidateCoordsList.push(getCoordsForLines([], [], false, true));
+    if (marked[0][0] && marked[0][4] && marked[4][0] && marked[4][4]) {
+      candidateCoordsList.push([
         [0, 0],
         [0, 4],
         [4, 0],
         [4, 4],
-      ];
-      const mergeWithCorners = (lineCells: [number, number][]): [number, number][] => {
-        const seen = new Set(lineCells.map(([r, c]) => `${r},${c}`));
-        const out: [number, number][] = [...lineCells];
-        for (const [cr, cc] of cornerCells) {
-          if (!seen.has(`${cr},${cc}`)) {
-            out.push([cr, cc]);
-            seen.add(`${cr},${cc}`);
-          }
-        }
-        return out;
-      };
-      rows.forEach((r) => candidateCoordsList.push(mergeWithCorners(getCoordsForLines([r], [], false, false))));
-      cols.forEach((c) => candidateCoordsList.push(mergeWithCorners(getCoordsForLines([], [c], false, false))));
-      if (diag1) candidateCoordsList.push(mergeWithCorners(getCoordsForLines([], [], true, false)));
-      if (diag2) candidateCoordsList.push(mergeWithCorners(getCoordsForLines([], [], false, true)));
-      candidateCoordsList.push(mergeWithCorners(getCoordsForLines(rows, cols, diag1, diag2)));
+      ]);
     }
   } else if (rulePattern.code === 'TWO_2X3_DISJOINT') {
     candidateCoordsList.push(...findDisjointPairs(completed2x3Boxes));
@@ -450,7 +434,7 @@ export function verifyCartelaBingo(
 
   // If we found at least one completed pattern variation:
   // In Regular Bingo: active number መኖር አለበት ግድ ነው!
-  // In Fast Bingo: completed 1 line AND 4 corners wins immediately.
+  // In Fast Bingo: completed 1 line OR 4 corners wins immediately.
   if (candidateCoordsList.length > 0) {
     const isFastRule = Boolean(
       rulePattern.isFastBingo ||
@@ -630,17 +614,15 @@ export function getCartelaSortMetrics(
 
   const squareScore = completeSquares * 100 + nearSquares * 15 + calledCount;
 
-  // 4. 4-Corners & Combined Fast Bingo score (requires BOTH 1 line AND 4 corners)
+  // 4. 4-Corners & Combined Fast Bingo score (ANY 1 line OR 4 corners)
   const cornerHits =
     (marked[0][0] ? 1 : 0) +
     (marked[0][4] ? 1 : 0) +
     (marked[4][0] ? 1 : 0) +
     (marked[4][4] ? 1 : 0);
   const cornerScore = (cornerHits === 4 ? 100 : cornerHits === 3 ? 25 : cornerHits * 5) + calledCount;
-  const hasFastWin = completeLinesCount >= 1 && cornerHits === 4;
-  const lineProgress = completeLinesCount > 0 ? 300 + completeLinesCount * 50 : nearLinesCount * 20;
-  const cornerProgress = cornerHits === 4 ? 300 : cornerHits === 3 ? 45 : cornerHits * 10;
-  const fastScore = (hasFastWin ? 1000 : 0) + lineProgress + cornerProgress + calledCount;
+  const hasFastWin = completeLinesCount >= 1 || cornerHits === 4;
+  const fastScore = (hasFastWin ? 1000 : 0) + Math.max(lineScore, cornerScore);
 
   return {
     calledCount,
@@ -998,7 +980,7 @@ export function getPatternCodeBadge(
       const hasFourCorners = Boolean(
         marked[0]?.[0] && marked[0]?.[4] && marked[4]?.[0] && marked[4]?.[4]
       );
-      count = isFastWithCorners ? (hasFourCorners ? countAllLines(marked) : 0) : countAllLines(marked);
+      count = countAllLines(marked) + (isFastWithCorners && hasFourCorners ? 1 : 0);
       break;
     }
     case 'LT':

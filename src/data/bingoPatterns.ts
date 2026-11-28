@@ -2188,100 +2188,96 @@ export function getRuleDescByLang(pattern?: BingoRulePattern | null, lang: Langu
   return pattern.descAm;
 }
 
-function createFastLineAndCornersGrid(
-  rows: number[],
-  cols: number[],
-  diag1 = false,
-  diag2 = false
-): boolean[][] {
-  const grid = createLinesGrid(rows, cols, diag1, diag2);
-  grid[0][0] = true;
-  grid[0][4] = true;
-  grid[4][0] = true;
-  grid[4][4] = true;
-  return grid;
-}
-
 /**
  * Dedicated Rule for the Separate FAST BINGO APP (ፈጣን ቢንጎ):
- * 1 Line (Horizontal, Vertical, Diagonal) AND 4 Corners (1 መስመር እና 4ቱ መአዝናት)
+ * 1 Line (Horizontal, Vertical, Diagonal) OR 4 Corners (1 መስመር ወይም 4ቱ መአዝን)
  */
 export const FAST_BINGO_RULE_PATTERN: BingoRulePattern = {
   id: 1,
-  code: 'FAST_ONE_LINE_AND_FOUR_CORNERS',
+  code: 'FAST_ONE_LINE_OR_FOUR_CORNERS',
   isFastBingo: true,
-  titleAm: '1 መስመር (አግድም፣ ቁመት፣ ሰያፍ) እና 4ቱ የማዕዘን ካስ',
-  titleTi: '1 መስመር (ግድም፣ ቁመት፣ ሰያፍ) እና 4 መኣዝን ካስ',
-  titleOm: "Sarara 1 (Dalgaa, Olka'aa, Qaxxaamuraa) fi Golee 4",
-  titleEn: '1 Line (Horizontal, Vertical, Diagonal) & 4 Corners',
+  titleAm: '1 መስመር (አግድም፣ ቁመት፣ ሰያፍ) ወይም 4ቱ የማዕዘን ካስ',
+  titleTi: '1 መስመር (ግድም፣ ቁመት፣ ሰያፍ) ወይ 4 መኣዝን ካስ',
+  titleOm: "Sarara 1 (Dalgaa, Olka'aa, Qaxxaamuraa) ykn Golee 4",
+  titleEn: '1 Line (Horizontal, Vertical, Diagonal) or 4 Corners',
   descAm:
-    'የፈጣን ቢንጎ ሕግ፦ ማንኛውም 1 መስመር (አግድም፣ ቁመት ወይም ሰያፍ ከነፃ F ጋር) እና 4ቱ የማዕዘን ካሶች አብረው ሲጠቁሩ ወዲያውኑ ያሸንፋሉ!',
+    'የፈጣን ቢንጎ ሕግ፦ ማንኛውም 1 መስመር (አግድም፣ ቁመት ወይም ሰያፍ ከነፃ F ጋር) ወይም 4ቱ የማዕዘን ካሶች ሲጠቁሩ ወዲያውኑ ያሸንፋሉ!',
   descTi:
-    'ናይ ቅልጡፍ ቢንጎ ሕጊ፦ ዝኾነ 1 መስመር (ግድም፣ ቁመት ወይ ሰያፍ ምስ ነጻ F) እና 4 መኣዝን ካስታት ብሓንሳብ ምስ ጸለሙ ብኡንብኡ ትዕወቱ!',
+    'ናይ ቅልጡፍ ቢንጎ ሕጊ፦ ዝኾነ 1 መስመር (ግድም፣ ቁመት ወይ ሰያፍ ምስ ነጻ F) ወይ 4 መኣዝን ካስታት ምስ ጸለሙ ብኡንብኡ ትዕወቱ!',
   descOm:
-    "Seera Biingoo Ariifataa: Sarara 1 (dalgaa, olka'aa ykn qaxxaamuraa FREE F waliin) fi goleewwan 4 walumaan yoo cuqqaalaman battalumatti ni injifattu!",
+    "Seera Biingoo Ariifataa: Sarara 1 (dalgaa, olka'aa ykn qaxxaamuraa FREE F waliin) ykn goleewwan 4 yoo cuqqaalaman battalumatti ni injifattu!",
   descEn:
-    'Fast Bingo Rule: Complete any 1 Horizontal, Vertical, or Diagonal line (with FREE center) AND all 4 Corner cells together to win immediately!',
+    'Fast Bingo Rule: Complete any 1 Horizontal, Vertical, or Diagonal line (with FREE center) OR all 4 Corner cells to win immediately!',
   variations: [
     {
+      id: 'fast-corners',
+      label: '4ቱ ማዕዘን ካስ',
+      grid: createGrid([
+        [0, 0],
+        [0, 4],
+        [4, 0],
+        [4, 4],
+      ]),
+    },
+    {
       id: 'fast-h-mid',
-      label: 'የተኛ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([2], []),
+      label: 'የተኛ መስመር',
+      grid: createLinesGrid([2], []),
     },
     {
       id: 'fast-h-top',
-      label: 'የላይኛው የተኛ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([0], []),
+      label: 'የላይኛው የተኛ መስመር',
+      grid: createLinesGrid([0], []),
     },
     {
       id: 'fast-h-bot',
-      label: 'የታችኛው የተኛ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([4], []),
+      label: 'የታችኛው የተኛ መስመር',
+      grid: createLinesGrid([4], []),
     },
     {
       id: 'fast-h-2',
-      label: '2ኛው የተኛ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([1], []),
+      label: '2ኛው የተኛ መስመር',
+      grid: createLinesGrid([1], []),
     },
     {
       id: 'fast-h-4',
-      label: '4ኛው የተኛ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([3], []),
+      label: '4ኛው የተኛ መስመር',
+      grid: createLinesGrid([3], []),
     },
     {
       id: 'fast-v-mid',
-      label: 'የቆመ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([], [2]),
+      label: 'የቆመ መስመር',
+      grid: createLinesGrid([], [2]),
     },
     {
       id: 'fast-v-left',
-      label: 'የግራ የቆመ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([], [0]),
+      label: 'የግራ የቆመ መስመር',
+      grid: createLinesGrid([], [0]),
     },
     {
       id: 'fast-v-right',
-      label: 'የቀኝ የቆመ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([], [4]),
+      label: 'የቀኝ የቆመ መስመር',
+      grid: createLinesGrid([], [4]),
     },
     {
       id: 'fast-v-2',
-      label: '2ኛው የቆመ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([], [1]),
+      label: '2ኛው የቆመ መስመር',
+      grid: createLinesGrid([], [1]),
     },
     {
       id: 'fast-v-3',
-      label: '4ኛው የቆመ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([], [3]),
+      label: '4ኛው የቆመ መስመር',
+      grid: createLinesGrid([], [3]),
     },
     {
       id: 'fast-diag-1',
-      label: 'ዋና ሰያፍ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([], [], true, false),
+      label: 'ዋና ሰያፍ መስመር',
+      grid: createLinesGrid([], [], true, false),
     },
     {
       id: 'fast-diag-2',
-      label: 'ሁለተኛ ሰያፍ መስመር + 4ቱ ማዕዘን',
-      grid: createFastLineAndCornersGrid([], [], false, true),
+      label: 'ሁለተኛ ሰያፍ መስመር',
+      grid: createLinesGrid([], [], false, true),
     },
   ],
 };
