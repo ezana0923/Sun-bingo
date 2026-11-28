@@ -1,0 +1,13841 @@
+import express from 'express';
+import compression from 'compression';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
+import fs from 'fs';
+import path from 'path';
+import zlib from 'zlib';
+import crypto from 'crypto';
+import { Pool } from 'pg';
+import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
+import { generateProvablyFairRound } from './src/utils/provablyFair';
+import { parseEthiopianPaymentSms, normalizeTransactionReference } from './src/utils/smsParser';
+import { generateCartelaById } from './src/utils/bingoEngine';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+app.use(compression({ threshold: 512 }));
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+app.use(express.text({ type: 'text/plain', limit: '25mb' }));
+const IS_RENDER_HOST = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+const SHARED_APP_URL =
+  process.env.SHARED_APP_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
+
+function sanitizeTelegramAppUrl(rawUrl?: string | null): string {
+  const envPinned = (process.env.RENDER_EXTERNAL_URL || process.env.SHARED_APP_URL || '').trim().replace(/\/$/, '');
+  if (IS_RENDER_HOST && envPinned.startsWith('https://')) {
+    return envPinned;
+  }
+  let clean = (rawUrl || '').trim().replace(/\/$/, '');
+  if (clean.includes('ais-dev-')) {
+    clean = clean.replace('https://ais-dev-', 'https://ais-pre-');
+  }
+  if (
+    !clean ||
+    !clean.startsWith('https://') ||
+    clean.includes('localhost') ||
+    clean.includes('127.0.0.1') ||
+    clean.includes('ezi-bingo.onrender.com')
+  ) {
+    if (envPinned.startsWith('https://') && !envPinned.includes('ais-dev-')) {
+      return envPinned;
+    }
+    if (lastKnownLiveHost && lastKnownLiveHost.startsWith('https://') && !lastKnownLiveHost.includes('ais-dev-')) {
+      return lastKnownLiveHost.replace(/\/$/, '');
+    }
+    return SHARED_APP_URL.replace(/\/$/, '');
+  }
+  return clean;
+}
+
+let lastKnownLiveHost =
+  process.env.SHARED_APP_URL ||
+  'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
+
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-webhook-secret, x-api-key');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+    return;
+  }
+  const host = req.get('x-forwarded-host') || req.get('host');
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+  if (
+    host &&
+    !host.includes('localhost') &&
+    !host.includes('127.0.0.1') &&
+    !host.includes('ais-dev-')
+  ) {
+    const safeProto = proto.toLowerCase() === 'http' ? 'https' : proto;
+    lastKnownLiveHost = `${safeProto}://${host}`;
+  }
+  next();
+});
+
+const PERSISTENT_DATA_DIR =
+  process.env.PERSISTENT_DATA_DIR ||
+  ['/var/data', '/data', '/opt/render/project/data'].find((d) => {
+    try {
+      return fs.existsSync(d) && fs.statSync(d).isDirectory();
+    } catch {
+      return false;
+    }
+  }) ||
+  __dirname;
+const BOT_STORE_PATH = path.join(PERSISTENT_DATA_DIR, '.telegram-bots.json');
+const BOT_STORE_BACKUP_PATH = '/tmp/sunbingo-bots-backup.json';
+const ACCOUNT_TOKEN_SECRET =
+  process.env.SESSION_HMAC_SECRET || 'SunBingo_2026_Secure_Account_Ledger_Key_v1';
+
+// Store active Telegram bot polling loops by token
+const activeBots = new Map<
+  string,
+  {
+    botUsername: string;
+    botFirstName: string;
+    appUrl: string;
+    offset: number;
+    isRunning: boolean;
+    pollingInFlight?: boolean;
+    lastError?: string;
+    lastUpdateAt?: number;
+  }
+>();
+
+// Dedup processed Telegram update_ids so NO message is ever sent twice!
+const processedUpdateIds = new Set<string>();
+function trackProcessedUpdateId(key: string) {
+  processedUpdateIds.add(key);
+  while (processedUpdateIds.size > 2000) {
+    const firstKey = processedUpdateIds.values().next().value;
+    if (!firstKey) break;
+    processedUpdateIds.delete(firstKey);
+  }
+}
+// Per-chat action debounce so tapping an inline button or command never sends duplicate messages
+const lastChatActionByChatId = new Map<number, { action: string; timestamp: number }>();
+// Track the last active menu message_id per chatId so when the user taps a button, the old message is deleted and the new one arrives cleanly at the bottom without stacking!
+const lastMenuMessageIdByChat = new Map<number, number>();
+
+// Track registered phone numbers & welcome bonus per Telegram chatId
+const registeredChatPhones = new Map<number, string>();
+const pendingReferralByChatId = new Map<number, string>();
+const pendingRaminoRoomByChatId = new Map<number, string>();
+const chatWelcomeBonusClaimed = new Set<number>();
+// Track prompt message IDs per chatId so we can delete the "📱 Share Phone Number" prompt bubbles once registered
+const promptMessageIdsByChat = new Map<number, number[]>();
+// Track per-chat interactive Deposit / Withdraw / Transfer / Registration flow state
+interface ChatFlowState {
+  mode:
+    | 'register_password'
+    | 'deposit'
+    | 'deposit_amount'
+    | 'deposit_method'
+    | 'deposit_sms'
+    | 'withdraw_amount'
+    | 'withdraw_method'
+    | 'withdraw_account'
+    | 'transfer'
+    | 'admin_post_pin'
+    | 'admin_post_content'
+    | 'admin_post_target'
+    | 'admin_post_channel';
+  method?: 'CBE' | 'Abyssinia' | 'Telebirr' | 'M-Pesa' | 'Cash' | string;
+  amount?: number;
+  reference?: string;
+  targetPhone?: string;
+  postText?: string;
+  postPhotoFileId?: string;
+  pendingBankRef?: string;
+  pendingPhotoFileId?: string;
+}
+const chatFlowByChatId = new Map<number, ChatFlowState>();
+const savedTelegramPostChannels = new Set<string>();
+function isChatAuthorizedForAdminPost(chatId: number): boolean {
+  const reg = registeredChatPhones.get(chatId);
+  const normReg = reg ? normalizeEthiopianPhone(reg) : '';
+  if (normReg === '0942742684') return true;
+  const ownerPlayer = playersByPhone.get('0942742684');
+  return Boolean(ownerPlayer?.chatId && ownerPlayer.chatId === chatId);
+}
+let globalRegisteredPhone: string | null = null;
+// Unified Wallet Balance & Bonus Balance shared across Ezi Fast Bingo, Ezi Bingo, and Telegram Bot
+let globalWalletBalance = 1250.0;
+let globalBonusBalance = 75.0;
+
+// 1. PRODUCTION DATABASE: Per-Player Accounts, Pending/Approved Transactions & Admin PIN Config
+export interface ServerPlayerRecord {
+  id: string;
+  phone: string;
+  name: string;
+  passwordHash?: string;
+  chatId?: number;
+  balance: number;
+  withdrawableBalance?: number;
+  bonusBalance: number;
+  nonWithdrawableBonus?: number;
+  referralEarnings: number;
+  referredCount: number;
+  isBlocked: boolean;
+  updatedAt: string;
+}
+
+// Store OTP codes by normalized phone number for New Registration & Forgot Password verification
+const pendingOtpByPhone = new Map<
+  string,
+  { code: string; name?: string; purpose: 'register' | 'forgot'; expiresAt: number }
+>();
+
+export interface ServerTransactionRecord {
+  id: string;
+  userId: string;
+  userName: string;
+  userPhone: string;
+  chatId?: number;
+  type: 'deposit' | 'withdraw' | 'transfer' | 'win' | 'bet' | 'referral';
+  method: 'CBE' | 'Abyssinia' | 'Telebirr' | 'M-Pesa' | 'Wallet' | 'System' | 'Cash' | string;
+  amount: number;
+  referenceNumber: string;
+  fullSmsText?: string;
+  receiptImageUrl?: string;
+  recipientPhone?: string;
+  note?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  timestamp: string;
+}
+
+export interface LockedCartelaOwner {
+  cartelaId: number;
+  ownerPhone: string;
+  ownerName: string;
+  clientId?: string;
+  isRegistered: boolean;
+  isBonus?: boolean;
+  lockedAt: number;
+}
+
+const playersByPhone = new Map<string, ServerPlayerRecord>();
+let serverTransactions: ServerTransactionRecord[] = [];
+function makeServerTxId(prefix = 'srv-tx'): string {
+  return `${prefix}-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+}
+function trimTransactionHistory(list: ServerTransactionRecord[], maxTotal = 600): ServerTransactionRecord[] {
+  if (list.length <= maxTotal) return list;
+  const preserved: ServerTransactionRecord[] = [];
+  const other: ServerTransactionRecord[] = [];
+  for (const tx of list) {
+    if (
+      tx.status === 'pending' ||
+      tx.type === 'deposit' ||
+      tx.type === 'withdraw' ||
+      tx.type === 'transfer'
+    ) {
+      preserved.push(tx);
+    } else {
+      other.push(tx);
+    }
+  }
+  const keptPreserved = preserved.slice(0, Math.min(preserved.length, Math.max(300, maxTotal - 100)));
+  const remainingSlots = Math.max(0, maxTotal - keptPreserved.length);
+  const keptOther = other.slice(0, remainingSlots);
+  const keptSet = new Set([...keptPreserved, ...keptOther]);
+  return list.filter((t) => keptSet.has(t)).slice(0, maxTotal);
+}
+function pushServerTransaction(tx: ServerTransactionRecord): void {
+  serverTransactions.unshift(tx);
+  if (serverTransactions.length > 600) {
+    serverTransactions = trimTransactionHistory(serverTransactions, 600);
+  }
+}
+
+export interface VerifiedBankReceipt {
+  id: string;
+  bank: string;
+  amount: number;
+  referenceNumber: string;
+  senderPhone?: string;
+  rawSms: string;
+  receivedAt: number;
+  matchedTxId?: string;
+  matchedUserPhone?: string;
+  status: 'auto_approved' | 'matched_pending' | 'ready_for_claim' | 'duplicate';
+}
+
+export interface ReceivedWebhookSmsLog {
+  id: string;
+  timestamp: string;
+  sender: string;
+  rawText: string;
+  parsedAmount: number | null;
+  parsedRef: string | null;
+  detectedBank: string | null;
+  detectedType: string | null;
+  statusText: string;
+  matchedPlayerPhone?: string;
+}
+
+const verifiedBankSmsReceipts: VerifiedBankReceipt[] = [];
+const receivedWebhookSmsLogs: ReceivedWebhookSmsLog[] = [];
+
+let adminPinConfig = {
+  username: (process.env.ADMIN_USERNAME || 'admin').trim() || 'admin',
+  passwordHash: 'admin123',
+  pinCode: '1234',
+  passwordScryptHash: '',
+  pinScryptHash: '',
+  hasCustomSecurity: false,
+  hasCustomUsername: false,
+  requireDepositApproval: true,
+  smsWebhookEnabled: true,
+  smsWebhookSecret: 'ezi_sms_secret_2026',
+  welcomeBonusAmount: 15,
+  referralBonusAmount: 10,
+  depositBonusEnabled: true,
+  depositBonusPercent: 10,
+  minDepositAmount: 10,
+  minWithdrawAmount: 100,
+  autoNotifyGames: {
+    fast: true,
+    regular: true,
+    keno: false,
+    ramino: true,
+  },
+};
+
+function hashAdminSecret(secret: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(secret, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+function verifyAdminSecretHash(secret: string, storedHash: string): boolean {
+  if (!secret || !storedHash || !storedHash.includes(':')) return false;
+  const [salt, keyHex] = storedHash.split(':');
+  if (!salt || !keyHex) return false;
+  try {
+    const keyBuf = Buffer.from(keyHex, 'hex');
+    const derivedBuf = crypto.scryptSync(secret, salt, 64);
+    if (keyBuf.length !== derivedBuf.length) return false;
+    return crypto.timingSafeEqual(keyBuf, derivedBuf);
+  } catch {
+    return false;
+  }
+}
+
+function isValidAdminSecretOnly(secretInput: string, mode: 'pin' | 'password' | 'any' = 'any'): boolean {
+  const s = secretInput.trim();
+  if (!s) return false;
+
+  if (mode === 'pin' && adminPinConfig.pinScryptHash) {
+    return verifyAdminSecretHash(s, adminPinConfig.pinScryptHash);
+  }
+  if (mode === 'password' && adminPinConfig.passwordScryptHash) {
+    if (verifyAdminSecretHash(s, adminPinConfig.passwordScryptHash)) return true;
+    if (adminPinConfig.pinScryptHash && verifyAdminSecretHash(s, adminPinConfig.pinScryptHash)) return true;
+    return false;
+  }
+
+  if (adminPinConfig.hasCustomSecurity || adminPinConfig.passwordScryptHash || adminPinConfig.pinScryptHash) {
+    const matchPass = adminPinConfig.passwordScryptHash
+      ? verifyAdminSecretHash(s, adminPinConfig.passwordScryptHash)
+      : Boolean(adminPinConfig.passwordHash && adminPinConfig.passwordHash !== 'admin123' && s === adminPinConfig.passwordHash);
+    const matchPin = adminPinConfig.pinScryptHash
+      ? verifyAdminSecretHash(s, adminPinConfig.pinScryptHash)
+      : Boolean(adminPinConfig.pinCode && adminPinConfig.pinCode !== '1234' && s === adminPinConfig.pinCode);
+    if (mode === 'pin') return matchPin;
+    return matchPass || matchPin;
+  }
+
+  const envPass = (process.env.ADMIN_PASSWORD || '').trim();
+  const envPin = (process.env.ADMIN_PIN || process.env.ADMIN_SECRET_PIN || '').trim();
+  if (mode === 'pin') {
+    return s === adminPinConfig.pinCode || (Boolean(envPin) && s === envPin) || s === '1234' || s === '7788';
+  }
+  return (
+    s === adminPinConfig.passwordHash ||
+    s === adminPinConfig.pinCode ||
+    (Boolean(envPass) && s === envPass) ||
+    (Boolean(envPin) && s === envPin) ||
+    s === 'admin123' ||
+    s === '1234' ||
+    s === '7788'
+  );
+}
+
+function isValidAdminUsername(usernameInput: string): boolean {
+  const u = usernameInput.trim().toLowerCase();
+  if (!u) return false;
+  if (adminPinConfig.hasCustomUsername) {
+    return u === adminPinConfig.username.toLowerCase();
+  }
+  return u === 'admin' || u === 'ezana' || u === 'ezibingo' || u === adminPinConfig.username.toLowerCase();
+}
+
+// 2. MULTIPLAYER LIVE SERVER GAME ROOMS (Server-Authoritative Real-Time Sync for ALL Connected Phones)
+export interface ServerWinnerAnnouncement {
+  cartelaId: number;
+  userName: string;
+  userPhone?: string;
+  prizeAmount: number;
+  winningCells: [number, number][];
+  lastBall: number;
+  calledBallsSnapshot: number[];
+  patternTitle: string;
+  timestamp: string;
+}
+
+export interface ServerGameHistoryRecord {
+  id: string;
+  gameMatchId: number;
+  timestamp: string;
+  stakeAmount: number;
+  prizeAmount: number;
+  patternTitle: string;
+  totalBallsCalled: number;
+  lastBall: number;
+  calledBallsSnapshot: number[];
+  participantPhones?: string[];
+  participantCartelasByPhone?: Record<string, number[]>;
+  winners: {
+    cartelaId: number;
+    userName: string;
+    userPhone?: string;
+    prizeAmount: number;
+    winningCells: [number, number][];
+  }[];
+}
+
+export interface ServerLiveRoomState {
+  mode: 'fast' | 'regular';
+  gameMatchId: number;
+  isPlaying: boolean;
+  isPaused: boolean;
+  preGameCountdown: number | null;
+  bingoClaimCountdown: number | null;
+  winnerDisplayCountdown: number | null;
+  hasRunPostGameCountdown?: boolean;
+  calledBalls: number[];
+  activeBall: number | null;
+  callSpeedSec: number;
+  stakeAmount: number;
+  prizeAmount: number;
+  activePatternId: number;
+  activePatternCode?: string;
+  jackpotPool: number;
+  houseEarningsTotal: number;
+  jackpotWonInRound: number;
+  onlinePlayersCount: number;
+  blockedCartelaIds: number[];
+  winnersList: ServerWinnerAnnouncement[];
+  lastVerifiedWinnerBanner: ServerWinnerAnnouncement | null;
+  gameHistory: ServerGameHistoryRecord[];
+  adminRoomMessage?: string;
+  adminRoomMessageAt?: string;
+  bonusCartelasForOver20?: number;
+  heroBanners?: {
+    id: string;
+    title: string;
+    subtitle: string;
+    badgeText: string;
+    accentColor: 'blue' | 'emerald' | 'amber' | 'rose';
+    imageUrl?: string;
+    isActive: boolean;
+  }[];
+  bankAccounts?: {
+    id: string;
+    bankName: string;
+    shortName: string;
+    accountNumber: string;
+    accountHolder: string;
+    badgeBg: string;
+    isActive?: boolean;
+  }[];
+  sha256Hash: string;
+  lastBallTickAt: number;
+  lastCountdownTickAt: number;
+  seq: number;
+  lastUpdated: number;
+}
+
+const DEFAULT_SERVER_BANK_ACCOUNTS: {
+  id: string;
+  bankName: string;
+  shortName: string;
+  accountNumber: string;
+  accountHolder: string;
+  badgeBg: string;
+  isActive?: boolean;
+}[] = [
+  {
+    id: 'CBE',
+    bankName: 'Commercial Bank of Ethiopia (CBE)',
+    shortName: 'CBE',
+    accountNumber: '1000112964936',
+    accountHolder: 'Ezana Gebremedhin',
+    badgeBg: 'bg-purple-700 text-white',
+    isActive: true,
+  },
+  {
+    id: 'Abyssinia',
+    bankName: 'Bank of Abyssinia (አቢሲኒያ ባንክ)',
+    shortName: 'Abyssinia',
+    accountNumber: '66816532',
+    accountHolder: 'Ezana Gebremedhin',
+    badgeBg: 'bg-amber-500 text-slate-950',
+    isActive: true,
+  },
+  {
+    id: 'Telebirr',
+    bankName: 'Telebirr (ቴሌብር)',
+    shortName: 'Telebirr',
+    accountNumber: '0942742684',
+    accountHolder: 'Ezana Gebremedhin',
+    badgeBg: 'bg-sky-500 text-white',
+    isActive: true,
+  },
+  {
+    id: 'M-Pesa',
+    bankName: 'M-Pesa Safaricom (ኤም-ፔሳ)',
+    shortName: 'M-Pesa',
+    accountNumber: '0711742684',
+    accountHolder: 'Ezana Gebremedhin',
+    badgeBg: 'bg-emerald-600 text-white',
+    isActive: true,
+  },
+];
+
+let persistedBankAccounts: {
+  id: string;
+  bankName: string;
+  shortName: string;
+  accountNumber: string;
+  accountHolder: string;
+  badgeBg: string;
+  isActive?: boolean;
+}[] = [...DEFAULT_SERVER_BANK_ACCOUNTS];
+
+function getActiveServerBankAccounts() {
+  return persistedBankAccounts.filter((b) => b.isActive !== false);
+}
+
+const DEFAULT_SERVER_HERO_BANNERS: {
+  id: string;
+  title: string;
+  subtitle: string;
+  badgeText: string;
+  accentColor: 'blue' | 'emerald' | 'amber' | 'rose';
+  imageUrl?: string;
+  isActive: boolean;
+}[] = [
+  {
+    id: 'hb-1',
+    title: 'ሁልጊዜ ጨዋታ! በ SUN GAMES እስከ 50,000 ብር ያሸንፉ!',
+    subtitle: 'ከ 70,000 ካርቴላዎች ይምረጡ · ከ 20 በላይ ካርቴላ ለሚይዙ +5 ካርቴላ ቦነስ በነፃ ይሰጣል!',
+    badgeText: 'SUN GAMES ልዩ ቦነስ',
+    accentColor: 'emerald',
+    isActive: true,
+  },
+  {
+    id: 'hb-2',
+    title: 'በየቀኑ 4 ጊዜ የነፃ ቢንጎ ጨዋታዎች (2:00፣ 8:00፣ 12:00፣ 4:30)',
+    subtitle: 'ጓደኛዎን ይጋብዙ እና በእያንዳንዱ ተጋባዥ ጓደኛ ወዲያውኑ የ 25 ብር ሽልማት ያግኙ!',
+    badgeText: 'የነፃ ጨዋታ መርሃ-ግብር',
+    accentColor: 'blue',
+    isActive: true,
+  },
+];
+
+const fastRoomLockedCartelas = new Map<number, LockedCartelaOwner>();
+
+const regularRoomLockedCartelas = new Map<number, LockedCartelaOwner>();
+
+export const FAST_STAKE_TIERS = [10, 20, 50, 100] as const;
+export type FastStakeTier = (typeof FAST_STAKE_TIERS)[number];
+
+const fastRoomsByStake: Record<number, ServerLiveRoomState> = {};
+const fastLockedCartelasByStake: Record<number, Map<number, LockedCartelaOwner>> = {};
+
+const liveRoomLockedCartelas = fastRoomLockedCartelas;
+
+function createInitialRoomState(
+  mode: 'fast' | 'regular',
+  matchId: number,
+  initialStake = 10
+): ServerLiveRoomState {
+  const fair = generateProvablyFairRound(matchId);
+  return {
+    mode,
+    gameMatchId: matchId,
+    isPlaying: false,
+    isPaused: false,
+    preGameCountdown: null,
+    bingoClaimCountdown: null,
+    winnerDisplayCountdown: null,
+    hasRunPostGameCountdown: false,
+    calledBalls: [],
+    activeBall: null,
+    callSpeedSec: mode === 'fast' ? 3 : 5,
+    stakeAmount: initialStake,
+    prizeAmount: mode === 'fast' ? 0 : 500,
+    activePatternId: mode === 'fast' ? 1 : 5,
+    activePatternCode: mode === 'fast' ? 'L' : 'HH',
+    jackpotPool: 0,
+    houseEarningsTotal: 420,
+    jackpotWonInRound: 0,
+    onlinePlayersCount: 1,
+    blockedCartelaIds: [],
+    winnersList: [],
+    lastVerifiedWinnerBanner: null,
+    gameHistory: [],
+    adminRoomMessage: '',
+    adminRoomMessageAt: '',
+    bonusCartelasForOver20: 5,
+    heroBanners: [],
+    bankAccounts: [...persistedBankAccounts],
+    sha256Hash: fair.sha256Hash,
+    lastBallTickAt: 0,
+    lastCountdownTickAt: 0,
+    seq: 1,
+    lastUpdated: Date.now(),
+  };
+}
+
+function generateRandomMatchId(): number {
+  return Math.floor(100000 + Math.random() * 900000);
+}
+
+for (const stk of FAST_STAKE_TIERS) {
+  fastRoomsByStake[stk] = createInitialRoomState('fast', generateRandomMatchId(), stk);
+  fastLockedCartelasByStake[stk] = stk === 10 ? fastRoomLockedCartelas : new Map<number, LockedCartelaOwner>();
+}
+
+let fastLiveRoomState: ServerLiveRoomState = fastRoomsByStake[10];
+let regularLiveRoomState: ServerLiveRoomState = createInitialRoomState('regular', generateRandomMatchId(), 10);
+let liveRoomState = fastLiveRoomState;
+
+function normalizeFastStakeTier(rawStake?: unknown): FastStakeTier {
+  const n = Number(rawStake);
+  if (n === 20 || n === 50 || n === 100) return n;
+  return 10;
+}
+
+function getRoomByMode(
+  mode?: string,
+  stakeAmount?: unknown
+): {
+  room: ServerLiveRoomState;
+  lockedMap: Map<number, LockedCartelaOwner>;
+  stakeTier: FastStakeTier;
+} {
+  if (mode === 'regular') {
+    return {
+      room: regularLiveRoomState,
+      lockedMap: regularRoomLockedCartelas,
+      stakeTier: 10,
+    };
+  }
+  const tier = normalizeFastStakeTier(stakeAmount);
+  if (!fastRoomsByStake[tier]) {
+    fastRoomsByStake[tier] = createInitialRoomState('fast', generateRandomMatchId(), tier);
+  }
+  if (!fastLockedCartelasByStake[tier]) {
+    fastLockedCartelasByStake[tier] = new Map<number, LockedCartelaOwner>();
+  }
+  return {
+    room: fastRoomsByStake[tier],
+    lockedMap: fastLockedCartelasByStake[tier],
+    stakeTier: tier,
+  };
+}
+
+// Track connected WebSocket and SSE clients so every ball drawn or game state change broadcasts in real-time (< 20ms) to ALL phones!
+const wsClients = new Set<WebSocket>();
+const wsAliveSet = new WeakSet<WebSocket>();
+const sseClients = new Set<express.Response>();
+
+function safeWsSend(client: WebSocket, payload: string): boolean {
+  if (client.readyState !== WebSocket.OPEN) {
+    if (client.readyState === WebSocket.CLOSED || client.readyState === WebSocket.CLOSING) {
+      wsClients.delete(client);
+    }
+    return false;
+  }
+  if (client.bufferedAmount > 1024 * 1024) {
+    wsClients.delete(client);
+    try {
+      client.terminate();
+    } catch {}
+    return false;
+  }
+  try {
+    client.send(payload);
+    return true;
+  } catch {
+    wsClients.delete(client);
+    return false;
+  }
+}
+
+function safeSseWrite(res: express.Response, payload: string): boolean {
+  if (res.writableEnded || res.destroyed) {
+    sseClients.delete(res);
+    return false;
+  }
+  try {
+    res.write(`data: ${payload}\n\n`);
+    return true;
+  } catch {
+    sseClients.delete(res);
+    return false;
+  }
+}
+
+function serializeFastRoomsSnapshot() {
+  const roomsObj: Record<number, ServerLiveRoomState> = {};
+  const lockedObj: Record<number, LockedCartelaOwner[]> = {};
+  for (const stk of FAST_STAKE_TIERS) {
+    roomsObj[stk] = fastRoomsByStake[stk];
+    lockedObj[stk] = Array.from((fastLockedCartelasByStake[stk] || new Map()).values());
+  }
+  return { roomsObj, lockedObj };
+}
+
+function broadcastRealtimeSync(changedMode?: 'fast' | 'regular' | 'both') {
+  const now = Date.now();
+  const openWsClients: WebSocket[] = [];
+  for (const c of wsClients) {
+    if (c.readyState === WebSocket.OPEN && c.bufferedAmount <= 1024 * 1024) {
+      openWsClients.push(c);
+    } else if (c.readyState !== WebSocket.CONNECTING) {
+      wsClients.delete(c);
+      if (c.bufferedAmount > 1024 * 1024) {
+        try {
+          c.terminate();
+        } catch {}
+      }
+    }
+  }
+  for (const r of sseClients) {
+    if (r.writableEnded || r.destroyed) {
+      sseClients.delete(r);
+    }
+  }
+  const activeWsCount = openWsClients.length + sseClients.size;
+
+  if (changedMode === 'fast' || changedMode === 'both' || !changedMode) {
+    for (const stk of FAST_STAKE_TIERS) {
+      const r = fastRoomsByStake[stk];
+      const lMap = fastLockedCartelasByStake[stk];
+      r.seq = (r.seq || 0) + 1;
+      r.lastUpdated = now;
+      r.onlinePlayersCount = Math.max(
+        2,
+        activeWsCount +
+          new Set(Array.from(lMap.values()).map((c) => c.clientId || c.ownerPhone)).size
+      );
+    }
+  }
+  if (changedMode === 'regular' || changedMode === 'both' || !changedMode) {
+    regularLiveRoomState.seq = (regularLiveRoomState.seq || 0) + 1;
+    regularLiveRoomState.lastUpdated = now;
+    regularLiveRoomState.onlinePlayersCount = Math.max(
+      2,
+      activeWsCount +
+        new Set(Array.from(regularRoomLockedCartelas.values()).map((c) => c.clientId || c.ownerPhone)).size
+    );
+  }
+
+  fastLiveRoomState = fastRoomsByStake[10];
+  if (openWsClients.length === 0 && sseClients.size === 0) {
+    return;
+  }
+
+  const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+
+  const payload = JSON.stringify({
+    type: 'room:sync',
+    changedMode: changedMode || 'both',
+    fastRoom: fastRoomsByStake[10],
+    fastLockedCartelas: lockedObj[10] || [],
+    fastRoomsByStake: roomsObj,
+    fastLockedCartelasByStake: lockedObj,
+    regularRoom: regularLiveRoomState,
+    regularLockedCartelas: Array.from(regularRoomLockedCartelas.values()),
+    transactions: serverTransactions,
+    players: Array.from(playersByPhone.values()),
+    bankAccounts: persistedBankAccounts,
+    homeAdsEnabled: persistedHomeAdsEnabled,
+    homeHeroAdsVersion,
+    requireDepositApproval: adminPinConfig.requireDepositApproval,
+    depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
+    depositBonusPercent: adminPinConfig.depositBonusPercent,
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+    autoNotifyGames: adminPinConfig.autoNotifyGames,
+    timestamp: now,
+  });
+
+  for (const client of openWsClients) {
+    safeWsSend(client, payload);
+  }
+
+  for (const res of sseClients) {
+    safeSseWrite(res, payload);
+  }
+}
+
+const lastGameNotifySentAt = new Map<string, number>();
+
+function emitGameNotification(opts: {
+  game: 'fast' | 'regular' | 'keno' | 'ramino' | 'admin';
+  title: string;
+  message: string;
+  imageUrl?: string;
+  sendTelegram?: boolean;
+  throttleMs?: number;
+}) {
+  const { game, title, message, imageUrl, sendTelegram = true, throttleMs = 45000 } = opts;
+  if (game !== 'admin') {
+    const cfg = adminPinConfig.autoNotifyGames || { fast: true, regular: true, keno: true, ramino: true };
+    if (cfg[game] === false) return;
+    const prevTs = lastGameNotifySentAt.get(game) || 0;
+    if (Date.now() - prevTs < throttleMs) return;
+    lastGameNotifySentAt.set(game, Date.now());
+  }
+
+  const eventObj = {
+    id: `gntf-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    game,
+    title,
+    message,
+    ...(imageUrl ? { imageUrl } : {}),
+    timestamp: Date.now(),
+  };
+
+  const payload = JSON.stringify({
+    type: 'game:notify',
+    notification: eventObj,
+  });
+
+  for (const client of wsClients) {
+    safeWsSend(client, payload);
+  }
+  for (const res of sseClients) {
+    safeSseWrite(res, payload);
+  }
+
+  if (sendTelegram) {
+    const firstActiveBot = Array.from(activeBots.keys()).find((tok) => activeBots.get(tok)?.isRunning);
+    if (firstActiveBot) {
+      const targetChatIds = new Set<number>();
+      for (const cid of registeredChatPhones.keys()) targetChatIds.add(cid);
+      for (const p of playersByPhone.values()) {
+        if (p.chatId) targetChatIds.add(p.chatId);
+      }
+      const tgText = `🔔 *${escapeTelegramMarkdown(title)}*\n${message}`;
+      for (const cid of targetChatIds) {
+        sendTelegramMessage(firstActiveBot, cid, tgText, undefined, undefined, true).catch(() => {});
+      }
+    }
+  }
+}
+
+function getCartelaBonusCountServer(nonBonusCount: number): number {
+  if (nonBonusCount >= 30) return 10;
+  if (nonBonusCount >= 25) return 7;
+  if (nonBonusCount >= 20) return 5;
+  if (nonBonusCount >= 15) return 3;
+  if (nonBonusCount >= 10) return 2;
+  if (nonBonusCount >= 5) return 1;
+  return 0;
+}
+
+function getFastRoomPaidCartelasCount(lockedMap: Map<number, LockedCartelaOwner>): number {
+  const countsByOwner = new Map<string, number>();
+  for (const item of lockedMap.values()) {
+    if (item.isBonus) continue;
+    const ph = normalizeEthiopianPhone(item.ownerPhone || '') || (item.ownerPhone || '').trim();
+    const cid = (item.clientId || '').trim();
+    const key = cid || ph || (item.ownerName || 'player').trim();
+    countsByOwner.set(key, (countsByOwner.get(key) || 0) + 1);
+  }
+  let totalPaid = 0;
+  for (const nonBonusCount of countsByOwner.values()) {
+    const bonusCount = getCartelaBonusCountServer(nonBonusCount);
+    totalPaid += Math.max(0, nonBonusCount - bonusCount);
+  }
+  return totalPaid;
+}
+
+function recalculateFastRoomPot(
+  room: ServerLiveRoomState,
+  lockedMap: Map<number, LockedCartelaOwner>
+) {
+  if (room.mode !== 'fast') return;
+  const paidCount = getFastRoomPaidCartelasCount(lockedMap);
+  const totalCollectedBirr = paidCount > 0 ? paidCount * room.stakeAmount : 0;
+  room.prizeAmount = Number((totalCollectedBirr * 0.8).toFixed(2));
+}
+
+function drawNextServerBallForRoom(room: ServerLiveRoomState) {
+  if (room.calledBalls.length >= 75) {
+    room.isPlaying = false;
+    if (
+      room.winnersList.length === 0 &&
+      room.winnerDisplayCountdown === null &&
+      !room.hasRunPostGameCountdown
+    ) {
+      room.winnerDisplayCountdown = 10;
+      room.hasRunPostGameCountdown = true;
+      room.lastCountdownTickAt = Date.now();
+    }
+    broadcastRealtimeSync(room.mode);
+    return;
+  }
+  const fair = generateProvablyFairRound(room.gameMatchId);
+  room.sha256Hash = fair.sha256Hash;
+  const calledSet = new Set(room.calledBalls);
+  const nextBall = fair.predeterminedBalls.find((b) => !calledSet.has(b));
+  if (!nextBall) {
+    room.isPlaying = false;
+    broadcastRealtimeSync(room.mode);
+    return;
+  }
+  room.calledBalls = [...room.calledBalls, nextBall];
+  room.activeBall = nextBall;
+  room.lastBallTickAt = Date.now();
+  if (room.calledBalls.length >= 75 && room.winnersList.length === 0) {
+    room.isPlaying = false;
+    if (room.winnerDisplayCountdown === null && !room.hasRunPostGameCountdown) {
+      room.winnerDisplayCountdown = 10;
+      room.hasRunPostGameCountdown = true;
+      room.lastCountdownTickAt = Date.now();
+    }
+  }
+  broadcastRealtimeSync(room.mode);
+}
+
+function resetServerRoomRound(room: ServerLiveRoomState, lockedMap: Map<number, LockedCartelaOwner>) {
+  let nextMatchId = generateRandomMatchId();
+  while (nextMatchId === room.gameMatchId) {
+    nextMatchId = generateRandomMatchId();
+  }
+  const fair = generateProvablyFairRound(nextMatchId);
+  room.gameMatchId = nextMatchId;
+  room.isPlaying = false;
+  room.isPaused = false;
+  room.preGameCountdown = null;
+  room.bingoClaimCountdown = null;
+  room.winnerDisplayCountdown = null;
+  room.hasRunPostGameCountdown = false;
+  room.calledBalls = [];
+  room.activeBall = null;
+  room.blockedCartelaIds = [];
+  room.winnersList = [];
+  room.jackpotWonInRound = 0;
+  room.sha256Hash = fair.sha256Hash;
+  room.lastBallTickAt = 0;
+  room.lastCountdownTickAt = 0;
+
+  lockedMap.clear();
+  recalculateFastRoomPot(room, lockedMap);
+  broadcastRealtimeSync(room.mode);
+}
+
+function countDistinctLockedPlayers(lockedMap: Map<number, LockedCartelaOwner>): number {
+  const owners = new Set<string>();
+  for (const item of lockedMap.values()) {
+    const ph = normalizeEthiopianPhone(item.ownerPhone || '');
+    const cid = (item.clientId || '').trim();
+    // Prefer clientId so even two mobile phones testing with the same or default phone number count as 2 separate mobile devices!
+    const key = cid || ph || item.ownerName;
+    if (key) {
+      owners.add(key);
+    }
+  }
+  return owners.size;
+}
+
+const deductedRoundKeys = new Set<string>();
+
+function deductLockedStakesOnGameStart(
+  room: ServerLiveRoomState,
+  lockedMap: Map<number, LockedCartelaOwner>
+) {
+  const roundKey = `${room.mode}:${room.stakeAmount}:${room.gameMatchId}`;
+  if (deductedRoundKeys.has(roundKey)) return;
+  deductedRoundKeys.add(roundKey);
+  if (deductedRoundKeys.size > 500) {
+    const first = deductedRoundKeys.values().next().value;
+    if (first) deductedRoundKeys.delete(first);
+  }
+
+  // Group locked non-bonus cartelas by player phone and deduct stake ONLY for paid cartelas (bonus cartelas are NOT counted in Birr)!
+  const countByPhone = new Map<string, { name: string; nonBonusCount: number; cartelaIds: number[] }>();
+  for (const item of lockedMap.values()) {
+    const ph = normalizeEthiopianPhone(item.ownerPhone || '') || (item.ownerPhone || '').trim();
+    if (!ph) continue;
+    const prev = countByPhone.get(ph) || { name: item.ownerName || 'Player', nonBonusCount: 0, cartelaIds: [] };
+    if (!item.isBonus) {
+      prev.nonBonusCount += 1;
+    }
+    prev.cartelaIds.push(item.cartelaId);
+    countByPhone.set(ph, prev);
+  }
+
+  for (const [ph, info] of countByPhone.entries()) {
+    const player = ensurePlayerRecord(ph, info.name);
+    const bonusCount = getCartelaBonusCountServer(info.nonBonusCount);
+    const paidCount = Math.max(0, info.nonBonusCount - bonusCount);
+    const totalCost = Number((paidCount * room.stakeAmount).toFixed(2));
+    if (totalCost > 0) {
+      player.balance = Math.max(0, Number((player.balance - totalCost).toFixed(2)));
+      clampBalancesAfterDebit(player);
+      player.updatedAt = new Date().toLocaleString();
+      if (ph === globalRegisteredPhone || ph === '0942742684') {
+        globalWalletBalance = player.balance;
+      }
+    }
+  }
+  saveBotsToDisk();
+}
+
+// High-Precision 100ms Server Loop for Zero-Jitter Ball Calling and Countdown Sync across ALL 4 Fast Bingo Stake Rooms + Regular Room!
+setInterval(() => {
+  if (!persistedGameVisibility.fast?.visible && !persistedGameVisibility.regular?.visible) {
+    return;
+  }
+  const now = Date.now();
+  const roomEntries: {
+    mode: 'fast' | 'regular';
+    room: ServerLiveRoomState;
+    lockedMap: Map<number, LockedCartelaOwner>;
+  }[] = [
+    ...FAST_STAKE_TIERS.map((stk) => ({
+      mode: 'fast' as const,
+      room: fastRoomsByStake[stk],
+      lockedMap: fastLockedCartelasByStake[stk],
+    })),
+    {
+      mode: 'regular' as const,
+      room: regularLiveRoomState,
+      lockedMap: regularRoomLockedCartelas,
+    },
+  ];
+
+  for (const { mode, room, lockedMap } of roomEntries) {
+    // 0. Auto-start 30s pre-game countdown ONLY when at least 2 distinct players have joined Fast Bingo
+    if (
+      !room.isPlaying &&
+      room.calledBalls.length === 0 &&
+      room.winnersList.length === 0 &&
+      room.preGameCountdown === null &&
+      mode === 'fast' &&
+      countDistinctLockedPlayers(lockedMap) >= 2
+    ) {
+      room.preGameCountdown = 30;
+      room.lastCountdownTickAt = now;
+      broadcastRealtimeSync(mode);
+    }
+
+    // 1. Handle Pre-Game Countdown on Server (exact 1000ms ticks)
+    if (room.preGameCountdown !== null) {
+      if (mode === 'fast' && countDistinctLockedPlayers(lockedMap) < 2 && !room.isPlaying) {
+        room.preGameCountdown = null;
+        room.lastCountdownTickAt = 0;
+        broadcastRealtimeSync(mode);
+        continue;
+      }
+      if (!room.lastCountdownTickAt) {
+        room.lastCountdownTickAt = now;
+        continue;
+      }
+      if (now - room.lastCountdownTickAt >= 990) {
+        room.lastCountdownTickAt = now;
+        if (room.preGameCountdown <= 1) {
+          if (mode === 'fast' && countDistinctLockedPlayers(lockedMap) < 2) {
+            room.preGameCountdown = null;
+            broadcastRealtimeSync(mode);
+            continue;
+          }
+          room.preGameCountdown = null;
+          room.isPlaying = true;
+          room.isPaused = false;
+          deductLockedStakesOnGameStart(room, lockedMap);
+          drawNextServerBallForRoom(room);
+          emitGameNotification({
+            game: mode,
+            title: mode === 'fast' ? `⚡ Fast Bingo (${room.stakeAmount} ETB) ተጀምሯል!` : `👑 ልዩ ቢንጎ (${room.stakeAmount} ETB) ተጀምሯል!`,
+            message:
+              mode === 'fast'
+                ? `የ ${room.stakeAmount} ETB ዙር #${room.gameMatchId} ቁጥር ጥሪ ተጀምሯል! በቀጣዩ ዙር ይቀላቀሉ።`
+                : `የልዩ ቢንጎ ዙር #${room.gameMatchId} (መደብ ${room.stakeAmount} ETB) ተጀምሯል!`,
+            throttleMs: 30000,
+          });
+        } else {
+          room.preGameCountdown -= 1;
+          broadcastRealtimeSync(mode);
+        }
+      }
+      continue;
+    }
+
+    // 2. Handle 30-Second Bingo Claim Window in Ezi Bingo (so no other player with Bingo is missed!)
+    if (room.bingoClaimCountdown !== null && room.bingoClaimCountdown > 0) {
+      if (!room.lastCountdownTickAt) {
+        room.lastCountdownTickAt = now;
+        continue;
+      }
+      if (now - room.lastCountdownTickAt >= 990) {
+        room.lastCountdownTickAt = now;
+        if (room.bingoClaimCountdown <= 1) {
+          // 30-second Bingo claim window has ended! ("ቢንጎ የማለት ሰዓት ተጠናቋል!")
+          room.bingoClaimCountdown = 0;
+          room.isPlaying = false;
+          room.isPaused = false;
+          if (mode === 'regular') {
+            room.winnerDisplayCountdown = null;
+          } else if (room.winnerDisplayCountdown === null && !room.hasRunPostGameCountdown) {
+            room.winnerDisplayCountdown = 10;
+            room.hasRunPostGameCountdown = true;
+          }
+          broadcastRealtimeSync(mode);
+        } else {
+          room.bingoClaimCountdown -= 1;
+          broadcastRealtimeSync(mode);
+        }
+      }
+      continue;
+    }
+
+    // 3. Handle Post-Win / End-of-Round 10s Countdown on Server (exact 1000ms ticks)
+    if (room.winnerDisplayCountdown !== null) {
+      if (!room.lastCountdownTickAt) {
+        room.lastCountdownTickAt = now;
+        continue;
+      }
+      if (now - room.lastCountdownTickAt >= 990) {
+        room.lastCountdownTickAt = now;
+        if (room.winnerDisplayCountdown <= 1) {
+          if (mode === 'regular') {
+            room.winnerDisplayCountdown = null;
+            room.isPlaying = false;
+            room.isPaused = false;
+            broadcastRealtimeSync(mode);
+          } else {
+            resetServerRoomRound(room, lockedMap);
+          }
+        } else {
+          room.winnerDisplayCountdown -= 1;
+          broadcastRealtimeSync(mode);
+        }
+      }
+      continue;
+    }
+
+    // 4. Handle Active Ball Calling on Server with 100ms precision (no skipped ticks!)
+    if (room.isPlaying && !room.isPaused) {
+      const intervalMs = Math.max(1000, (room.callSpeedSec || 3) * 1000);
+      if (now - room.lastBallTickAt >= intervalMs - 20) {
+        drawNextServerBallForRoom(room);
+      }
+    }
+  }
+}, 100);
+
+function normalizeEthiopianPhone(rawPhone: string): string {
+  const digits = (rawPhone || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('251') && digits.length === 12) {
+    return `0${digits.slice(3)}`;
+  }
+  if (digits.length === 9 && /^[79]/.test(digits)) {
+    return `0${digits}`;
+  }
+  return digits;
+}
+
+function getActiveDepositBonusPct(): number {
+  if (adminPinConfig.depositBonusEnabled === false) return 0;
+  return Math.max(0, Math.min(100, Number(adminPinConfig.depositBonusPercent ?? 10)));
+}
+
+function getNonWithdrawableBonus(player?: ServerPlayerRecord | null): number {
+  if (!player) return 0;
+  const bal = Math.max(0, Number(player.balance ?? 0));
+  const raw =
+    typeof player.nonWithdrawableBonus === 'number' && Number.isFinite(player.nonWithdrawableBonus)
+      ? player.nonWithdrawableBonus
+      : Number(player.bonusBalance ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(bal, Number(raw.toFixed(2)));
+}
+
+function getWithdrawableBalance(player?: ServerPlayerRecord | null): number {
+  if (!player) return 0;
+  const bal = Math.max(0, Number(player.balance ?? 0));
+  const lockedBonus = getNonWithdrawableBonus(player);
+  const maxCashAllowed = Math.max(0, Number((bal - lockedBonus).toFixed(2)));
+  const raw = Number(player.withdrawableBalance ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(maxCashAllowed, Number(raw.toFixed(2)));
+}
+
+function unlockAllWithdrawableAfterWin(player?: ServerPlayerRecord | null) {
+  if (!player) return;
+  const bal = Math.max(0, Number(player.balance ?? 0));
+  const lockedBonus = getNonWithdrawableBonus(player);
+  player.nonWithdrawableBonus = lockedBonus;
+  player.withdrawableBalance = Math.max(0, Number((bal - lockedBonus).toFixed(2)));
+}
+
+function clampBalancesAfterDebit(player?: ServerPlayerRecord | null) {
+  if (!player) return;
+  const bal = Math.max(0, Number(player.balance ?? 0));
+  player.balance = Number(bal.toFixed(2));
+  player.nonWithdrawableBonus = getNonWithdrawableBonus(player);
+  player.withdrawableBalance = getWithdrawableBalance(player);
+}
+
+function getPendingWithdrawTotal(phone?: string): number {
+  const clean = normalizeEthiopianPhone(phone || '') || String(phone || '').trim();
+  if (!clean) return 0;
+  let total = 0;
+  for (const tx of serverTransactions) {
+    if (
+      tx.type === 'withdraw' &&
+      tx.status === 'pending' &&
+      (normalizeEthiopianPhone(tx.userPhone) || tx.userPhone) === clean
+    ) {
+      total += Number(tx.amount || 0);
+    }
+  }
+  return Number(total.toFixed(2));
+}
+
+function getAvailableWithdrawableAfterPending(player?: ServerPlayerRecord | null): number {
+  if (!player) return 0;
+  const base = getWithdrawableBalance(player);
+  const pending = getPendingWithdrawTotal(player.phone);
+  return Math.max(0, Number((base - pending).toFixed(2)));
+}
+
+interface SignedAccountSnapshotPayload {
+  phone: string;
+  name: string;
+  passwordHash?: string;
+  balance: number;
+  withdrawableBalance?: number;
+  bonusBalance: number;
+  nonWithdrawableBonus?: number;
+  referralEarnings: number;
+  referredCount: number;
+  chatId?: number;
+  ts: number;
+}
+
+function createSignedPlayerToken(player: ServerPlayerRecord): string {
+  const payloadObj: SignedAccountSnapshotPayload = {
+    phone: normalizeEthiopianPhone(player.phone) || player.phone,
+    name: player.name,
+    passwordHash: player.passwordHash,
+    balance: Number((player.balance ?? 0).toFixed(2)),
+    withdrawableBalance: getWithdrawableBalance(player),
+    bonusBalance: Number((player.bonusBalance ?? 0).toFixed(2)),
+    nonWithdrawableBonus: getNonWithdrawableBonus(player),
+    referralEarnings: Number((player.referralEarnings ?? 0).toFixed(2)),
+    referredCount: Number(player.referredCount ?? 0),
+    chatId: player.chatId,
+    ts: Date.now(),
+  };
+  const dataB64 = Buffer.from(JSON.stringify(payloadObj), 'utf-8').toString('base64url');
+  const sig = crypto.createHmac('sha256', ACCOUNT_TOKEN_SECRET).update(dataB64).digest('base64url');
+  return `${dataB64}.${sig}`;
+}
+
+function verifySignedPlayerToken(token?: string | null): SignedAccountSnapshotPayload | null {
+  try {
+    if (!token || typeof token !== 'string' || !token.includes('.')) return null;
+    const [dataB64, sig] = token.trim().split('.');
+    if (!dataB64 || !sig) return null;
+    const expectedSig = crypto
+      .createHmac('sha256', ACCOUNT_TOKEN_SECRET)
+      .update(dataB64)
+      .digest('base64url');
+    if (sig.length !== expectedSig.length) return null;
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) return null;
+    const parsed = JSON.parse(Buffer.from(dataB64, 'base64url').toString('utf-8')) as SignedAccountSnapshotPayload;
+    if (!parsed || !parsed.phone || !Number.isFinite(parsed.balance) || parsed.balance < 0 || parsed.balance > 2000000) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function restorePlayerFromSignedTokenIfMissing(token?: string | null): ServerPlayerRecord | null {
+  const snap = verifySignedPlayerToken(token);
+  if (!snap) return null;
+  const cleanPhone = normalizeEthiopianPhone(snap.phone) || snap.phone;
+  const existing = playersByPhone.get(cleanPhone);
+  if (!existing) {
+    const restoredBal = Number(snap.balance.toFixed(2));
+    const restoredBonus = Number((snap.bonusBalance ?? 15).toFixed(2));
+    const restoredNonWithdrawable = Math.min(
+      restoredBal,
+      Number((snap.nonWithdrawableBonus ?? restoredBonus).toFixed(2))
+    );
+    const restored: ServerPlayerRecord = {
+      id: `usr-${cleanPhone.slice(-4)}-${Date.now().toString().slice(-3)}`,
+      phone: cleanPhone,
+      name: snap.name || `Player_${cleanPhone.slice(-4)}`,
+      passwordHash: snap.passwordHash,
+      chatId: snap.chatId,
+      balance: restoredBal,
+      withdrawableBalance: Math.max(
+        0,
+        Math.min(Math.max(0, restoredBal - restoredNonWithdrawable), Number((snap.withdrawableBalance ?? 0).toFixed(2)))
+      ),
+      bonusBalance: restoredBonus,
+      nonWithdrawableBonus: restoredNonWithdrawable,
+      referralEarnings: Number((snap.referralEarnings ?? 0).toFixed(2)),
+      referredCount: Number(snap.referredCount ?? 0),
+      isBlocked: false,
+      updatedAt: new Date().toLocaleString(),
+    };
+    playersByPhone.set(cleanPhone, restored);
+    if (snap.chatId) {
+      registeredChatPhones.set(snap.chatId, cleanPhone);
+    }
+    saveBotsToDisk();
+    return restored;
+  }
+  return existing;
+}
+
+function ensurePlayerRecord(phone: string, name = 'Player', chatId?: number): ServerPlayerRecord {
+  const clean = normalizeEthiopianPhone(phone) || phone.trim() || '0911000001';
+  const existing = playersByPhone.get(clean);
+  if (existing) {
+    if (chatId) existing.chatId = chatId;
+    if (name && name !== 'Player' && name !== 'King' && name !== 'Ezana_Player') {
+      existing.name = name;
+    }
+    if (typeof existing.nonWithdrawableBonus !== 'number' || Number.isNaN(existing.nonWithdrawableBonus)) {
+      existing.nonWithdrawableBonus = Math.min(Number(existing.balance || 0), Number(existing.bonusBalance ?? 0));
+    }
+    if (typeof existing.withdrawableBalance !== 'number' || Number.isNaN(existing.withdrawableBalance)) {
+      existing.withdrawableBalance = 0;
+    }
+    existing.withdrawableBalance = getWithdrawableBalance(existing);
+    return existing;
+  }
+  const resolvedName =
+    name && name !== 'Player' && name !== 'Ezana_Player'
+      ? name
+      : clean === '0942742684'
+      ? 'Ezana_Player'
+      : `Player_${clean.slice(-4)}`;
+  const initialBal = clean === '0942742684' ? 1250.0 : 15.0;
+  const created: ServerPlayerRecord = {
+    id: `usr-${clean.slice(-4)}-${Date.now().toString().slice(-3)}`,
+    phone: clean,
+    name: resolvedName,
+    chatId,
+    balance: initialBal,
+    withdrawableBalance: 0,
+    bonusBalance: 15.0,
+    nonWithdrawableBonus: 15.0,
+    referralEarnings: 0,
+    referredCount: 0,
+    isBlocked: false,
+    updatedAt: new Date().toLocaleString(),
+  };
+  playersByPhone.set(clean, created);
+  return created;
+}
+
+interface PersistedBotData {
+  tokens: {
+    token: string;
+    botUsername: string;
+    botFirstName: string;
+    appUrl: string;
+    offset?: number;
+  }[];
+  registeredPhones: [number, string][];
+  bonusClaimed: number[];
+  globalRegisteredPhone?: string | null;
+  globalWalletBalance?: number;
+  globalBonusBalance?: number;
+  players?: ServerPlayerRecord[];
+  transactions?: ServerTransactionRecord[];
+  fastGameHistory?: ServerGameHistoryRecord[];
+  regularGameHistory?: ServerGameHistoryRecord[];
+  fastRoomState?: Partial<ServerLiveRoomState>;
+  regularRoomState?: Partial<ServerLiveRoomState>;
+  fastLockedCartelas?: LockedCartelaOwner[];
+  regularLockedCartelas?: LockedCartelaOwner[];
+  fastRoomsByStake?: Record<number, Partial<ServerLiveRoomState>>;
+  fastLockedCartelasByStake?: Record<number, LockedCartelaOwner[]>;
+  adminPinConfig?: typeof adminPinConfig;
+  verifiedBankSmsReceipts?: VerifiedBankReceipt[];
+  receivedWebhookSmsLogs?: ReceivedWebhookSmsLog[];
+  persistedBankAccounts?: typeof persistedBankAccounts;
+  gameVisibility?: Record<string, { visible: boolean; comingSoon?: boolean }>;
+  homeAdsEnabled?: boolean;
+  homeHeroAds?: {
+    id: string;
+    title: string;
+    subtitle: string;
+    badgeText: string;
+    accentColor: 'blue' | 'emerald' | 'amber' | 'rose';
+    imageUrl?: string;
+    targetGame?: 'fast' | 'regular' | 'keno' | 'ramino' | 'none';
+    ctaText?: string;
+    isActive: boolean;
+    translations?: Record<string, { title?: string; subtitle?: string; badgeText?: string; ctaText?: string }>;
+  }[];
+}
+
+// Persistent Game Visibility State (Admin can hide/show games or mark Soon)
+type GameVisibilityKey = 'fast' | 'regular' | 'keno' | 'ramino';
+let persistedGameVisibility: Record<GameVisibilityKey, { visible: boolean; comingSoon?: boolean }> = {
+  fast: { visible: false, comingSoon: false },
+  regular: { visible: false, comingSoon: false },
+  keno: { visible: false, comingSoon: false },
+  ramino: { visible: true, comingSoon: false },
+};
+
+let persistedHomeAdsEnabled = true;
+let persistedHomeHeroAds: {
+  id: string;
+  title: string;
+  subtitle: string;
+  badgeText: string;
+  accentColor: 'blue' | 'emerald' | 'amber' | 'rose';
+  imageUrl?: string;
+  targetGame?: 'fast' | 'regular' | 'keno' | 'ramino' | 'none';
+  ctaText?: string;
+  isActive: boolean;
+  translations?: Record<string, { title?: string; subtitle?: string; badgeText?: string; ctaText?: string }>;
+}[] = [];
+let homeHeroAdsVersion = 1;
+
+// Preserve saved bot tokens loaded from disk so saveBotsToDisk NEVER overwrites them with []
+let persistedBotTokensCache: {
+  token: string;
+  botUsername: string;
+  botFirstName: string;
+  appUrl: string;
+  offset?: number;
+}[] = [];
+let isExplicitBotDisconnect = false;
+let lastSavedStateHash = '';
+
+let lastSavedDbHash = '';
+let pgPool: Pool | null = null;
+let pgReady = false;
+let dbHydrationSucceeded = false;
+let initialDbPlayerCount = 0;
+let pgWriteLoopRunning = false;
+let pendingPgSnapshot: { serialized: string; players: ServerPlayerRecord[]; stateHash: string } | null = null;
+
+let lastPgError = '';
+
+function cleanEnvPostgresString(raw: string): string {
+  let s = String(raw || '').trim();
+  // Strip accidental key prefix like DATABASE_URL=... or psql '...'
+  s = s.replace(/^(?:DATABASE_URL|NEON_DATABASE_URL|POSTGRES_URL)\s*=\s*/i, '').trim();
+  s = s.replace(/^psql\s+/i, '').trim();
+  // Strip accidental matching wrapping quotes or backticks
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'")) ||
+    (s.startsWith('`') && s.endsWith('`'))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+function getPostgresConnectionString(): string {
+  return cleanEnvPostgresString(
+    process.env.DATABASE_URL ||
+      process.env.NEON_DATABASE_URL ||
+      process.env.POSTGRES_URL ||
+      ''
+  );
+}
+
+function sanitizePostgresConnectionString(connStr: string, useSsl: boolean): string {
+  const cleaned = cleanEnvPostgresString(connStr);
+  if (!useSsl) return cleaned;
+  try {
+    const u = new URL(cleaned);
+    // Avoid pg-connection-string overriding explicit ssl: { rejectUnauthorized: false } or failing on pooler channel_binding
+    u.searchParams.delete('sslmode');
+    u.searchParams.delete('channel_binding');
+    return u.toString();
+  } catch {
+    return cleaned;
+  }
+}
+
+async function initPostgresPoolIfConfigured(): Promise<boolean> {
+  const connStr = getPostgresConnectionString();
+  if (!connStr) {
+    lastPgError = '';
+    return false;
+  }
+  try {
+    if (!pgPool) {
+      const lower = connStr.toLowerCase();
+      const useSsl =
+        !lower.includes('sslmode=disable') &&
+        !lower.includes('localhost') &&
+        !lower.includes('127.0.0.1');
+      const normalizedConnStr = sanitizePostgresConnectionString(connStr, useSsl);
+      pgPool = new Pool({
+        connectionString: normalizedConnStr,
+        max: 3,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+        ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+      });
+      pgPool.on('error', (err) => {
+        lastPgError = err?.message || String(err);
+        console.error('PostgreSQL pool error (kept alive):', err?.message || err);
+      });
+    }
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS sun_app_state (
+        id TEXT PRIMARY KEY,
+        state_json JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS sun_player_wallets (
+        phone TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        withdrawable_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        bonus_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        non_withdrawable_bonus DOUBLE PRECISION NOT NULL DEFAULT 0,
+        referral_earnings DOUBLE PRECISION NOT NULL DEFAULT 0,
+        referred_count INTEGER NOT NULL DEFAULT 0,
+        is_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+        chat_id BIGINT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS sun_tg_updates (
+        update_key TEXT PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    pgReady = true;
+    lastPgError = '';
+    return true;
+  } catch (err) {
+    lastPgError = (err as Error)?.message || String(err);
+    console.error('PostgreSQL init warning (falling back safely):', lastPgError);
+    pgReady = false;
+    return false;
+  }
+}
+
+let lastTgDedupPruneAt = 0;
+
+async function claimTelegramUpdateOnce(updateKey: string): Promise<boolean> {
+  if (!pgPool || !pgReady) return true;
+  try {
+    const now = Date.now();
+    if (now - lastTgDedupPruneAt > 3600000) {
+      lastTgDedupPruneAt = now;
+      pgPool.query(`DELETE FROM sun_tg_updates WHERE created_at < NOW() - INTERVAL '2 days'`).catch(() => {});
+    }
+    const res = await pgPool.query(
+      `INSERT INTO sun_tg_updates (update_key) VALUES ($1) ON CONFLICT (update_key) DO NOTHING RETURNING update_key`,
+      [updateKey]
+    );
+    return (res.rowCount || 0) > 0;
+  } catch {
+    return true;
+  }
+}
+
+async function flushPostgresQueue(): Promise<void> {
+  if (!pgPool || !pgReady || pgWriteLoopRunning) return;
+  pgWriteLoopRunning = true;
+  try {
+    while (pendingPgSnapshot) {
+      const snap = pendingPgSnapshot;
+      pendingPgSnapshot = null;
+      if (snap.stateHash === lastSavedDbHash) continue;
+      try {
+        await pgPool.query(
+          `INSERT INTO sun_app_state (id, state_json, updated_at)
+           VALUES ($1, $2::jsonb, NOW())
+           ON CONFLICT (id) DO UPDATE
+           SET state_json = EXCLUDED.state_json, updated_at = NOW()`,
+          ['main_state', snap.serialized]
+        );
+        if (snap.players.length > 0) {
+          const phones: string[] = [];
+          const names: string[] = [];
+          const balances: number[] = [];
+          const withdrawables: number[] = [];
+          const bonuses: number[] = [];
+          const nonWithdrawables: number[] = [];
+          const refEarnings: number[] = [];
+          const refCounts: number[] = [];
+          const blockedList: boolean[] = [];
+          const chatIds: (number | null)[] = [];
+          const seenPhones = new Set<string>();
+          for (const p of snap.players) {
+            const cleanPh = p?.phone ? String(p.phone).trim() : '';
+            if (!cleanPh || seenPhones.has(cleanPh)) continue;
+            seenPhones.add(cleanPh);
+            phones.push(cleanPh);
+            names.push(String(p.name || ''));
+            balances.push(Number(p.balance || 0));
+            withdrawables.push(Number(p.withdrawableBalance ?? 0));
+            bonuses.push(Number(p.bonusBalance ?? 0));
+            nonWithdrawables.push(Number(p.nonWithdrawableBonus ?? 0));
+            refEarnings.push(Number(p.referralEarnings ?? 0));
+            refCounts.push(Math.round(Number(p.referredCount ?? 0)));
+            blockedList.push(Boolean(p.isBlocked));
+            chatIds.push(typeof p.chatId === 'number' && Number.isFinite(p.chatId) ? Math.trunc(p.chatId) : null);
+          }
+          if (phones.length > 0) {
+            await pgPool.query(
+              `INSERT INTO sun_player_wallets (
+                 phone, name, balance, withdrawable_balance, bonus_balance,
+                 non_withdrawable_bonus, referral_earnings, referred_count,
+                 is_blocked, chat_id, updated_at
+               )
+               SELECT t.phone, t.name, t.balance, t.withdrawable_balance, t.bonus_balance,
+                      t.non_withdrawable_bonus, t.referral_earnings, t.referred_count,
+                      t.is_blocked, t.chat_id, NOW()
+               FROM UNNEST(
+                 $1::text[], $2::text[], $3::double precision[], $4::double precision[],
+                 $5::double precision[], $6::double precision[], $7::double precision[],
+                 $8::integer[], $9::boolean[], $10::bigint[]
+               ) AS t(
+                 phone, name, balance, withdrawable_balance, bonus_balance,
+                 non_withdrawable_bonus, referral_earnings, referred_count,
+                 is_blocked, chat_id
+               )
+               ON CONFLICT (phone) DO UPDATE SET
+                 name = EXCLUDED.name,
+                 balance = EXCLUDED.balance,
+                 withdrawable_balance = EXCLUDED.withdrawable_balance,
+                 bonus_balance = EXCLUDED.bonus_balance,
+                 non_withdrawable_bonus = EXCLUDED.non_withdrawable_bonus,
+                 referral_earnings = EXCLUDED.referral_earnings,
+                 referred_count = EXCLUDED.referred_count,
+                 is_blocked = EXCLUDED.is_blocked,
+                 chat_id = COALESCE(EXCLUDED.chat_id, sun_player_wallets.chat_id),
+                 updated_at = NOW()`,
+              [phones, names, balances, withdrawables, bonuses, nonWithdrawables, refEarnings, refCounts, blockedList, chatIds]
+            );
+          }
+        }
+        lastSavedDbHash = snap.stateHash;
+      } catch (err) {
+        console.error('PostgreSQL persist warning:', (err as Error)?.message || err);
+      }
+    }
+  } finally {
+    pgWriteLoopRunning = false;
+  }
+}
+
+function schedulePostgresPersist(serialized: string, players: ServerPlayerRecord[], stateHash: string) {
+  if (!pgPool || !pgReady) return;
+  if (getPostgresConnectionString() && !dbHydrationSucceeded) {
+    return;
+  }
+  if (initialDbPlayerCount > 5 && players.length <= 2) {
+    return;
+  }
+  pendingPgSnapshot = { serialized, players, stateHash };
+  void flushPostgresQueue();
+}
+
+function saveBotsToDisk() {
+  try {
+    const activeTokenList = Array.from(activeBots.entries()).map(([token, info]) => ({
+      token,
+      botUsername: info.botUsername,
+      botFirstName: info.botFirstName,
+      appUrl: info.appUrl,
+      offset: info.offset,
+    }));
+    if (activeTokenList.length > 0) {
+      persistedBotTokensCache = activeTokenList;
+    }
+    const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+    const payload: PersistedBotData = {
+      tokens: isExplicitBotDisconnect
+        ? []
+        : activeTokenList.length > 0
+        ? activeTokenList
+        : persistedBotTokensCache,
+      registeredPhones: Array.from(registeredChatPhones.entries()),
+      bonusClaimed: Array.from(chatWelcomeBonusClaimed.values()),
+      globalRegisteredPhone,
+      globalWalletBalance:
+        globalWalletBalance > 1000000 ? 1250 : globalWalletBalance,
+      globalBonusBalance,
+      players: Array.from(playersByPhone.values()).map((p) => ({
+        ...p,
+        balance: p.balance > 1000000 ? 1250 : p.balance,
+      })),
+      transactions: trimTransactionHistory(serverTransactions, 350),
+      fastGameHistory: fastRoomsByStake[10].gameHistory.slice(0, 100),
+      regularGameHistory: regularLiveRoomState.gameHistory.slice(0, 100),
+      fastRoomState: {
+        gameMatchId: fastRoomsByStake[10].gameMatchId,
+        isPlaying: fastRoomsByStake[10].isPlaying,
+        isPaused: fastRoomsByStake[10].isPaused,
+        preGameCountdown: fastRoomsByStake[10].preGameCountdown,
+        winnerDisplayCountdown: fastRoomsByStake[10].winnerDisplayCountdown,
+        calledBalls: fastRoomsByStake[10].calledBalls,
+        activeBall: fastRoomsByStake[10].activeBall,
+        callSpeedSec: fastRoomsByStake[10].callSpeedSec,
+        stakeAmount: fastRoomsByStake[10].stakeAmount,
+        prizeAmount: fastRoomsByStake[10].prizeAmount,
+        activePatternId: fastRoomsByStake[10].activePatternId,
+        activePatternCode: fastRoomsByStake[10].activePatternCode || 'L',
+        jackpotPool: fastRoomsByStake[10].jackpotPool,
+        houseEarningsTotal: fastRoomsByStake[10].houseEarningsTotal,
+        jackpotWonInRound: fastRoomsByStake[10].jackpotWonInRound,
+        blockedCartelaIds: fastRoomsByStake[10].blockedCartelaIds,
+        winnersList: fastRoomsByStake[10].winnersList,
+        lastVerifiedWinnerBanner: fastRoomsByStake[10].lastVerifiedWinnerBanner,
+        adminRoomMessage: fastRoomsByStake[10].adminRoomMessage || '',
+        adminRoomMessageAt: fastRoomsByStake[10].adminRoomMessageAt || '',
+        sha256Hash: fastRoomsByStake[10].sha256Hash,
+        seq: fastRoomsByStake[10].seq,
+      },
+      regularRoomState: {
+        gameMatchId: regularLiveRoomState.gameMatchId,
+        isPlaying: regularLiveRoomState.isPlaying,
+        isPaused: regularLiveRoomState.isPaused,
+        preGameCountdown: regularLiveRoomState.preGameCountdown,
+        bingoClaimCountdown: regularLiveRoomState.bingoClaimCountdown,
+        winnerDisplayCountdown: regularLiveRoomState.winnerDisplayCountdown,
+        calledBalls: regularLiveRoomState.calledBalls,
+        activeBall: regularLiveRoomState.activeBall,
+        callSpeedSec: regularLiveRoomState.callSpeedSec,
+        stakeAmount: regularLiveRoomState.stakeAmount,
+        prizeAmount: regularLiveRoomState.prizeAmount,
+        activePatternId: regularLiveRoomState.activePatternId,
+        activePatternCode: regularLiveRoomState.activePatternCode || 'HH',
+        jackpotPool: regularLiveRoomState.jackpotPool,
+        houseEarningsTotal: regularLiveRoomState.houseEarningsTotal,
+        jackpotWonInRound: regularLiveRoomState.jackpotWonInRound,
+        blockedCartelaIds: regularLiveRoomState.blockedCartelaIds,
+        winnersList: regularLiveRoomState.winnersList,
+        lastVerifiedWinnerBanner: regularLiveRoomState.lastVerifiedWinnerBanner,
+        adminRoomMessage: regularLiveRoomState.adminRoomMessage || '',
+        adminRoomMessageAt: regularLiveRoomState.adminRoomMessageAt || '',
+        sha256Hash: regularLiveRoomState.sha256Hash,
+        seq: regularLiveRoomState.seq,
+      },
+      fastLockedCartelas: Array.from(fastRoomLockedCartelas.values()),
+      regularLockedCartelas: Array.from(regularRoomLockedCartelas.values()),
+      fastRoomsByStake: roomsObj,
+      fastLockedCartelasByStake: lockedObj,
+      adminPinConfig,
+      verifiedBankSmsReceipts: verifiedBankSmsReceipts.slice(0, 100),
+      receivedWebhookSmsLogs: receivedWebhookSmsLogs.slice(0, 100),
+      persistedBankAccounts,
+      gameVisibility: persistedGameVisibility,
+      homeAdsEnabled: persistedHomeAdsEnabled,
+      homeHeroAds: persistedHomeHeroAds.slice(0, 25),
+    };
+    const serialized = JSON.stringify(payload);
+    // Hash excluding volatile room seq/timestamp counters so 15s idle timer skips needless synchronous disk/DB writes
+    const stablePayload = {
+      ...payload,
+      fastRoomState: payload.fastRoomState ? { ...payload.fastRoomState, seq: 0 } : undefined,
+      regularRoomState: payload.regularRoomState ? { ...payload.regularRoomState, seq: 0 } : undefined,
+      fastRoomsByStake: undefined as unknown,
+    };
+    const nextHash = crypto
+      .createHash('md5')
+      .update(
+        JSON.stringify(stablePayload) +
+          JSON.stringify(
+            FAST_STAKE_TIERS.map((stk) => ({
+              stk,
+              m: roomsObj[stk]?.gameMatchId,
+              p: roomsObj[stk]?.isPlaying,
+              ps: roomsObj[stk]?.isPaused,
+              b: roomsObj[stk]?.calledBalls?.length,
+              st: roomsObj[stk]?.stakeAmount,
+              pr: roomsObj[stk]?.prizeAmount,
+              pt: roomsObj[stk]?.activePatternId,
+              sp: roomsObj[stk]?.callSpeedSec,
+              bl: roomsObj[stk]?.blockedCartelaIds?.length,
+              bn: roomsObj[stk]?.bonusCartelasForOver20,
+              jp: roomsObj[stk]?.jackpotPool,
+            }))
+          )
+      )
+      .digest('hex');
+    if (nextHash === lastSavedStateHash) {
+      return;
+    }
+    const tmpMain = `${BOT_STORE_PATH}.tmp`;
+    fs.writeFileSync(tmpMain, serialized, 'utf-8');
+    fs.renameSync(tmpMain, BOT_STORE_PATH);
+    try {
+      const tmpBak = `${BOT_STORE_BACKUP_PATH}.tmp`;
+      fs.writeFileSync(tmpBak, serialized, 'utf-8');
+      fs.renameSync(tmpBak, BOT_STORE_BACKUP_PATH);
+    } catch {
+      // ignore backup write errors
+    }
+    lastSavedStateHash = nextHash;
+    schedulePostgresPersist(serialized, payload.players || [], nextHash);
+  } catch {
+    // ignore disk write errors
+  }
+}
+
+function applyPersistedState(parsed: Partial<PersistedBotData>) {
+  if (!parsed || typeof parsed !== 'object') return;
+    if (Array.isArray(parsed.persistedBankAccounts) && parsed.persistedBankAccounts.length > 0) {
+      persistedBankAccounts = parsed.persistedBankAccounts.map((b) => ({
+        ...b,
+        isActive: b.isActive !== false,
+      }));
+      for (const stk of FAST_STAKE_TIERS) {
+        if (fastRoomsByStake[stk]) fastRoomsByStake[stk].bankAccounts = [...persistedBankAccounts];
+      }
+      if (regularLiveRoomState) regularLiveRoomState.bankAccounts = [...persistedBankAccounts];
+    }
+    if (parsed.gameVisibility && typeof parsed.gameVisibility === 'object') {
+      const gv = parsed.gameVisibility as Record<string, { visible: boolean; comingSoon?: boolean }>;
+      persistedGameVisibility = {
+        fast: gv.fast ?? persistedGameVisibility.fast,
+        regular: gv.regular ?? persistedGameVisibility.regular,
+        keno: gv.keno ?? persistedGameVisibility.keno,
+        ramino: gv.ramino ?? persistedGameVisibility.ramino,
+      };
+    }
+    if (typeof parsed.homeAdsEnabled === 'boolean') {
+      persistedHomeAdsEnabled = parsed.homeAdsEnabled;
+    }
+    if (Array.isArray(parsed.homeHeroAds)) {
+      persistedHomeHeroAds = parsed.homeHeroAds;
+      homeHeroAdsVersion += 1;
+    }
+    if (
+      typeof parsed.globalWalletBalance === 'number' &&
+      Number.isFinite(parsed.globalWalletBalance) &&
+      parsed.globalWalletBalance <= 1000000
+    ) {
+      globalWalletBalance = parsed.globalWalletBalance;
+    }
+    if (typeof parsed.globalBonusBalance === 'number' && Number.isFinite(parsed.globalBonusBalance)) {
+      globalBonusBalance = parsed.globalBonusBalance;
+    }
+    if (Array.isArray(parsed.transactions) && parsed.transactions.length > 0) {
+      serverTransactions = parsed.transactions.filter(
+        (tx) => tx.id !== 'srv-tx-101' && tx.id !== 'srv-tx-102' && tx.userName !== 'Yonas_Fast' && tx.userName !== 'Meron_Hailu'
+      );
+    }
+    if (Array.isArray(parsed.players)) {
+      for (const p of parsed.players) {
+        if (p && p.phone && p.name !== 'Yonas_Fast' && p.name !== 'Meron_Hailu' && p.name !== 'Dawit_Bingo') {
+          if (p.balance > 1000000) {
+            p.balance = p.phone === '0942742684' ? 1250 : 15;
+          }
+          if (typeof p.nonWithdrawableBonus !== 'number' || Number.isNaN(p.nonWithdrawableBonus)) {
+            p.nonWithdrawableBonus = Math.min(Number(p.balance || 0), Number(p.bonusBalance ?? 0));
+          } else {
+            p.nonWithdrawableBonus = Math.max(0, Math.min(Number(p.balance || 0), Number(p.nonWithdrawableBonus)));
+          }
+          if (typeof p.withdrawableBalance !== 'number' || Number.isNaN(p.withdrawableBalance)) {
+            const pPhone = normalizeEthiopianPhone(p.phone) || p.phone;
+            let netWon = 0;
+            for (const tx of serverTransactions) {
+              const txPh = normalizeEthiopianPhone(tx.userPhone) || tx.userPhone;
+              if (txPh !== pPhone || tx.status !== 'approved') continue;
+              if (tx.type === 'win') netWon += Number(tx.amount || 0);
+              else if (tx.type === 'withdraw') netWon -= Number(tx.amount || 0);
+            }
+            p.withdrawableBalance = Math.max(
+              0,
+              Math.min(
+                Math.max(0, Number(p.balance || 0) - Number(p.nonWithdrawableBonus || 0)),
+                Number(netWon.toFixed(2))
+              )
+            );
+          } else {
+            p.withdrawableBalance = getWithdrawableBalance(p);
+          }
+          playersByPhone.set(p.phone, p);
+        }
+      }
+    }
+    if (parsed.fastRoomState) {
+      fastRoomsByStake[10] = {
+        ...fastRoomsByStake[10],
+        ...parsed.fastRoomState,
+        jackpotPool:
+          typeof parsed.fastRoomState.jackpotPool === 'number' && Number.isFinite(parsed.fastRoomState.jackpotPool)
+            ? parsed.fastRoomState.jackpotPool
+            : 0,
+        stakeAmount: 10,
+        lastBallTickAt: Date.now(),
+        lastCountdownTickAt: Date.now(),
+      };
+    }
+    if (parsed.fastRoomsByStake) {
+      for (const stk of FAST_STAKE_TIERS) {
+        const savedStk = parsed.fastRoomsByStake[stk];
+        if (savedStk) {
+          fastRoomsByStake[stk] = {
+            ...fastRoomsByStake[stk],
+            ...savedStk,
+            jackpotPool:
+              typeof savedStk.jackpotPool === 'number' && Number.isFinite(savedStk.jackpotPool)
+                ? savedStk.jackpotPool
+                : 0,
+            stakeAmount: stk,
+            lastBallTickAt: Date.now(),
+            lastCountdownTickAt: Date.now(),
+          };
+        }
+      }
+    }
+    for (const stk of FAST_STAKE_TIERS) {
+      if (fastRoomsByStake[stk]) {
+        if (typeof fastRoomsByStake[stk].jackpotPool !== 'number' || !Number.isFinite(fastRoomsByStake[stk].jackpotPool)) {
+          fastRoomsByStake[stk].jackpotPool = 0;
+        }
+        fastRoomsByStake[stk].activePatternId = 1;
+        fastRoomsByStake[stk].activePatternCode = 'L';
+        fastRoomsByStake[stk].heroBanners = [];
+        recalculateFastRoomPot(fastRoomsByStake[stk], fastLockedCartelasByStake[stk]);
+      }
+    }
+    fastLiveRoomState = fastRoomsByStake[10];
+    if (parsed.regularRoomState) {
+      regularLiveRoomState = {
+        ...regularLiveRoomState,
+        ...parsed.regularRoomState,
+        heroBanners: [],
+        jackpotPool:
+          typeof parsed.regularRoomState.jackpotPool === 'number' && Number.isFinite(parsed.regularRoomState.jackpotPool)
+            ? parsed.regularRoomState.jackpotPool
+            : 0,
+        lastBallTickAt: Date.now(),
+        lastCountdownTickAt: Date.now(),
+      };
+    }
+    if (typeof regularLiveRoomState.jackpotPool !== 'number' || !Number.isFinite(regularLiveRoomState.jackpotPool)) {
+      regularLiveRoomState.jackpotPool = 0;
+    }
+    regularLiveRoomState.heroBanners = [];
+    if (Array.isArray(parsed.fastGameHistory) && parsed.fastGameHistory.length > 0) {
+      fastRoomsByStake[10].gameHistory = parsed.fastGameHistory.filter(
+        (h) => !h.winners?.some((w) => w.userName === 'Yonas_Fast' || w.userName === 'Dawit_Bingo')
+      );
+    }
+    if (Array.isArray(parsed.regularGameHistory) && parsed.regularGameHistory.length > 0) {
+      regularLiveRoomState.gameHistory = parsed.regularGameHistory.filter(
+        (h) => !h.winners?.some((w) => w.userName === 'Yonas_Fast' || w.userName === 'Dawit_Bingo')
+      );
+    }
+    if (Array.isArray(parsed.fastLockedCartelas)) {
+      fastRoomLockedCartelas.clear();
+      for (const item of parsed.fastLockedCartelas) {
+        if (item && typeof item.cartelaId === 'number') {
+          fastRoomLockedCartelas.set(item.cartelaId, item);
+        }
+      }
+    }
+    if (parsed.fastLockedCartelasByStake) {
+      for (const stk of FAST_STAKE_TIERS) {
+        const list = parsed.fastLockedCartelasByStake[stk];
+        if (Array.isArray(list)) {
+          const mapTarget = fastLockedCartelasByStake[stk];
+          mapTarget.clear();
+          for (const item of list) {
+            if (item && typeof item.cartelaId === 'number') {
+              mapTarget.set(item.cartelaId, item);
+            }
+          }
+        }
+      }
+    }
+    if (Array.isArray(parsed.regularLockedCartelas)) {
+      regularRoomLockedCartelas.clear();
+      for (const item of parsed.regularLockedCartelas) {
+        if (item && typeof item.cartelaId === 'number') {
+          regularRoomLockedCartelas.set(item.cartelaId, item);
+        }
+      }
+    }
+    if (parsed.adminPinConfig) {
+      const hasExplicitToggle = typeof (parsed.adminPinConfig as any).depositBonusEnabled === 'boolean';
+      adminPinConfig = {
+        ...adminPinConfig,
+        ...parsed.adminPinConfig,
+        depositBonusEnabled: hasExplicitToggle
+          ? Boolean((parsed.adminPinConfig as any).depositBonusEnabled)
+          : true,
+        depositBonusPercent:
+          !hasExplicitToggle && Number(parsed.adminPinConfig.depositBonusPercent || 0) === 0
+            ? 10
+            : Number(parsed.adminPinConfig.depositBonusPercent ?? 10),
+        smsWebhookEnabled:
+          typeof parsed.adminPinConfig.smsWebhookEnabled === 'boolean'
+            ? parsed.adminPinConfig.smsWebhookEnabled
+            : adminPinConfig.smsWebhookEnabled,
+        autoNotifyGames: {
+          fast: parsed.adminPinConfig.autoNotifyGames?.fast !== false,
+          regular: parsed.adminPinConfig.autoNotifyGames?.regular !== false,
+          keno: parsed.adminPinConfig.autoNotifyGames?.keno === true,
+          ramino: parsed.adminPinConfig.autoNotifyGames?.ramino !== false,
+        },
+      };
+    }
+    if (Array.isArray(parsed.verifiedBankSmsReceipts)) {
+      verifiedBankSmsReceipts.splice(0, verifiedBankSmsReceipts.length, ...parsed.verifiedBankSmsReceipts);
+    }
+    if (Array.isArray(parsed.receivedWebhookSmsLogs)) {
+      receivedWebhookSmsLogs.splice(0, receivedWebhookSmsLogs.length, ...parsed.receivedWebhookSmsLogs);
+    }
+    if (Array.isArray(parsed.registeredPhones)) {
+      for (const [chatId, phone] of parsed.registeredPhones) {
+        registeredChatPhones.set(Number(chatId), String(phone));
+        ensurePlayerRecord(String(phone), undefined, Number(chatId));
+      }
+    }
+    if (Array.isArray(parsed.bonusClaimed)) {
+      for (const chatId of parsed.bonusClaimed) {
+        chatWelcomeBonusClaimed.add(Number(chatId));
+      }
+    }
+    if (Array.isArray(parsed.tokens)) {
+      const seenTokens = new Set<string>();
+      const uniqueTokens: typeof persistedBotTokensCache = [];
+      for (const item of parsed.tokens) {
+        const cleanTok = (item?.token || '').trim();
+        if (cleanTok && cleanTok.includes(':') && !seenTokens.has(cleanTok)) {
+          seenTokens.add(cleanTok);
+          const resolvedAppUrl = sanitizeTelegramAppUrl(
+            process.env.RENDER_EXTERNAL_URL || item.appUrl || lastKnownLiveHost || SHARED_APP_URL
+          );
+          uniqueTokens.push({ ...item, token: cleanTok, appUrl: resolvedAppUrl });
+          const shouldAutoPoll = process.env.DISABLE_LOCAL_BOT_POLLING !== 'true';
+          const botEntry: {
+            botUsername: string;
+            botFirstName: string;
+            appUrl: string;
+            offset: number;
+            isRunning: boolean;
+            lastError?: string;
+            pollingInFlight?: boolean;
+            lastUpdateAt?: number;
+          } = {
+            botUsername: item.botUsername || 'Sungamsbot',
+            botFirstName: item.botFirstName || 'SUN GAMES',
+            appUrl: resolvedAppUrl,
+            offset: typeof item.offset === 'number' ? item.offset : 0,
+            isRunning: shouldAutoPoll,
+          };
+          activeBots.set(cleanTok, botEntry);
+          if (shouldAutoPoll) {
+            if (!IS_RENDER_HOST) {
+              // Avoid duplicate Telegram replies when live Render is already polling the same bot token
+              const renderStatusUrl = `${loadRenderDeployConfig().renderAppUrl.replace(/\/$/, '')}/api/telegram/status`;
+              fetch(renderStatusUrl, { signal: AbortSignal.timeout(2500) })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((st) => {
+                  const liveRunning = Array.isArray(st?.details)
+                    ? st.details.some((d: any) => d?.isRunning && (!d?.botUsername || d.botUsername === botEntry.botUsername))
+                    : false;
+                  if (liveRunning) {
+                    botEntry.isRunning = false;
+                    botEntry.lastError = 'Handled by live Render server (local preview yielded to prevent duplicate messages).';
+                    return;
+                  }
+                  fetch(`https://api.telegram.org/bot${cleanTok}/deleteWebhook?drop_pending_updates=false`)
+                    .catch(() => {})
+                    .finally(() => pollBotUpdates(cleanTok));
+                })
+                .catch(() => {
+                  fetch(`https://api.telegram.org/bot${cleanTok}/deleteWebhook?drop_pending_updates=false`)
+                    .catch(() => {})
+                    .finally(() => pollBotUpdates(cleanTok));
+                });
+            } else {
+              fetch(`https://api.telegram.org/bot${cleanTok}/setMyCommands`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  commands: [
+                    { command: 'start', description: '🚀 Start / ጀምር' },
+                    { command: 'play', description: '🎮 Play SUN GAMES' },
+                    { command: 'deposit', description: 'Deposit 💵' },
+                    { command: 'withdraw', description: 'Withdraw 💸' },
+                    { command: 'balance', description: 'Check Balance 💰' },
+                    { command: 'transfer', description: 'Transfer 🔄' },
+                    { command: 'support', description: 'Support 📞' },
+                  ],
+                }),
+              }).catch(() => {});
+              fetch(`https://api.telegram.org/bot${cleanTok}/deleteWebhook?drop_pending_updates=false`)
+                .catch(() => {})
+                .finally(() => pollBotUpdates(cleanTok));
+            }
+          }
+        }
+      }
+      persistedBotTokensCache = uniqueTokens;
+    }
+}
+
+async function hydratePersistedStateAndBots() {
+  let hydratedFromPostgres = false;
+  const hasPg = await initPostgresPoolIfConfigured();
+
+  if (hasPg && pgPool) {
+    try {
+      const stateRes = await pgPool.query(
+        'SELECT state_json FROM sun_app_state WHERE id = $1 LIMIT 1',
+        ['main_state']
+      );
+      if (stateRes.rows.length > 0 && stateRes.rows[0]?.state_json) {
+        const dbParsed = stateRes.rows[0].state_json as Partial<PersistedBotData>;
+        applyPersistedState(dbParsed);
+        hydratedFromPostgres = true;
+        console.log(`✅ Loaded persistent state & ${playersByPhone.size} player wallets from PostgreSQL.`);
+      }
+      dbHydrationSucceeded = true;
+    } catch (err) {
+      dbHydrationSucceeded = false;
+      console.error('PostgreSQL state load warning:', (err as Error)?.message || err);
+    }
+  }
+
+  if (!hydratedFromPostgres) {
+    try {
+      const sourcePath = fs.existsSync(BOT_STORE_PATH)
+        ? BOT_STORE_PATH
+        : fs.existsSync(BOT_STORE_BACKUP_PATH)
+        ? BOT_STORE_BACKUP_PATH
+        : null;
+      if (sourcePath) {
+        const raw = fs.readFileSync(sourcePath, 'utf-8');
+        const parsed = JSON.parse(raw) as Partial<PersistedBotData>;
+        applyPersistedState(parsed);
+      }
+    } catch {
+      // ignore disk read errors
+    }
+  }
+
+  // Also merge any wallets from sun_player_wallets table that may be newer or missing
+  if (hasPg && pgPool) {
+    try {
+      const wRes = await pgPool.query(
+        `SELECT phone, name, balance, withdrawable_balance, bonus_balance,
+                non_withdrawable_bonus, referral_earnings, referred_count,
+                is_blocked, chat_id
+         FROM sun_player_wallets`
+      );
+      for (const row of wRes.rows) {
+        const cleanPh = normalizeEthiopianPhone(String(row.phone || '')) || String(row.phone || '').trim();
+        if (!cleanPh) continue;
+        const existingRec = playersByPhone.get(cleanPh);
+        if (!existingRec) {
+          const rec: ServerPlayerRecord = {
+            id: `u-${cleanPh}`,
+            phone: cleanPh,
+            name: String(row.name || `Player_${cleanPh.slice(-4)}`),
+            passwordHash: '****',
+            balance: Number(row.balance || 0),
+            withdrawableBalance: Number(row.withdrawable_balance || 0),
+            bonusBalance: Number(row.bonus_balance || 0),
+            nonWithdrawableBonus: Number(row.non_withdrawable_bonus || 0),
+            referralEarnings: Number(row.referral_earnings || 0),
+            referredCount: Number(row.referred_count || 0),
+            isBlocked: Boolean(row.is_blocked),
+            chatId: row.chat_id ? Number(row.chat_id) : undefined,
+            updatedAt: new Date().toLocaleString(),
+          };
+          playersByPhone.set(cleanPh, rec);
+        } else {
+          if (row.chat_id && !existingRec.chatId) {
+            existingRec.chatId = Number(row.chat_id);
+          }
+          if (existingRec.balance === 15 && Number(row.balance || 0) > 15) {
+            existingRec.balance = Number(row.balance || 0);
+            existingRec.withdrawableBalance = Number(row.withdrawable_balance || 0);
+            existingRec.bonusBalance = Number(row.bonus_balance || 0);
+            existingRec.nonWithdrawableBonus = Number(row.non_withdrawable_bonus || 0);
+          }
+        }
+        if (row.chat_id && !registeredChatPhones.has(Number(row.chat_id))) {
+          registeredChatPhones.set(Number(row.chat_id), cleanPh);
+        }
+      }
+      dbHydrationSucceeded = true;
+      initialDbPlayerCount = playersByPhone.size;
+      if (!hydratedFromPostgres && (playersByPhone.size > 0 || serverTransactions.length > 0)) {
+        saveBotsToDisk();
+      }
+    } catch (err) {
+      console.error('PostgreSQL wallets merge warning:', (err as Error)?.message || err);
+    }
+  }
+
+  // Always auto-connect TELEGRAM_BOT_TOKEN from env if configured (even on clean ephemeral boot!)
+  try {
+    const envBotToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+    if (envBotToken && envBotToken.includes(':') && !activeBots.has(envBotToken)) {
+      fetch(`https://api.telegram.org/bot${envBotToken}/getMe`)
+        .then((r) => r.json())
+        .then(async (meData) => {
+          if (meData?.ok && meData?.result?.username) {
+            const bUser = meData.result.username;
+            const bName = meData.result.first_name || 'SUN GAMES';
+            let resolvedAppUrl = process.env.RENDER_EXTERNAL_URL || SHARED_APP_URL || lastKnownLiveHost;
+            if (!resolvedAppUrl || !resolvedAppUrl.startsWith('https://')) {
+              resolvedAppUrl = 'https://ais-pre-5o2vwpcgfgshkft456mpos-198161772381.europe-west2.run.app';
+            }
+            await fetch(`https://api.telegram.org/bot${envBotToken}/deleteWebhook?drop_pending_updates=false`).catch(() => {});
+            await fetch(`https://api.telegram.org/bot${envBotToken}/setMyCommands`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                commands: [
+                  { command: 'start', description: '🚀 Start / ጀምር' },
+                  { command: 'play', description: '🎮 Play SUN GAMES' },
+                  { command: 'deposit', description: 'Deposit 💵' },
+                  { command: 'withdraw', description: 'Withdraw 💸' },
+                  { command: 'balance', description: 'Check Balance 💰' },
+                  { command: 'transfer', description: 'Transfer 🔄' },
+                  { command: 'support', description: 'Support 📞' },
+                ],
+              }),
+            }).catch(() => {});
+            activeBots.set(envBotToken, {
+              botUsername: bUser,
+              botFirstName: bName,
+              appUrl: resolvedAppUrl,
+              offset: 0,
+              isRunning: true,
+            });
+            pollBotUpdates(envBotToken);
+          }
+        })
+        .catch(() => {});
+    }
+  } catch {
+    // ignore env bot startup errors
+  }
+}
+
+// Auto-save full server state every 15s (hash-checked to skip unchanged writes) and prune transient in-memory caches to keep RAM low on Render Free tier
+setInterval(() => {
+  const now = Date.now();
+  for (const client of wsClients) {
+    if (client.readyState === WebSocket.CLOSED || client.readyState === WebSocket.CLOSING) {
+      wsClients.delete(client);
+    }
+  }
+  for (const [phone, entry] of pendingOtpByPhone.entries()) {
+    if (now > entry.expiresAt) {
+      pendingOtpByPhone.delete(phone);
+    }
+  }
+  for (const [chatId, entry] of lastOutgoingMsgByChatId.entries()) {
+    if (now - entry.timestamp > 3600000) {
+      lastOutgoingMsgByChatId.delete(chatId);
+    }
+  }
+  for (const [chatId, entry] of lastChatActionByChatId.entries()) {
+    if (now - entry.timestamp > 3600000) {
+      lastChatActionByChatId.delete(chatId);
+    }
+  }
+  for (const [k, ts] of lastGameNotifySentAt.entries()) {
+    if (now - ts > 3600000) {
+      lastGameNotifySentAt.delete(k);
+    }
+  }
+  saveBotsToDisk();
+}, 15000);
+
+// Build the exact InlineKeyboardMarkup attached directly under the bot's message (like IMG_3500.jpeg):
+// Row 1: 🎮 Play Live Bingo (web_app -> has the little square icon ❐ in top-right and opens inside Telegram!)
+// Row 2: Deposit 💵 | Withdraw 💸
+// Row 3: Check Balance 💰 | Jackpot 🎰
+// Row 4: Transfer 🔄 | Leaderboard 🏆
+// Row 5: 🔐 Get Login Token / ኮድ | Game Rules 📖
+// Row 6: Support 📞 | 🏠 Main Menu
+function buildWebAppUrl(
+  appUrl: string,
+  mode: 'hub' | 'fast' | 'regular' = 'hub',
+  registeredPhone?: string | null,
+  tab?: 'deposit' | 'withdraw' | 'transfer'
+) {
+  let cleanUrl = sanitizeTelegramAppUrl(appUrl || lastKnownLiveHost || SHARED_APP_URL);
+  const phone = registeredPhone || null;
+  const queryParts: string[] = [];
+  if (mode !== 'hub') {
+    queryParts.push(`mode=${mode}`);
+  }
+  if (phone) {
+    queryParts.push('registered=1', `phone=${encodeURIComponent(phone)}`);
+  }
+  if (tab) {
+    queryParts.push(`tab=${tab}`);
+  }
+  return queryParts.length > 0 ? `${cleanUrl}/?${queryParts.join('&')}` : `${cleanUrl}/`;
+}
+
+function buildInlineWelcomeMenuKeyboard(appUrl: string, registeredPhone?: string | null) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: '🎮 Play SUN GAMES',
+          web_app: { url: buildWebAppUrl(appUrl, 'hub', registeredPhone) },
+        },
+      ],
+      [
+        { text: 'Deposit 💵', callback_data: 'menu_deposit' },
+        { text: 'Withdraw 💸', callback_data: 'menu_withdraw' },
+      ],
+      [
+        { text: 'Check Balance 💰', callback_data: 'menu_balance' },
+        { text: 'Transfer 🔄', callback_data: 'menu_transfer' },
+      ],
+      [
+        { text: 'Invite Friends 👥', callback_data: 'menu_invite' },
+        { text: 'Support 📞', callback_data: 'menu_support' },
+      ],
+    ],
+  };
+}
+
+function buildSubMenuInlineKeyboard(appUrl: string, registeredPhone?: string | null) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: '🎮 Play SUN GAMES',
+          web_app: { url: buildWebAppUrl(appUrl, 'hub', registeredPhone) },
+        },
+      ],
+    ],
+  };
+}
+
+// Send the bottom ReplyKeyboardMarkup "📱 ስልክ ቁጥር አጋራ" (matching IMG_3522.jpeg)
+async function sendBottomContactKeyboardPromptOnly(token: string, chatId: number) {
+  if (registeredChatPhones.has(chatId)) return;
+  const promptText = `እንኳን ደህና መጡ! ለመመዝገብ ከዚህ በታች ያለውን ቁልፍ ይጫኑ ስልክ ቁጥርዎን ያጋሩ።`;
+
+  // Prevent duplicate prompt sending within 10 seconds
+  const nowMs = Date.now();
+  const prevOut = lastOutgoingMsgByChatId.get(chatId);
+  if (prevOut && prevOut.hash === promptText && nowMs - prevOut.timestamp < 10000) {
+    return;
+  }
+  lastOutgoingMsgByChatId.set(chatId, { hash: promptText, timestamp: nowMs });
+
+  // Clean up any previous prompt messages in this chat so they never stack
+  await deleteOldPhonePromptMessages(token, chatId);
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: promptText,
+        reply_markup: {
+          keyboard: [
+            [
+              {
+                text: '📱 ስልክ ቁጥር አጋራ',
+                request_contact: true,
+              },
+            ],
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: true,
+        },
+      }),
+    });
+    const data = await res.json();
+    if (data?.ok && data?.result?.message_id) {
+      const prev = promptMessageIdsByChat.get(chatId) || [];
+      promptMessageIdsByChat.set(chatId, [...prev, data.result.message_id]);
+    }
+  } catch (err) {
+    console.error('Error sending bottom contact keyboard prompt:', err);
+  }
+}
+
+// Delete any old "📱 ስልክ ቁጥር አጋራ" prompt messages in the chat once the user registers
+async function deleteOldPhonePromptMessages(token: string, chatId: number) {
+  const msgIds = promptMessageIdsByChat.get(chatId);
+  if (!msgIds || msgIds.length === 0) return;
+  promptMessageIdsByChat.delete(chatId);
+  for (const msgId of msgIds) {
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: msgId,
+        }),
+      });
+    } catch {
+      // ignore
+    }
+  }
+}
+
+// Send the exact first-page Share Phone Number prompt for new / unregistered Telegram users (matching IMG_3522.jpeg!)
+async function sendUnregisteredPhonePrompt(
+  token: string,
+  chatId: number,
+  isBlockedCommand = false,
+  bypassDedup = false
+) {
+  const textToSend = isBlockedCommand
+    ? `❌ እባክዎ መጀመሪያ ስልክ ቁጥርዎን በማጋራት ይመዝገቡ።`
+    : `እንኳን ደህና መጡ! ለመመዝገብ ከዚህ በታች ያለውን ቁልፍ ይጫኑ ስልክ ቁጥርዎን ያጋሩ።`;
+
+  // Prevent accidental duplicate prompt sending within 10s unless user explicitly tapped /start
+  const nowMs = Date.now();
+  if (!bypassDedup) {
+    const prevOut = lastOutgoingMsgByChatId.get(chatId);
+    if (prevOut && prevOut.hash === textToSend && nowMs - prevOut.timestamp < 10000) {
+      return;
+    }
+  }
+
+  // Delete any previous unregistered phone prompts in this chat so only ONE prompt is ever visible
+  await deleteOldPhonePromptMessages(token, chatId);
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: textToSend,
+        reply_markup: {
+          keyboard: [
+            [
+              {
+                text: '📱 ስልክ ቁጥር አጋራ',
+                request_contact: true,
+              },
+            ],
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: true,
+        },
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (data?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: textToSend, timestamp: nowMs });
+      if (data?.result?.message_id) {
+        const prev = promptMessageIdsByChat.get(chatId) || [];
+        promptMessageIdsByChat.set(chatId, [...prev, data.result.message_id]);
+      }
+      return;
+    }
+
+    // Fallback (e.g. group chat where request_contact keyboard isn't allowed)
+    console.warn('Telegram sendUnregisteredPhonePrompt fallback:', data?.error_code, data?.description);
+    const fbRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `${textToSend}\n\n📱 ስልክ ቁጥርዎን (09********) በመጻፍ ይላኩ ወይም ቦቱን በግል ቻት (Private Chat) ይክፈቱ።`,
+      }),
+    });
+    const fbData = await fbRes.json().catch(() => null);
+    if (fbData?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: textToSend, timestamp: nowMs });
+    }
+  } catch (err) {
+    console.error('Error sending unregistered phone prompt:', err);
+  }
+}
+
+function escapeTelegramMarkdown(val: string): string {
+  return String(val || '').replace(/([_*`\[\]])/g, '\\$1');
+}
+
+function buildWelcomeMessageText(firstName = 'Player', registeredPhone?: string, _has15Bonus = false) {
+  const player = registeredPhone ? playersByPhone.get(registeredPhone) : undefined;
+  const cashBal = player ? player.balance : 15.0;
+  const safeName = escapeTelegramMarkdown(firstName || 'Player');
+  const safePhone = registeredPhone ? escapeTelegramMarkdown(registeredPhone) : '';
+
+  const phoneNotice = registeredPhone
+    ? `✅ የተመዘገበ ስልክ፦ *${safePhone}*\n`
+    : `📱 *ለመመዝገብ ስልክ ቁጥርዎን ያጋሩ (09********)*\n`;
+
+  return (
+    `☀️ *እንኳን ወደ SUN GAMES በደህና መጡ!*\n\n` +
+    `👋 ሰላም *${safeName}*!\n` +
+    phoneNotice +
+    `\n💰 ጠቅላላ ዋሌት፦ *${cashBal.toFixed(2)} ETB*\n` +
+    `\n⚡ ፈጣን ገቢ እና ወጪ በ Telebirr, CBE, Abyssinia እና M-Pesa\n` +
+    `👇 ከታች ካሉት አዝራሮች አንዱን ይምረጡ ወይም **🎮 Play SUN GAMES** ይጫኑ፦`
+  );
+}
+
+// Track chatIds where we have already cleaned up old phone prompt messages
+const keyboardRemovedForChats = new Set<number>();
+
+async function ensureTelegramBottomKeyboardRemoved(token: string, chatId: number) {
+  if (!registeredChatPhones.has(chatId)) return;
+  // Delete any tracked prompt message IDs that carried the ReplyKeyboardMarkup (no temporary send+delete flash!)
+  await deleteOldPhonePromptMessages(token, chatId);
+  keyboardRemovedForChats.add(chatId);
+}
+
+// Track the last message sent to each chat so we never send the exact same text twice within 6 seconds
+const lastOutgoingMsgByChatId = new Map<number, { hash: string; timestamp: number }>();
+
+async function sendTelegramMessage(
+  token: string,
+  chatId: number,
+  text: string,
+  replyMarkup?: Record<string, unknown>,
+  _unusedMessageId?: number,
+  bypassDedup = false
+) {
+  const botInfo = activeBots.get(token);
+  const appUrl = botInfo?.appUrl || SHARED_APP_URL;
+  const regPhone = registeredChatPhones.get(chatId);
+  const finalMarkup = replyMarkup || buildInlineWelcomeMenuKeyboard(appUrl, regPhone);
+
+  // Outgoing duplicate guard: prevent sending the exact same message twice within 6000ms (unless explicit /start)
+  const nowMs = Date.now();
+  const msgHash = `${text.slice(0, 120)}`;
+  if (!bypassDedup) {
+    const prevOut = lastOutgoingMsgByChatId.get(chatId);
+    if (prevOut && prevOut.hash === msgHash && nowMs - prevOut.timestamp < 6000) {
+      return;
+    }
+  }
+
+  if (regPhone) {
+    await deleteOldPhonePromptMessages(token, chatId);
+  }
+
+  try {
+    const postSend = async (body: Record<string, unknown>) => {
+      const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return r.json().catch(() => null);
+    };
+
+    const data = await postSend({
+      chat_id: chatId,
+      text,
+      parse_mode: 'Markdown',
+      reply_markup: finalMarkup,
+    });
+    if (data?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: msgHash, timestamp: nowMs });
+      return;
+    }
+
+    console.warn('[Telegram sendMessage retry 1]', data?.error_code, data?.description);
+
+    // Retry 1: Strip Markdown parse_mode in case dynamic text had special characters
+    const plainText = text.replace(/[*_`\[\]]/g, '');
+    const noMdData = await postSend({
+      chat_id: chatId,
+      text: plainText,
+      reply_markup: finalMarkup,
+    });
+    if (noMdData?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: msgHash, timestamp: nowMs });
+      return;
+    }
+
+    // Retry 2: Sub-menu inline keyboard without copy_text / complex rows
+    const subData = await postSend({
+      chat_id: chatId,
+      text: plainText,
+      reply_markup: buildSubMenuInlineKeyboard(appUrl, regPhone),
+    });
+    if (subData?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: msgHash, timestamp: nowMs });
+      return;
+    }
+
+    // Retry 3: Standard URL button markup ONLY for Channels/Groups (chatId < 0); keep web_app for private chats so users stay inside Telegram Mini App!
+    const bareUrl = buildWebAppUrl(appUrl, 'hub', regPhone);
+    if (chatId < 0) {
+      const urlMarkup = {
+        inline_keyboard: [[{ text: '🎮 Sun Games ክፈት / Open App', url: bareUrl }]],
+      };
+      const urlBtnData = await postSend({
+        chat_id: chatId,
+        text: plainText,
+        reply_markup: urlMarkup,
+      });
+      if (urlBtnData?.ok) {
+        lastOutgoingMsgByChatId.set(chatId, { hash: msgHash, timestamp: nowMs });
+        return;
+      }
+    }
+
+    // Retry 4: Plain text fallback without external URL link for private chats
+    const bareData = await postSend({
+      chat_id: chatId,
+      text: chatId < 0 ? `${plainText}\n\n🎮 Open App: ${bareUrl}` : plainText,
+    });
+    if (bareData?.ok) {
+      lastOutgoingMsgByChatId.set(chatId, { hash: msgHash, timestamp: nowMs });
+    } else {
+      console.error('[Telegram sendMessage failed all retries]', bareData);
+    }
+  } catch (err) {
+    console.error('Error sending Telegram message:', err);
+  }
+}
+
+async function sendTelegramPhoto(
+  token: string,
+  chatId: number | string,
+  photoSource: string,
+  caption = '',
+  replyMarkup?: Record<string, unknown>,
+  bypassDedup = false
+): Promise<{ ok: boolean; error?: string }> {
+  const botInfo = activeBots.get(token);
+  const appUrl = botInfo?.appUrl || SHARED_APP_URL;
+  const numericChatId = typeof chatId === 'number' ? chatId : Number(chatId);
+  const isPrivateUserChat =
+    typeof chatId === 'number'
+      ? chatId > 0
+      : !String(chatId).startsWith('@') && Number.isFinite(numericChatId) && numericChatId > 0;
+  const regPhone = isPrivateUserChat ? registeredChatPhones.get(numericChatId) : undefined;
+  const finalMarkup =
+    replyMarkup ||
+    (isPrivateUserChat
+      ? buildInlineWelcomeMenuKeyboard(appUrl, regPhone)
+      : {
+          inline_keyboard: [
+            [{ text: '🎮 Sun Games ክፈት / Play Now', url: buildWebAppUrl(appUrl, 'hub') }],
+          ],
+        });
+
+  if (isPrivateUserChat && regPhone) {
+    await deleteOldPhonePromptMessages(token, numericChatId);
+  }
+
+  const trimmedCaption = caption.trim();
+  const shortCaption = trimmedCaption.length > 1024 ? trimmedCaption.slice(0, 1020) + '...' : trimmedCaption;
+  const overflowText = trimmedCaption.length > 1024 ? trimmedCaption : '';
+
+  const isDataUrl = /^data:image\/([a-zA-Z0-9+.-]+);base64,/.test(photoSource);
+  let photoBlob: Blob | null = null;
+  let photoFilename = 'post.jpg';
+  if (isDataUrl) {
+    const match = photoSource.match(/^data:(image\/([a-zA-Z0-9+.-]+));base64,([\s\S]+)$/);
+    if (match) {
+      const mime = match[1];
+      const extRaw = match[2].toLowerCase();
+      const ext = extRaw === 'jpeg' ? 'jpg' : extRaw.replace(/[^a-z0-9]/g, '') || 'jpg';
+      photoFilename = `sun_post.${ext}`;
+      const buf = Buffer.from(match[3], 'base64');
+      photoBlob = new Blob([buf], { type: mime });
+    }
+  }
+
+  const postPhoto = async (
+    capText: string,
+    useMarkdown: boolean,
+    markupObj?: Record<string, unknown>
+  ): Promise<{ ok: boolean; description?: string; error_code?: number } | null> => {
+    try {
+      if (photoBlob) {
+        const fd = new FormData();
+        fd.append('chat_id', String(chatId));
+        fd.append('photo', photoBlob, photoFilename);
+        if (capText) fd.append('caption', capText);
+        if (useMarkdown && capText) fd.append('parse_mode', 'Markdown');
+        if (markupObj) fd.append('reply_markup', JSON.stringify(markupObj));
+        const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+          method: 'POST',
+          body: fd,
+        });
+        return (await r.json().catch(() => null)) as any;
+      } else {
+        const body: Record<string, unknown> = {
+          chat_id: chatId,
+          photo: photoSource,
+        };
+        if (capText) body.caption = capText;
+        if (useMarkdown && capText) body.parse_mode = 'Markdown';
+        if (markupObj) body.reply_markup = markupObj;
+        const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        return (await r.json().catch(() => null)) as any;
+      }
+    } catch {
+      return null;
+    }
+  };
+
+  try {
+    let resData = await postPhoto(shortCaption, true, finalMarkup);
+    if (!resData?.ok) {
+      const plainCap = shortCaption.replace(/[*_`\[\]]/g, '');
+      resData = await postPhoto(plainCap, false, finalMarkup);
+    }
+    if (!resData?.ok) {
+      const plainCap = shortCaption.replace(/[*_`\[\]]/g, '');
+      if (isPrivateUserChat) {
+        resData = await postPhoto(plainCap, false, buildSubMenuInlineKeyboard(appUrl, regPhone));
+        if (!resData?.ok) {
+          resData = await postPhoto(plainCap, false, undefined);
+        }
+      } else {
+        const bareUrl = buildWebAppUrl(appUrl, 'hub', regPhone);
+        const urlMarkup = {
+          inline_keyboard: [[{ text: '🎮 Sun Games ክፈት / Play Now', url: bareUrl }]],
+        };
+        resData = await postPhoto(plainCap, false, urlMarkup);
+        if (!resData?.ok) {
+          resData = await postPhoto(plainCap, false, undefined);
+        }
+      }
+    }
+
+    if (resData?.ok) {
+      if (overflowText && isPrivateUserChat) {
+        await sendTelegramMessage(token, numericChatId, overflowText, undefined, undefined, bypassDedup);
+      } else if (overflowText) {
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: overflowText.replace(/[*_`\[\]]/g, ''),
+          }),
+        }).catch(() => {});
+      }
+      return { ok: true };
+    }
+    return { ok: false, error: resData?.description || 'Telegram sendPhoto failed' };
+  } catch (err) {
+    console.error('Error sending Telegram photo:', err);
+    return { ok: false, error: err instanceof Error ? err.message : 'sendPhoto error' };
+  }
+}
+
+async function handleTelegramMenuAction(
+  token: string,
+  chatId: number,
+  rawAction: string,
+  firstName = 'King',
+  isSharedContact = false,
+  callbackMessageId?: number,
+  photoFileId?: string
+) {
+  const cleanRaw = rawAction.trim().toLowerCase();
+  const clean = cleanRaw.replace(/^(\/[a-z0-9_]+)@[a-z0-9_]+/i, '$1');
+  const isStartCmd = clean === '/start' || clean.startsWith('/start ');
+  const isExplicitMenuCmd = isStartCmd || clean === '/menu' || clean === 'menu_main';
+  const botInfo = activeBots.get(token);
+  const appUrl = (botInfo?.appUrl || SHARED_APP_URL).replace(/\/$/, '');
+
+  // Capture referral deep-link (/start ref_XXXXXX) or Ramino Private Room invite (/start ramino_CODE) if present
+  const refMatch = rawAction.trim().match(/^\/start\s+ref_([a-z0-9_-]{3,20})/i);
+  if (refMatch && !registeredChatPhones.has(chatId)) {
+    pendingReferralByChatId.set(chatId, refMatch[1]);
+  }
+  const raminoDeepMatch = rawAction.trim().match(/^\/start\s+ramino_([a-z0-9_-]{3,32})/i);
+  if (raminoDeepMatch) {
+    pendingRaminoRoomByChatId.set(chatId, raminoDeepMatch[1].trim().toUpperCase());
+  }
+
+  // Guard against accidental double-tap on callback buttons; NEVER drop explicit /start commands
+  const nowMs = Date.now();
+  const prevAction = lastChatActionByChatId.get(chatId);
+  const debounceKey = photoFileId ? `${clean}|photo:${photoFileId}` : clean;
+  const debounceWindow = isStartCmd ? 800 : 2500;
+  if (prevAction && prevAction.action === debounceKey && nowMs - prevAction.timestamp < debounceWindow) {
+    return;
+  }
+  lastChatActionByChatId.set(chatId, { action: debounceKey, timestamp: nowMs });
+
+  if (clean === '/register' || clean === '/logout' || clean === '/reset') {
+    registeredChatPhones.delete(chatId);
+    chatFlowByChatId.delete(chatId);
+    keyboardRemovedForChats.delete(chatId);
+    saveBotsToDisk();
+    await sendUnregisteredPhonePrompt(token, chatId, false, true);
+    return;
+  }
+
+  // STEP 1: Check if the user shared a contact OR is an unregistered user typing a phone number
+  const digitsOnly = clean.replace(/\D/g, '');
+  const hasActiveFlow = chatFlowByChatId.has(chatId);
+  const looksLikePhone =
+    isSharedContact ||
+    clean.includes('share phone number') ||
+    clean.includes('share your phone number') ||
+    clean.includes('ስልክ ቁጥር አጋራ') ||
+    (!registeredChatPhones.has(chatId) &&
+      !hasActiveFlow &&
+      digitsOnly.length >= 9 &&
+      digitsOnly.length <= 15);
+
+  if (
+    looksLikePhone &&
+    !clean.startsWith('menu_') &&
+    !clean.startsWith('dep_') &&
+    !clean.startsWith('with_') &&
+    !clean.startsWith('/')
+  ) {
+    let normalizedPhone = digitsOnly || '0942742684';
+    if (normalizedPhone.startsWith('251') && normalizedPhone.length === 12) {
+      normalizedPhone = `0${normalizedPhone.slice(3)}`;
+    } else if (normalizedPhone.length === 9 && /^[79]/.test(normalizedPhone)) {
+      normalizedPhone = `0${normalizedPhone}`;
+    } else if (!digitsOnly) {
+      normalizedPhone = globalRegisteredPhone || '0942742684';
+    }
+
+    const isBrandNewPlayer = !playersByPhone.has(normalizedPhone);
+    registeredChatPhones.set(chatId, normalizedPhone);
+    const newPlayerRec = ensurePlayerRecord(normalizedPhone, firstName, chatId);
+    chatWelcomeBonusClaimed.add(chatId);
+
+    // Apply referral bonus if user arrived via /start ref_XXXXXX
+    const refCode = pendingReferralByChatId.get(chatId);
+    if (refCode && isBrandNewPlayer) {
+      pendingReferralByChatId.delete(chatId);
+      const referrer = Array.from(playersByPhone.values()).find(
+        (p) => p.phone !== normalizedPhone && p.phone.slice(-6).toLowerCase() === refCode.toLowerCase()
+      );
+      if (referrer) {
+        referrer.referredCount = (referrer.referredCount || 0) + 1;
+        referrer.referralEarnings = Number(((referrer.referralEarnings || 0) + 25).toFixed(2));
+        referrer.bonusBalance = Number(((referrer.bonusBalance || 0) + 25).toFixed(2));
+        newPlayerRec.bonusBalance = Number(((newPlayerRec.bonusBalance || 0) + 15).toFixed(2));
+      }
+    }
+
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+
+    // Delete all old "📱 ስልክ ቁጥር አጋራ" prompt messages in the chat immediately
+    await deleteOldPhonePromptMessages(token, chatId);
+    keyboardRemovedForChats.add(chatId);
+
+    // If this player does not yet have a password set, prompt them to set a password FIRST!
+    if (!newPlayerRec.passwordHash || newPlayerRec.passwordHash === '****') {
+      chatFlowByChatId.set(chatId, { mode: 'register_password', targetPhone: normalizedPhone });
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `✅ *ስልክ ቁጥርዎ (${normalizedPhone}) ተረጋግጧል!*\n` +
+          `` +
+          `🔐 *ደረጃ 2/2፦ የይለፍ ቃል (Password) ያዘጋጁ*\n\n` +
+          `👇 አካውንትዎን በስልክ እና በይለፍ ቃል እንዲጠብቁ ቢያንስ *4 ፊደላት ወይም ቁጥሮች* ያለው የይለፍ ቃል እዚሁ ቻት ላይ ይጻፉ (ለምሳሌ፦ \`1234\` ወይም \`sun22\`):`,
+        {
+          inline_keyboard: [],
+        },
+        undefined,
+        true
+      );
+      return;
+    }
+
+    // Send Welcome Message with inline menu
+    const welcomeText = buildWelcomeMessageText(newPlayerRec.name || firstName, normalizedPhone, true);
+    await sendTelegramMessage(
+      token,
+      chatId,
+      welcomeText,
+      buildInlineWelcomeMenuKeyboard(appUrl, normalizedPhone),
+      undefined,
+      true
+    );
+
+    const pendingRoomAfterReg = pendingRaminoRoomByChatId.get(chatId);
+    if (pendingRoomAfterReg) {
+      pendingRaminoRoomByChatId.delete(chatId);
+      const privRoom = raminoPrivateRooms.get(pendingRoomAfterReg);
+      const baseApp = buildWebAppUrl(appUrl, 'hub').split('/?')[0].replace(/\/$/, '');
+      const joinWebUrl = `${baseApp}/?game=ramino&raminoRoom=${encodeURIComponent(pendingRoomAfterReg)}&registered=1&phone=${encodeURIComponent(normalizedPhone)}`;
+      const roomInviteMsg =
+        `♠️ *የራሚኖ የግል ክፍል ግብዣ*\n` +
+        `` +
+        `🔑 የክፍል ኮድ፦ \`${pendingRoomAfterReg}\`\n` +
+        (privRoom
+          ? `🪙 መደብ፦ *${privRoom.stake} ETB*\n👥 ተጫዋቾች፦ *${privRoom.players.length}/${privRoom.maxPlayers}*\n👑 ጋባዥ፦ *${escapeTelegramMarkdown(privRoom.hostName)}*\n`
+          : '') +
+        `\n👇 ክፍሉን በቀጥታ ለመቀላቀል ከታች ያለውን ቁልፍ ይጫኑ፦`;
+      await sendTelegramMessage(
+        token,
+        chatId,
+        roomInviteMsg,
+        {
+          inline_keyboard: [
+            [{ text: `🎮 ክፍሉን ተቀላቀል (${pendingRoomAfterReg})`, web_app: { url: joinWebUrl } }],
+          ],
+        },
+        undefined,
+        true
+      );
+    }
+    return;
+  }
+
+  // STEP 1.5: Handle OTP delivery deep-link or request via Telegram: /start otp_0912345678, /otp 0912345678, or "otp"
+  const otpMatch =
+    rawAction.match(/(?:otp[_\s:]+|\/otp\s*)([0-9+]{9,15})/i) ||
+    (clean.startsWith('/start otp_') ? rawAction.match(/otp_([0-9+]{9,15})/i) : null);
+
+  if (otpMatch) {
+    const rawTargetPhone = otpMatch[1];
+    const targetPhone = normalizeEthiopianPhone(rawTargetPhone);
+    if (targetPhone && targetPhone.length >= 9) {
+      registeredChatPhones.set(chatId, targetPhone);
+      const player = ensurePlayerRecord(targetPhone, firstName, chatId);
+      player.chatId = chatId;
+      saveBotsToDisk();
+
+      let pending = pendingOtpByPhone.get(targetPhone);
+      if (!pending || pending.expiresAt < Date.now()) {
+        const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+        pending = {
+          code: newCode,
+          name: player.name || firstName,
+          purpose: 'register',
+          expiresAt: Date.now() + 10 * 60 * 1000,
+        };
+        pendingOtpByPhone.set(targetPhone, pending);
+      }
+
+      const otpCode = pending.code;
+      const otpMsg =
+        `🔐 *የ SUN GAMES ምዝገባ ማረጋገጫ ኮድ (OTP Code)*\n` +
+        `` +
+        `📱 ስልክ ቁጥር፦ \`${targetPhone}\`\n` +
+        `🔑 የእርስዎ ባለ 6-አሃዝ OTP ኮድ፦ *\`${otpCode}\`*\n\n` +
+        `⏳ ይህ ኮድ ለ 10 ደቂቃ ያገለግላል። ወደ ጨዋታው ተመልሰው ኮዱን በማስገባት ምዝገባዎን ያጠናቅቁ!`;
+
+      await sendTelegramMessage(
+        token,
+        chatId,
+        otpMsg,
+        {
+          inline_keyboard: [
+            [
+              {
+                text: '🎮 ወደ SUN GAMES ተመለስ',
+                web_app: { url: buildWebAppUrl(appUrl, 'hub', targetPhone) },
+              },
+            ],
+          ],
+        }
+      );
+      return;
+    }
+  }
+
+  // STEP 2: If the user is NOT registered yet (!registeredChatPhones.has(chatId)):
+  // First check if we already have a player record with this chatId in playersByPhone!
+  if (!registeredChatPhones.has(chatId)) {
+    const matchedPlayerByChat = Array.from(playersByPhone.values()).find((p) => p.chatId === chatId && p.phone);
+    if (matchedPlayerByChat) {
+      registeredChatPhones.set(chatId, matchedPlayerByChat.phone);
+      saveBotsToDisk();
+    } else {
+      await sendUnregisteredPhonePrompt(token, chatId, !isStartCmd, isStartCmd);
+      return;
+    }
+  }
+
+  const regPhone = registeredChatPhones.get(chatId) || globalRegisteredPhone || '0942742684';
+  const currentPlayer = ensurePlayerRecord(regPhone, firstName, chatId);
+
+  // Handle Telegram Registration Password Entry right after Phone Share
+  const regFlowCheck = chatFlowByChatId.get(chatId);
+  if (
+    regFlowCheck?.mode === 'register_password' &&
+    !clean.startsWith('/') &&
+    !clean.startsWith('menu_') &&
+    !clean.startsWith('dep_') &&
+    !clean.startsWith('with_')
+  ) {
+    const cleanPass = rawAction.trim();
+    if (cleanPass.length < 4) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ የይለፍ ቃሉ ቢያንስ *4 ፊደላት ወይም ቁጥሮች* መሆን አለበት! እባክዎ እንደገና ያስገቡ፦`,
+        { inline_keyboard: [] },
+        undefined,
+        true
+      );
+      return;
+    }
+    currentPlayer.passwordHash = cleanPass;
+    currentPlayer.updatedAt = new Date().toLocaleString();
+    chatFlowByChatId.delete(chatId);
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `🎉 *ምዝገባዎ በተሳካ ሁኔታ ተጠናቋል!*\n` +
+        `` +
+        `📱 ስልክ፦ \`${regPhone}\`\n` +
+        `🔐 የይለፍ ቃል፦ ተዘጋጅቷል ✅\n\n` +
+        buildWelcomeMessageText(currentPlayer.name || firstName, regPhone, true),
+      buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+      undefined,
+      true
+    );
+
+    const pendingRoomAfterPwd = pendingRaminoRoomByChatId.get(chatId);
+    if (pendingRoomAfterPwd) {
+      pendingRaminoRoomByChatId.delete(chatId);
+      const privRoom = raminoPrivateRooms.get(pendingRoomAfterPwd);
+      const baseApp = buildWebAppUrl(appUrl, 'hub').split('/?')[0].replace(/\/$/, '');
+      const joinWebUrl = `${baseApp}/?game=ramino&raminoRoom=${encodeURIComponent(pendingRoomAfterPwd)}&registered=1&phone=${encodeURIComponent(regPhone)}`;
+      const roomInviteMsg =
+        `♠️ *የራሚኖ የግል ክፍል ግብዣ*\n` +
+        `` +
+        `🔑 የክፍል ኮድ፦ \`${pendingRoomAfterPwd}\`\n` +
+        (privRoom
+          ? `🪙 መደብ፦ *${privRoom.stake} ETB*\n👥 ተጫዋቾች፦ *${privRoom.players.length}/${privRoom.maxPlayers}*\n👑 ጋባዥ፦ *${escapeTelegramMarkdown(privRoom.hostName)}*\n`
+          : '') +
+        `\n👇 ክፍሉን በቀጥታ ለመቀላቀል ከታች ያለውን ቁልፍ ይጫኑ፦`;
+      await sendTelegramMessage(
+        token,
+        chatId,
+        roomInviteMsg,
+        {
+          inline_keyboard: [
+            [{ text: `🎮 ክፍሉን ተቀላቀል (${pendingRoomAfterPwd})`, web_app: { url: joinWebUrl } }],
+          ],
+        },
+        undefined,
+        true
+      );
+    }
+    return;
+  }
+
+  // If registered user opened a Ramino Private Room deep link (/start ramino_CODE), send them straight to the room!
+  if (raminoDeepMatch && pendingRaminoRoomByChatId.has(chatId)) {
+    const targetRoomCode = pendingRaminoRoomByChatId.get(chatId)!;
+    pendingRaminoRoomByChatId.delete(chatId);
+    const privRoom = raminoPrivateRooms.get(targetRoomCode);
+    const baseApp = buildWebAppUrl(appUrl, 'hub').split('/?')[0].replace(/\/$/, '');
+    const joinWebUrl = `${baseApp}/?game=ramino&raminoRoom=${encodeURIComponent(targetRoomCode)}&registered=1&phone=${encodeURIComponent(regPhone)}`;
+    const roomInviteMsg =
+      `♠️ *የራሚኖ የግል ክፍል ግብዣ*\n` +
+      `` +
+      `🔑 የክፍል ኮድ፦ \`${targetRoomCode}\`\n` +
+      (privRoom
+        ? `🪙 መደብ፦ *${privRoom.stake} ETB*\n👥 ተጫዋቾች፦ *${privRoom.players.length}/${privRoom.maxPlayers}*\n👑 ጋባዥ፦ *${escapeTelegramMarkdown(privRoom.hostName)}*\n`
+        : '') +
+      `\n👇 ክፍሉን በቀጥታ ለመቀላቀል ከታች ያለውን ቁልፍ ይጫኑ፦`;
+    await sendTelegramMessage(
+      token,
+      chatId,
+      roomInviteMsg,
+      {
+        inline_keyboard: [
+          [{ text: `🎮 ክፍሉን ተቀላቀል (${targetRoomCode})`, web_app: { url: joinWebUrl } }],
+        ],
+      },
+      callbackMessageId,
+      true
+    );
+    return;
+  }
+
+  // Direct Telegram Bot Admin Posting Wizard (/post, /broadcast, menu_admin_post, or sending a photo directly as admin)
+  const existingPostFlow = chatFlowByChatId.get(chatId);
+  const isCancelPost =
+    clean === 'post_cancel' ||
+    ((existingPostFlow?.mode === 'admin_post_pin' ||
+      existingPostFlow?.mode === 'admin_post_content' ||
+      existingPostFlow?.mode === 'admin_post_target' ||
+      existingPostFlow?.mode === 'admin_post_channel') &&
+      (clean === '/cancel' || clean === 'cancel' || clean === 'ሰርዝ'));
+
+  if (isCancelPost) {
+    chatFlowByChatId.delete(chatId);
+    await sendTelegramMessage(
+      token,
+      chatId,
+      '❌ ፖስቱ ተሰርዟል።',
+      buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+      undefined,
+      true
+    );
+    return;
+  }
+
+  const sendPostTargetPicker = async (draftPhotoId?: string, draftText?: string) => {
+    chatFlowByChatId.set(chatId, {
+      mode: 'admin_post_target',
+      postPhotoFileId: draftPhotoId,
+      postText: draftText,
+    });
+    const summaryParts: string[] = [];
+    if (draftPhotoId) summaryParts.push('🖼️ ምስል ተያይዟል');
+    if (draftText) {
+      const snippet = draftText.length > 90 ? `${draftText.slice(0, 90)}...` : draftText;
+      summaryParts.push(`📝 ጽሑፍ፦ ${snippet}`);
+    }
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `📣 *ፖስቱ ተዘጋጅቷል!*\n${summaryParts.join('\n')}\n\n👇 የት እንዲላክ ይፈልጋሉ?`,
+      {
+        inline_keyboard: [
+          [{ text: '👥 ለሁሉም ተጠቃሚዎች ላክ (All Users)', callback_data: 'post_target_all' }],
+          [{ text: '📢 ለChannel / Group ላክ (@username / ID)', callback_data: 'post_target_channel' }],
+          [{ text: '❌ ሰርዝ / Cancel', callback_data: 'post_cancel' }],
+        ],
+      },
+      undefined,
+      true
+    );
+  };
+
+  const dispatchBotPostToChannel = async (
+    targetChan: number | string,
+    draftPhotoId?: string,
+    draftText?: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const cleanCap = (draftText || '').trim();
+    if (draftPhotoId) {
+      return sendTelegramPhoto(token, targetChan, draftPhotoId, cleanCap, undefined, true);
+    }
+    const chanMarkup = {
+      inline_keyboard: [[{ text: '🎮 Sun Games ክፈት / Play Now', url: buildWebAppUrl(appUrl, 'hub') }]],
+    };
+    const r1 = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: targetChan,
+        text: cleanCap,
+        parse_mode: 'Markdown',
+        reply_markup: chanMarkup,
+      }),
+    });
+    let d = (await r1.json().catch(() => null)) as any;
+    if (!d?.ok) {
+      const r2 = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: targetChan,
+          text: cleanCap.replace(/[*_`\[\]]/g, ''),
+          reply_markup: chanMarkup,
+        }),
+      });
+      d = (await r2.json().catch(() => null)) as any;
+    }
+    return d?.ok ? { ok: true } : { ok: false, error: d?.description || 'Failed to send to channel' };
+  };
+
+  const isPostCommand =
+    clean === '/post' ||
+    clean.startsWith('/post ') ||
+    clean === '/broadcast' ||
+    clean.startsWith('/broadcast ') ||
+    clean === 'menu_admin_post' ||
+    clean === 'post_admin_start';
+
+  if (isPostCommand) {
+    const inlineBody = rawAction.trim().replace(/^\/(?:post|broadcast)(?:@[a-z0-9_]+)?\s*/i, '');
+    const hasInlineContent = Boolean(
+      photoFileId ||
+        (clean !== 'menu_admin_post' &&
+          clean !== 'post_admin_start' &&
+          clean !== '/post' &&
+          clean !== '/broadcast' &&
+          inlineBody.trim())
+    );
+    if (!isChatAuthorizedForAdminPost(chatId)) {
+      chatFlowByChatId.delete(chatId);
+      return;
+    }
+    if (hasInlineContent) {
+      await sendPostTargetPicker(photoFileId, inlineBody.trim());
+      return;
+    }
+    chatFlowByChatId.set(chatId, { mode: 'admin_post_content' });
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `📣 *ወደ Telegram ፖስት ማድረጊያ*\n\nየሚፖስቱትን *ምስል (ከጽሑፍ ጋር)*፣ *ምስል ብቻ*፣ ወይም *ጽሑፍ ብቻ* እዚሁ ቻት ላይ ይላኩ፦`,
+      {
+        inline_keyboard: [[{ text: '❌ ሰርዝ / Cancel', callback_data: 'post_cancel' }]],
+      },
+      undefined,
+      true
+    );
+    return;
+  }
+
+  // Handle admin_post_* callback buttons (owner mobile 0942742684 only)
+  if (clean === 'post_target_all' || clean === 'post_target_both') {
+    if (!isChatAuthorizedForAdminPost(chatId)) {
+      chatFlowByChatId.delete(chatId);
+      return;
+    }
+    const flow = chatFlowByChatId.get(chatId);
+    if (!flow || (!flow.postPhotoFileId && !flow.postText)) {
+      chatFlowByChatId.delete(chatId);
+      await sendTelegramMessage(
+        token,
+        chatId,
+        '⚠️ የተዘጋጀ ፖስት የለም። እባክዎ `/post` ብለው እንደገና ይጀምሩ።',
+        buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+        undefined,
+        true
+      );
+      return;
+    }
+    const targetUsers = new Set<number>();
+    for (const cid of registeredChatPhones.keys()) {
+      if (cid > 0) targetUsers.add(cid);
+    }
+    for (const p of playersByPhone.values()) {
+      if (p.chatId && p.chatId > 0) targetUsers.add(p.chatId);
+    }
+    for (const cid of chatWelcomeBonusClaimed.values()) {
+      if (cid > 0) targetUsers.add(cid);
+    }
+    for (const cid of lastOutgoingMsgByChatId.keys()) {
+      if (cid > 0) targetUsers.add(cid);
+    }
+    let sentOk = 0;
+    for (const uid of targetUsers) {
+      try {
+        if (flow.postPhotoFileId) {
+          const resPhoto = await sendTelegramPhoto(
+            token,
+            uid,
+            flow.postPhotoFileId,
+            flow.postText || '',
+            undefined,
+            true
+          );
+          if (resPhoto.ok) sentOk++;
+        } else if (flow.postText) {
+          await sendTelegramMessage(token, uid, flow.postText, undefined, undefined, true);
+          sentOk++;
+        }
+      } catch {
+        // ignore individual user send errors
+      }
+    }
+    if (clean === 'post_target_both') {
+      emitGameNotification({
+        game: 'admin',
+        title: '☀️ Sun Games',
+        message: flow.postText || '🖼️ አዲስ ፖስት',
+        imageUrl: flow.postPhotoFileId ? `/api/tg-file/${encodeURIComponent(flow.postPhotoFileId)}` : undefined,
+        sendTelegram: false,
+      });
+    }
+    chatFlowByChatId.delete(chatId);
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `✅ ፖስቱ ለ *${sentOk}* ተጠቃሚዎች${clean === 'post_target_both' ? ' እና በApp ውስጥ' : ''} በተሳካ ሁኔታ ተልኳል!`,
+      buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+      undefined,
+      true
+    );
+    return;
+  }
+
+  if (clean === 'post_target_channel') {
+    if (!isChatAuthorizedForAdminPost(chatId)) {
+      chatFlowByChatId.delete(chatId);
+      return;
+    }
+    const flow = chatFlowByChatId.get(chatId);
+    if (!flow || (!flow.postPhotoFileId && !flow.postText)) {
+      chatFlowByChatId.delete(chatId);
+      await sendTelegramMessage(
+        token,
+        chatId,
+        '⚠️ የተዘጋጀ ፖስት የለም። እባክዎ `/post` ብለው እንደገና ይጀምሩ።',
+        buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+        undefined,
+        true
+      );
+      return;
+    }
+    chatFlowByChatId.set(chatId, { ...flow, mode: 'admin_post_channel' });
+    const channelRows: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (const ch of Array.from(savedTelegramPostChannels).slice(0, 6)) {
+      channelRows.push([{ text: `📢 ላክ ወደ ${ch}`, callback_data: `post_ch:${ch}` }]);
+    }
+    channelRows.push([{ text: '❌ ሰርዝ / Cancel', callback_data: 'post_cancel' }]);
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `📢 ፖስቱ የሚላክበትን የTelegram Channel ወይም Group *@username* (ለምሳሌ \`@sungames_et\`) ወይም Chat ID (\`-100...\`) እዚሁ ይጻፉ፦\n\n_(ማሳሰቢያ፦ ቦቱ በቻናሉ/ግሩፑ ውስጥ Admin መሆን አለበት)_`,
+      { inline_keyboard: channelRows },
+      undefined,
+      true
+    );
+    return;
+  }
+
+  if (rawAction.trim().startsWith('post_ch:')) {
+    if (!isChatAuthorizedForAdminPost(chatId)) {
+      chatFlowByChatId.delete(chatId);
+      return;
+    }
+    const targetChRaw = rawAction.trim().slice('post_ch:'.length).trim();
+    const flow = chatFlowByChatId.get(chatId);
+    if (!flow || (!flow.postPhotoFileId && !flow.postText) || !targetChRaw) {
+      chatFlowByChatId.delete(chatId);
+      await sendTelegramMessage(
+        token,
+        chatId,
+        '⚠️ የተዘጋጀ ፖስት የለም። እባክዎ `/post` ብለው እንደገና ይጀምሩ።',
+        buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+        undefined,
+        true
+      );
+      return;
+    }
+    const targetCh: number | string = /^-?\d+$/.test(targetChRaw) ? Number(targetChRaw) : targetChRaw;
+    const chRes = await dispatchBotPostToChannel(targetCh, flow.postPhotoFileId, flow.postText);
+    chatFlowByChatId.delete(chatId);
+    await sendTelegramMessage(
+      token,
+      chatId,
+      chRes.ok
+        ? `✅ ፖስቱ ወደ *${escapeTelegramMarkdown(targetChRaw)}* በተሳካ ሁኔታ ተልኳል!`
+        : `⚠️ ወደ *${escapeTelegramMarkdown(targetChRaw)}* መላክ አልተቻለም (${chRes.error || 'Error'})። ቦቱ በቻናሉ/ግሩፑ ውስጥ Admin መሆኑን ያረጋግጡ።`,
+      buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+      undefined,
+      true
+    );
+    return;
+  }
+
+  // Handle text/photo inputs for active admin_post_* wizard states (owner mobile 0942742684 only)
+  if (existingPostFlow?.mode === 'admin_post_pin') {
+    chatFlowByChatId.delete(chatId);
+    return;
+  }
+
+  if (
+    existingPostFlow?.mode === 'admin_post_content' &&
+    !clean.startsWith('/') &&
+    !clean.startsWith('menu_') &&
+    !clean.startsWith('dep_') &&
+    !clean.startsWith('with_') &&
+    !clean.startsWith('post_')
+  ) {
+    if (!isChatAuthorizedForAdminPost(chatId)) {
+      chatFlowByChatId.delete(chatId);
+      return;
+    }
+    const draftTxt = rawAction.trim();
+    if (!photoFileId && !draftTxt) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        'እባክዎ የሚፖስቱትን ምስል ወይም ጽሑፍ ይላኩ።',
+        { inline_keyboard: [[{ text: '❌ ሰርዝ / Cancel', callback_data: 'post_cancel' }]] },
+        undefined,
+        true
+      );
+      return;
+    }
+    await sendPostTargetPicker(photoFileId, draftTxt);
+    return;
+  }
+
+  if (
+    existingPostFlow?.mode === 'admin_post_channel' &&
+    !clean.startsWith('/') &&
+    !clean.startsWith('menu_') &&
+    !clean.startsWith('dep_') &&
+    !clean.startsWith('with_') &&
+    !clean.startsWith('post_')
+  ) {
+    if (!isChatAuthorizedForAdminPost(chatId)) {
+      chatFlowByChatId.delete(chatId);
+      return;
+    }
+    const chInput = rawAction.trim();
+    if (!chInput.startsWith('@') && !/^-?\d{4,}$/.test(chInput)) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        '⚠️ እባክዎ ትክክለኛ የChannel `@username` (ለምሳሌ `@sungames_et`) ወይም Chat ID (`-100...`) ያስገቡ፦',
+        { inline_keyboard: [[{ text: '❌ ሰርዝ / Cancel', callback_data: 'post_cancel' }]] },
+        undefined,
+        true
+      );
+      return;
+    }
+    savedTelegramPostChannels.add(chInput);
+    const targetCh: number | string = /^-?\d+$/.test(chInput) ? Number(chInput) : chInput;
+    const chRes = await dispatchBotPostToChannel(
+      targetCh,
+      existingPostFlow.postPhotoFileId,
+      existingPostFlow.postText
+    );
+    chatFlowByChatId.delete(chatId);
+    await sendTelegramMessage(
+      token,
+      chatId,
+      chRes.ok
+        ? `✅ ፖስቱ ወደ *${escapeTelegramMarkdown(chInput)}* በተሳካ ሁኔታ ተልኳል!`
+        : `⚠️ ወደ *${escapeTelegramMarkdown(chInput)}* መላክ አልተቻለም (${chRes.error || 'Error'})። ቦቱ በቻናሉ/ግሩፑ ውስጥ Admin መሆኑን ያረጋግጡ።`,
+      buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+      undefined,
+      true
+    );
+    return;
+  }
+
+  // Shortcut: If authorized admin sends a Photo directly in bot chat (with or without caption) outside other active flows, offer Target Picker right away!
+  if (
+    photoFileId &&
+    !existingPostFlow &&
+    isChatAuthorizedForAdminPost(chatId) &&
+    !clean.startsWith('/') &&
+    !clean.startsWith('menu_')
+  ) {
+    await sendPostTargetPicker(photoFileId, rawAction.trim());
+    return;
+  }
+
+  // Clear flow state if user navigates to main menu or another top-level command
+  if (clean.startsWith('menu_') || clean.startsWith('/')) {
+    chatFlowByChatId.delete(chatId);
+  }
+
+  // Block /admin and menu_admin in Telegram Bot completely (Admin Panel is strictly restricted to AI Studio 5-tap only)
+  if (
+    clean === '/admin' ||
+    clean === 'menu_admin' ||
+    clean.startsWith('/admin ')
+  ) {
+    return;
+  }
+
+  // 1. Play SUN GAMES (/play or button)
+  if (
+    clean.includes('play live bingo') ||
+    clean.includes('play sun games') ||
+    clean === '/play' ||
+    clean === 'play' ||
+    clean === 'menu_play'
+  ) {
+    const playText =
+      `🎮 *SUN GAMES Live Games*\n\n` +
+      `Tap **🎮 Play SUN GAMES** below to launch the game hub directly inside Telegram:`;
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      playText,
+      {
+        inline_keyboard: [
+          [
+            {
+              text: '🎮 Play SUN GAMES',
+              web_app: { url: buildWebAppUrl(appUrl, 'hub', regPhone) },
+            },
+          ],
+        ],
+      },
+      callbackMessageId
+    );
+    return;
+  }
+
+  const getLiveBankAccount = (method: string) => {
+    const activeBanks = getActiveServerBankAccounts();
+    const mLower = method.toLowerCase();
+    const found =
+      activeBanks.find(
+        (b) =>
+          b.id.toLowerCase() === mLower ||
+          b.shortName.toLowerCase() === mLower ||
+          b.bankName.toLowerCase().includes(mLower)
+      ) ||
+      persistedBankAccounts.find(
+        (b) =>
+          b.id.toLowerCase() === mLower ||
+          b.shortName.toLowerCase() === mLower ||
+          b.bankName.toLowerCase().includes(mLower)
+      ) ||
+      activeBanks[0] ||
+      persistedBankAccounts[0];
+    if (found) return found;
+    return {
+      id: method,
+      bankName: method,
+      shortName: method,
+      accountNumber: '0942742684',
+      accountHolder: 'Ezana Gebremedhin',
+      badgeBg: 'bg-sky-500 text-white',
+      isActive: true,
+    };
+  };
+
+  const makeDepositRefCode = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    let out = '';
+    for (let i = 0; i < 10; i++) {
+      out += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return out;
+  };
+
+  const sendDepositStep2PaymentDetails = async (amt: number, existingRef?: string) => {
+    const refCode = existingRef || makeDepositRefCode();
+    const activeBanks = getActiveServerBankAccounts();
+    if (activeBanks.length === 0) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `⚠️ በአሁኑ ሰዓት የነቃ የባንክ አካውንት የለም። እባክዎ ቆይተው ይሞክሩ ወይም Support ያናግሩ።`,
+        buildSubMenuInlineKeyboard(appUrl, regPhone),
+        callbackMessageId,
+        true
+      );
+      return;
+    }
+
+    chatFlowByChatId.set(chatId, { mode: 'deposit_method', amount: amt, reference: refCode });
+    const amtFormatted = Number.isInteger(amt) ? String(amt) : amt.toFixed(2);
+    const bankLines = activeBanks
+      .map(
+        (b, idx) =>
+          `${idx + 1}. *${escapeTelegramMarkdown(b.shortName)}* — \`${escapeTelegramMarkdown(b.accountNumber)}\` (${escapeTelegramMarkdown(b.accountHolder)})`
+      )
+      .join('\n');
+
+    const keyboardRows: unknown[][] = [];
+    for (const b of activeBanks) {
+      keyboardRows.push([
+        { text: `📋 Copy ${b.shortName}`, copy_text: { text: b.accountNumber } },
+        {
+          text: `🔢 ${b.shortName} Transaction No ላክ →`,
+          callback_data: `dep_step_${b.id}_${amtFormatted}_${refCode}`,
+        },
+      ]);
+    }
+    keyboardRows.push([
+      { text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_deposit' },
+    ]);
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `💵 *ገቢ (Deposit) — ደረጃ 2/3*\n` +
+        `` +
+        `💰 የመረጡት መጠን፦ *${amtFormatted} ETB*\n` +
+        `🔖 Ref፦ \`${refCode}\`\n\n` +
+        `🏦 *የነቁ የባንክ አካውንቶች፦*\n${bankLines}\n\n` +
+        `👇 ከታች አካውንቱን *📋 Copy* ያድርጉ፣ ብሩን ከላኩ በኋላ *🔢 ... Transaction No ላክ →* የሚለውን ይጫኑ (ወይም የከፈሉበትን *Transaction Number* በቀጥታ እዚህ ይላኩ)፦`,
+      { inline_keyboard: keyboardRows },
+      callbackMessageId,
+      true
+    );
+  };
+
+  // 2. Deposit 💵 (Step 1: Ask Amount 50 – 2,000 ETB or Manual)
+  if (clean.includes('deposit') || clean === '/deposit' || clean === 'menu_deposit') {
+    chatFlowByChatId.set(chatId, { mode: 'deposit_amount' });
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `💵 *ገቢ (Deposit) — ደረጃ 1/3*\n` +
+        `` +
+        `ስንት ብር ገቢ ማድረግ ይፈልጋሉ?\n\n` +
+        `👇 ከታች ካሉት ፈጣን መጠኖች (50 – 2,000 ETB) ይምረጡ ወይም የሚፈልጉትን የብር መጠን እዚሁ ይጻፉ፦`,
+      {
+        inline_keyboard: [
+          [
+            { text: '50 ETB', callback_data: 'dep_amt_50' },
+            { text: '100 ETB', callback_data: 'dep_amt_100' },
+            { text: '200 ETB', callback_data: 'dep_amt_200' },
+          ],
+          [
+            { text: '500 ETB', callback_data: 'dep_amt_500' },
+            { text: '1,000 ETB', callback_data: 'dep_amt_1000' },
+            { text: '2,000 ETB', callback_data: 'dep_amt_2000' },
+          ],
+        ],
+      },
+      callbackMessageId,
+      true
+    );
+    return;
+  }
+
+  // 2A. Proceed to Step 2 with amount (dep_amt_<amt>)
+  if (clean.startsWith('dep_amt_')) {
+    const rawAmt = parseFloat(rawAction.replace(/^dep_amt_/i, ''));
+    const validAmt = Number.isFinite(rawAmt) && rawAmt >= 10 ? rawAmt : 100;
+    await sendDepositStep2PaymentDetails(validAmt);
+    return;
+  }
+
+  // 2B. Deposit Step 3: User chose a payment option (dep_step_<bankId>_<amount>_<ref> or dep_bank_<method>)
+  if (clean.startsWith('dep_step_') || clean.startsWith('dep_bank_')) {
+    const activeFlowSnapshot = chatFlowByChatId.get(chatId);
+    let bankIdOrMethod = 'Telebirr';
+    let amt = activeFlowSnapshot?.amount || 100;
+    let refCode = activeFlowSnapshot?.reference || makeDepositRefCode();
+
+    if (clean.startsWith('dep_step_')) {
+      const rest = rawAction.replace(/^dep_step_/i, '');
+      const mStep = rest.match(/^(.+)_(\d+(?:\.\d+)?)_([A-Za-z0-9]+)$/);
+      if (mStep) {
+        bankIdOrMethod = mStep[1] || 'Telebirr';
+        const parsedStepAmt = parseFloat(mStep[2] || '');
+        if (Number.isFinite(parsedStepAmt) && parsedStepAmt > 0) amt = parsedStepAmt;
+        if (mStep[3]) refCode = mStep[3];
+      } else {
+        const parts = rest.split('_');
+        bankIdOrMethod = parts[0] || 'Telebirr';
+        const parsedStepAmt = parseFloat(parts[1] || '');
+        if (Number.isFinite(parsedStepAmt) && parsedStepAmt > 0) amt = parsedStepAmt;
+        if (parts[2]) refCode = parts[2];
+      }
+    } else {
+      bankIdOrMethod = rawAction.replace(/^dep_bank_/i, '');
+    }
+
+    const acct = getLiveBankAccount(bankIdOrMethod);
+    const method = acct.shortName || bankIdOrMethod;
+
+    chatFlowByChatId.set(chatId, {
+      mode: 'deposit_sms',
+      method,
+      amount: amt,
+      reference: refCode,
+    });
+
+    const amtStr = Number.isInteger(amt) ? String(amt) : amt.toFixed(2);
+    const stepsBox = [
+      `1. ከላይ ባለው የ${acct.shortName} አካውንት ${amtStr} ብር ያስገቡ`,
+      `2. የምትልኩት የገንዘብ መጠን እና የመረጡት ${amtStr} ብር ተመሳሳይ መሆኑን ያረጋግጡ`,
+      `3. የክፍያውን Transaction Number (የግብይት ቁጥር) ብቻ Copy አድርገው እዚህ ቻት ላይ ይላኩ`,
+    ].join('\n');
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `🔢 *ገቢ (Deposit) — ደረጃ 3/3 (${escapeTelegramMarkdown(acct.shortName)})*\n` +
+        `` +
+        `🏦 ባንክ፦ *${escapeTelegramMarkdown(acct.bankName)}*\n` +
+        `🔢 አካውንት ቁጥር፦ \`${acct.accountNumber}\`\n` +
+        `👤 ስም፦ *${escapeTelegramMarkdown(acct.accountHolder)}*\n` +
+        `💰 የመረጡት መጠን፦ *${amtStr} ETB*\n\n` +
+        `\`\`\`\n${stepsBox}\n\`\`\`\n` +
+        `👇 የከፈሉበትን *Transaction Number* (ለምሳሌ፦ \`FT26108XYZ\` ወይም \`CE84K29M1P\`) እዚህ ላይ ይላኩ:`,
+      {
+        inline_keyboard: [
+          [{ text: `📋 Copy ${acct.shortName} (${acct.accountNumber})`, copy_text: { text: acct.accountNumber } }],
+          [
+            { text: '← ተመለስ (ባንክ ቀይር)', callback_data: `dep_amt_${amtStr}` },
+          ],
+        ],
+      },
+      callbackMessageId,
+      true
+    );
+    return;
+  }
+
+  const sendWithdrawStep2Banks = async (amt: number) => {
+    const activeBanks = getActiveServerBankAccounts();
+    chatFlowByChatId.set(chatId, { mode: 'withdraw_method', amount: amt });
+    const amtStr = Number.isInteger(amt) ? String(amt) : amt.toFixed(2);
+    const bankRows: unknown[][] = [];
+    for (let i = 0; i < activeBanks.length; i += 2) {
+      const row: unknown[] = [];
+      const b1 = activeBanks[i];
+      row.push({
+        text: `🏦 ${b1.shortName}`,
+        callback_data: `with_bank_step_${b1.shortName}_${amtStr}`,
+      });
+      if (activeBanks[i + 1]) {
+        const b2 = activeBanks[i + 1];
+        row.push({
+          text: `🏦 ${b2.shortName}`,
+          callback_data: `with_bank_step_${b2.shortName}_${amtStr}`,
+        });
+      }
+      bankRows.push(row);
+    }
+    bankRows.push([
+      { text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_withdraw' },
+    ]);
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `💸 *ወጪ (Withdraw) — ደረጃ 2/3*\n` +
+        `` +
+        `💰 የሚያወጡት መጠን፦ *${amtStr} ETB*\n\n` +
+        `👇 ገንዘቡ የሚላክበትን ባንክ / መንገድ ከታች ይምረጡ፦`,
+      { inline_keyboard: bankRows },
+      callbackMessageId,
+      true
+    );
+  };
+
+  // 3. Withdraw 💸 (Step 1: Choose / Enter Amount 50 – 75,000 ETB or All)
+  if (clean.includes('withdraw') || clean === '/withdraw' || clean === 'menu_withdraw') {
+    chatFlowByChatId.set(chatId, { mode: 'withdraw_amount' });
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    const maxAvail = Math.min(75000, Math.floor(availWithdrawable));
+    const withdrawText =
+      `💸 *ወጪ (Withdraw) — ደረጃ 1/3*\n` +
+      `` +
+      `💰 ጠቅላላ ዋሌት፦ *${currentPlayer.balance.toFixed(2)} ETB*\n` +
+      `✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*\n` +
+      `🎁 ቦነስ (ለጨዋታ ብቻ)፦ *${getNonWithdrawableBonus(currentPlayer).toFixed(2)} ETB*\n` +
+      `• ዝቅተኛ፦ *50 ETB* | ከፍተኛ፦ *75,000 ETB*\n` +
+      `ℹ️ _(ጨዋታ ካሸነፉ ከተሰጠዎት ቦነስ ውጪ ያለውን ሁሉንም ማውጣት ይችላሉ፤ ቦነስ ለጨዋታ ብቻ ነው)_\n\n` +
+      `👇 የሚያወጡትን የብር መጠን ከታች ይምረጡ ወይም እዚሁ ቻት ላይ ይጻፉ፦`;
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      withdrawText,
+      {
+        inline_keyboard: [
+          [
+            { text: '50 ETB', callback_data: 'with_amt_pick_50' },
+            { text: '100 ETB', callback_data: 'with_amt_pick_100' },
+            { text: '200 ETB', callback_data: 'with_amt_pick_200' },
+          ],
+          [
+            { text: '500 ETB', callback_data: 'with_amt_pick_500' },
+            { text: '1,000 ETB', callback_data: 'with_amt_pick_1000' },
+            {
+              text: `ሁሉንም (${maxAvail} ETB)`,
+              callback_data: `with_amt_pick_${Math.max(50, maxAvail)}`,
+            },
+          ],
+        ],
+      },
+      callbackMessageId,
+      true
+    );
+    return;
+  }
+
+  // 3A. Withdraw Step 1 -> Step 2 (Amount Chosen)
+  if (clean.startsWith('with_amt_pick_')) {
+    const amt = parseFloat(rawAction.replace(/^with_amt_pick_/i, ''));
+    if (!Number.isFinite(amt) || amt < 50 || amt > 75000) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ እባክዎ ከ *50 ETB* እስከ *75,000 ETB* መካከል ትክክለኛ የወጪ መጠን ይምረጡ።`,
+        {
+          inline_keyboard: [
+            [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
+          ],
+        },
+        callbackMessageId,
+        true
+      );
+      return;
+    }
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    if (amt > availWithdrawable) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*\n_(ጨዋታ ካሸነፉ ከተሰጠዎት ቦነስ ውጪ ያለውን ሁሉንም ማውጣት ይችላሉ)_`,
+        {
+          inline_keyboard: [
+            [{ text: 'Deposit 💵 (ገቢ አድርግ)', callback_data: 'menu_deposit' }],
+            [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
+          ],
+        },
+        callbackMessageId,
+        true
+      );
+      return;
+    }
+    await sendWithdrawStep2Banks(amt);
+    return;
+  }
+
+  // 3B. Withdraw Step 2 -> Step 3 (Bank Selected -> Confirm Account/Phone)
+  if (clean.startsWith('with_bank_step_') || clean.startsWith('with_bank_') || clean.startsWith('with_amt_')) {
+    let method = 'Telebirr';
+    let amt = chatFlowByChatId.get(chatId)?.amount || 100;
+    if (clean.startsWith('with_bank_step_')) {
+      const rest = rawAction.replace(/^with_bank_step_/i, '');
+      const lastIdx = rest.lastIndexOf('_');
+      method = (lastIdx > 0 ? rest.slice(0, lastIdx) : rest.split('_')[0]) || 'Telebirr';
+      const parsedAmt = parseFloat(lastIdx > 0 ? rest.slice(lastIdx + 1) : '');
+      if (Number.isFinite(parsedAmt) && parsedAmt >= 50) amt = parsedAmt;
+    } else if (clean.startsWith('with_amt_')) {
+      const parts = rawAction.split('_');
+      method = parts[2] || 'Telebirr';
+      const parsedAmt = parseFloat(parts[3] || '');
+      if (Number.isFinite(parsedAmt) && parsedAmt >= 50) amt = parsedAmt;
+    } else {
+      method = rawAction.replace(/^with_bank_/i, '') || 'Telebirr';
+    }
+
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    if (amt > availWithdrawable) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*`,
+        {
+          inline_keyboard: [
+            [{ text: '← ተመለስ', callback_data: 'menu_withdraw' }],
+          ],
+        },
+        callbackMessageId,
+        true
+      );
+      return;
+    }
+
+    chatFlowByChatId.set(chatId, { mode: 'withdraw_account', method, amount: amt });
+    const amtStr = Number.isInteger(amt) ? String(amt) : amt.toFixed(2);
+    const isMobileMoney = /telebirr|mpesa|m-pesa/i.test(method);
+    const promptAcctText =
+      `💸 *ወጪ (Withdraw) — ደረጃ 3/3*\n` +
+      `` +
+      `💰 መጠን፦ *${amtStr} ETB*\n` +
+      `🏦 ባንክ / መንገድ፦ *${escapeTelegramMarkdown(method)}*\n\n` +
+      (isMobileMoney
+        ? `📱 ወደ ተመዘገበው ስልክ ቁጥርዎ (\`${regPhone}\`) ለማውጣት ከታች ያለውን ቁልፍ ይጫኑ ወይም ሌላ ስልክ ቁጥር እዚሁ ይጻፉ፦`
+        : `🔢 እባክዎ የእርስዎን የ *${escapeTelegramMarkdown(method)}* ሂሳብ ቁጥር (Account Number) እዚሁ ቻት ላይ ይጻፉ፦`);
+
+    const inlineRows: unknown[][] = [];
+    if (isMobileMoney) {
+      inlineRows.push([
+        {
+          text: `✅ ወደ ${regPhone} (${amtStr} ETB) ላክ`,
+          callback_data: `with_confirm_${method}_${amtStr}_${regPhone}`,
+        },
+      ]);
+    }
+    inlineRows.push([
+      { text: '← ተመለስ (ባንክ ቀይር)', callback_data: `with_amt_pick_${amtStr}` },
+    ]);
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      promptAcctText,
+      { inline_keyboard: inlineRows },
+      callbackMessageId,
+      true
+    );
+    return;
+  }
+
+  // 3D. One-Tap Withdraw Confirmation (with_confirm_<method>_<amount>_<account>)
+  if (clean.startsWith('with_confirm_')) {
+    const parts = rawAction.split('_');
+    const method = parts[2] || 'Telebirr';
+    const amt = parseFloat(parts[3] || '100');
+    const targetAccount = parts.slice(4).join('_') || regPhone;
+
+    chatFlowByChatId.delete(chatId);
+
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    if (amt > availWithdrawable || amt < 50 || amt > 75000) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ *የወጪ ጥያቄው አልተሳካም!*\nከ 50 – 75,000 ETB መካከል መሆን አለበት። ✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB* ነው።`,
+        buildSubMenuInlineKeyboard(appUrl, regPhone)
+      );
+      return;
+    }
+
+    const newTx: ServerTransactionRecord = {
+      id: makeServerTxId('srv-tx'),
+      userId: currentPlayer.id,
+      userName: firstName || currentPlayer.name,
+      userPhone: regPhone,
+      chatId,
+      type: 'withdraw',
+      method,
+      amount: amt,
+      referenceNumber: targetAccount,
+      fullSmsText: `Telegram Withdraw: ${amt} ETB to ${method} (${targetAccount})`,
+      status: adminPinConfig.requireDepositApproval ? 'pending' : 'approved',
+      timestamp: new Date().toLocaleString(),
+    };
+    pushServerTransaction(newTx);
+
+    if (!adminPinConfig.requireDepositApproval) {
+      currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - amt).toFixed(2)));
+      currentPlayer.withdrawableBalance = Math.max(
+        0,
+        Number((getWithdrawableBalance(currentPlayer) - amt).toFixed(2))
+      );
+      clampBalancesAfterDebit(currentPlayer);
+      globalWalletBalance = currentPlayer.balance;
+    }
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+
+    const confirmWithdrawMsg = adminPinConfig.requireDepositApproval
+      ? `⏳ *የወጪ ጥያቄዎ ተልኳል (በመጠባበቅ ላይ)*\n` +
+        `` +
+        `🏦 መንገድ፦ *${escapeTelegramMarkdown(method)}*\n` +
+        `💰 የብር መጠን፦ *${amt.toFixed(2)} ETB*\n` +
+        `🔢 ሂሳብ / ስልክ፦ \`${targetAccount}\`\n\n` +
+        `ጥያቄዎ ደርሶናል! ልክ ተጣርቶ ሲጸድቅ (*Approved*) ወዲያውኑ ወደ ሂሳብዎ ይላካል።`
+      : `✅ *የወጪ ጥያቄዎ ተፈጽሟል!*\n` +
+        `💰 *${amt.toFixed(2)} ETB* ወደ *${escapeTelegramMarkdown(method)}* (\`${targetAccount}\`) ተልኳል!\n` +
+        `አዲስ ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`;
+
+    await sendTelegramMessage(token, chatId, confirmWithdrawMsg, buildSubMenuInlineKeyboard(appUrl, regPhone));
+    return;
+  }
+
+  // 4. Check Balance 💰
+  if (
+    clean.includes('check balance') ||
+    clean.includes('balance') ||
+    clean === '/balance' ||
+    clean === 'menu_balance'
+  ) {
+    const has15Bonus = chatWelcomeBonusClaimed.has(chatId);
+    const balanceText =
+      `Check Balance 💰 *(የሂሳብ መረጃ)*\n` +
+      `` +
+      `👋 ሰላም *${escapeTelegramMarkdown(currentPlayer.name || firstName)}*!\n` +
+      (regPhone ? `📱 ስልክ፦ *${regPhone}*\n` : '') +
+      `💰 ጠቅላላ ዋሌት፦ *${currentPlayer.balance.toFixed(2)} ETB*\n` +
+      `✅ ወጪ ሊደረግ የሚችል፦ *${getWithdrawableBalance(currentPlayer).toFixed(2)} ETB*\n` +
+      `🎁 ቦነስ ሂሳብ (ለጨዋታ ብቻ)፦ *${currentPlayer.bonusBalance.toFixed(2)} ETB${has15Bonus ? ' (+15 ETB Welcome Bonus!)' : ''}*`;
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      balanceText,
+      buildSubMenuInlineKeyboard(appUrl, regPhone),
+      callbackMessageId
+    );
+    return;
+  }
+
+  // 6. Transfer 🔄
+  if (clean.includes('transfer') || clean === '/transfer' || clean === 'menu_transfer') {
+    chatFlowByChatId.set(chatId, { mode: 'transfer' });
+    const transferText =
+      `Transfer 🔄 *(ለጓደኛ ብር ማስተላለፊያ)*\n` +
+      `` +
+      `💰 የእርስዎ ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*\n\n` +
+      `ከእርስዎ ዋሌት ወደ ሌላ ተጫዋች ስልክ ቁጥር ብር ለማስተላለፍ፦\n` +
+      `የጓደኛዎን *ስልክ ቁጥር* እና *የብር መጠን* (ለምሳሌ፦ \`0911223344 100\`) ብለው እዚሁ ይላኩ።`;
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      transferText,
+      buildSubMenuInlineKeyboard(appUrl, regPhone),
+      callbackMessageId
+    );
+    return;
+  }
+
+  // 10. Support 📞
+  if (clean.includes('support') || clean === '/support' || clean === 'menu_support') {
+    const supportText =
+      `Support 📞 *(የደንበኞች ድጋፍ)*\n` +
+      `💬 *ቴሌግራም፦* @SungamesSupport\n` +
+      `⏰ *የስራ ሰዓት፦* 24 ሰዓት`;
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      supportText,
+      buildSubMenuInlineKeyboard(appUrl, regPhone),
+      callbackMessageId
+    );
+    return;
+  }
+
+  // 10.4. Invite Friends / Referral 👥 (/invite or menu_invite)
+  if (
+    clean.includes('invite') ||
+    clean.includes('referral') ||
+    clean.includes('ይጋብዙ') ||
+    clean === '/invite' ||
+    clean === '/referral' ||
+    clean === 'menu_invite'
+  ) {
+    const baseApp = (appUrl || SHARED_APP_URL || 'https://sun-bingo-faap.onrender.com').replace(/\/$/, '');
+    const myRefCode = currentPlayer.phone?.slice(-6) || 'SUN';
+    const webInviteLink = `${baseApp}/?ref=${myRefCode}`;
+    const botInfo = activeBots.get(token);
+    const botUsername = botInfo?.botUsername;
+    const tgInviteLink = botUsername ? `https://t.me/${botUsername}?start=ref_${myRefCode}` : webInviteLink;
+
+    const inviteMsg =
+      `👥 *ጓደኛ ይጋብዙ (Invite Friends & Earn 25 ETB)*\n` +
+      `` +
+      `🎁 *ሽልማት፦* በእያንዳንዱ በተጋበዘ ጓደኛ *+25.00 ETB* ቦነስ ያገኛሉ! ተጋባዡም *+15.00 ETB* ስጦታ ያገኛል!\n\n` +
+      `📊 *የእርስዎ የግብዣ ሁኔታ፦*\n` +
+      `• የተጋበዙ ጓደኞች፦ *${currentPlayer.referredCount || 0}*\n` +
+      `• ያገኙት ጠቅላላ ገቢ፦ *${(currentPlayer.referralEarnings || 0).toFixed(2)} ETB*\n` +
+      `• የእርስዎ መጋበዣ ኮድ፦ \`${myRefCode}\`\n\n` +
+      `🔗 *የመጋበዣ ሊንክዎ፦*\n\`${tgInviteLink}\`\n\n` +
+      `👇 ከታች ያለውን **«በቴሌግራም አጋራ»** ቁልፍ በመጫን ለጓደኞችዎ ወይም ግሩፖች ይላኩ!`;
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      inviteMsg,
+      {
+        inline_keyboard: [
+          [
+            {
+              text: '🚀 በቴሌግራም አጋራ (Share on Telegram)',
+              url: `https://t.me/share/url?url=${encodeURIComponent(tgInviteLink)}&text=${encodeURIComponent('🎉 ሳን ቢንጎ (Sun Bingo) ላይ አብረን እንጫወት! በእኔ መጋበዣ ሊንክ ሲመዘገቡ 15 ብር ቦነስ ያገኛሉ፦')}`,
+            },
+          ],
+          [
+            {
+              text: '📋 Copy Link',
+              copy_text: { text: tgInviteLink },
+            },
+          ],
+        ],
+      },
+      callbackMessageId
+    );
+    return;
+  }
+
+  // 10A. Handle Wallet-to-Wallet Transfer in Telegram Chat (when user types "<phone> <amount>" or is in transfer mode)
+  const activeFlow = chatFlowByChatId.get(chatId);
+  const transferTokens = rawAction.trim().split(/\s+/);
+  if (
+    !clean.startsWith('/') &&
+    !clean.startsWith('menu_') &&
+    !clean.startsWith('dep_') &&
+    !clean.startsWith('with_') &&
+    (activeFlow?.mode === 'transfer' ||
+      (transferTokens.length === 2 &&
+        (!activeFlow || activeFlow.mode !== 'withdraw_amount') &&
+        (/^(?:\+?251|0)?[79]\d{8}$/.test(transferTokens[0]) ||
+          /^(?:\+?251|0)?[79]\d{8}$/.test(transferTokens[1]))))
+  ) {
+    let targetPhoneRaw = '';
+    let transferAmt = NaN;
+    if (transferTokens.length >= 2) {
+      const p0 = normalizeEthiopianPhone(transferTokens[0]);
+      const p1 = normalizeEthiopianPhone(transferTokens[1]);
+      if (/^0[79]\d{8}$/.test(p0)) {
+        targetPhoneRaw = p0;
+        transferAmt = parseFloat(transferTokens[1].replace(/,/g, ''));
+      } else if (/^0[79]\d{8}$/.test(p1)) {
+        targetPhoneRaw = p1;
+        transferAmt = parseFloat(transferTokens[0].replace(/,/g, ''));
+      }
+    }
+
+    if (targetPhoneRaw && Number.isFinite(transferAmt) && transferAmt > 0) {
+      const senderPhone = normalizeEthiopianPhone(regPhone) || regPhone;
+      if (targetPhoneRaw === senderPhone) {
+        await sendTelegramMessage(
+          token,
+          chatId,
+          `❌ ወደ ራስዎ ስልክ ቁጥር (${targetPhoneRaw}) ማስተላለፍ አይችሉም! እባክዎ የሌላ ተጫዋች ስልክ ቁጥር ያስገቡ።`,
+          buildSubMenuInlineKeyboard(appUrl, regPhone)
+        );
+        return;
+      }
+      if (transferAmt > currentPlayer.balance) {
+        await sendTelegramMessage(
+          token,
+          chatId,
+          `❌ *በቂ ቀሪ ሂሳብ የለዎትም!*\nየጠየቁት፦ *${transferAmt.toFixed(2)} ETB*\nያለዎት ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`,
+          buildSubMenuInlineKeyboard(appUrl, regPhone)
+        );
+        return;
+      }
+
+      chatFlowByChatId.delete(chatId);
+      currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - transferAmt).toFixed(2)));
+      currentPlayer.withdrawableBalance = Math.max(
+        0,
+        Number((getWithdrawableBalance(currentPlayer) - transferAmt).toFixed(2))
+      );
+      clampBalancesAfterDebit(currentPlayer);
+      currentPlayer.updatedAt = new Date().toLocaleString();
+      const recipient = ensurePlayerRecord(targetPhoneRaw, `Player_${targetPhoneRaw.slice(-4)}`);
+      recipient.balance = Number((recipient.balance + transferAmt).toFixed(2));
+      recipient.updatedAt = new Date().toLocaleString();
+      globalWalletBalance = currentPlayer.balance;
+
+      const refCode = `TR-${Date.now().toString().slice(-6)}`;
+      const newTx: ServerTransactionRecord = {
+        id: makeServerTxId('srv-tx'),
+        userId: currentPlayer.id,
+        userName: firstName || currentPlayer.name,
+        userPhone: senderPhone,
+        chatId,
+        type: 'transfer',
+        method: 'Wallet',
+        amount: transferAmt,
+        referenceNumber: refCode,
+        recipientPhone: targetPhoneRaw,
+        fullSmsText: `Transfer ${transferAmt.toFixed(2)} ETB from ${senderPhone} to ${targetPhoneRaw} (${recipient.name})`,
+        status: 'approved',
+        timestamp: new Date().toLocaleString(),
+      };
+      pushServerTransaction(newTx);
+      saveBotsToDisk();
+      broadcastRealtimeSync();
+
+      // Notify recipient on Telegram if they have a registered chatId
+      const recipientChatId =
+        recipient.chatId ||
+        Array.from(registeredChatPhones.entries()).find(([, ph]) => normalizeEthiopianPhone(ph) === targetPhoneRaw)?.[0];
+      if (recipientChatId && recipientChatId !== chatId) {
+        sendTelegramMessage(
+          token,
+          recipientChatId,
+          `🎁 *የዋሌት ብር ደርሶዎታል (Transfer Received)!*\n` +
+            `` +
+            `👤 ከ፦ *${currentPlayer.name}* (\`${senderPhone}\`)\n` +
+            `💰 መጠን፦ *+${transferAmt.toFixed(2)} ETB*\n` +
+            `🔖 Ref፦ \`${refCode}\`\n` +
+            `💵 አዲስ ቀሪ ሂሳብዎ፦ *${recipient.balance.toFixed(2)} ETB*`,
+          buildSubMenuInlineKeyboard(appUrl, targetPhoneRaw)
+        ).catch(() => {});
+      }
+
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `✅ *ብር በተሳካ ሁኔታ ተልኳል (Transfer Successful)!*\n` +
+          `` +
+          `📱 ወደ፦ *${recipient.name}* (\`${targetPhoneRaw}\`)\n` +
+          `💰 የተላከ መጠን፦ *${transferAmt.toFixed(2)} ETB*\n` +
+          `🔖 Ref፦ \`${refCode}\`\n` +
+          `💵 የእርስዎ አዲስ ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`,
+        buildSubMenuInlineKeyboard(appUrl, senderPhone)
+      );
+      return;
+    } else if (activeFlow?.mode === 'transfer') {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ እባክዎ የተቀባዩን *ስልክ ቁጥር* እና *የብር መጠን* አንድ ላይ ይጻፉ (ለምሳሌ፦ \`0911223344 100\`)፦`,
+        buildSubMenuInlineKeyboard(appUrl, regPhone)
+      );
+      return;
+    }
+  }
+
+  // 10B. Handle Active Withdrawal Flow (Step 1 Amount -> Step 2 Bank -> Step 3 Account)
+  if (
+    activeFlow &&
+    (activeFlow.mode === 'withdraw_account' || activeFlow.mode === 'withdraw_amount') &&
+    !clean.startsWith('/') &&
+    !clean.startsWith('menu_') &&
+    !clean.startsWith('dep_') &&
+    !clean.startsWith('with_')
+  ) {
+    const method = activeFlow.method || 'Telebirr';
+    const tokens = rawAction.trim().split(/\s+/);
+    let amt = activeFlow.amount || 0;
+    let targetAccount = regPhone;
+
+    if (activeFlow.mode === 'withdraw_account' && amt >= 50) {
+      targetAccount = rawAction.trim();
+    } else if (tokens.length >= 2) {
+      const firstNum = parseFloat(tokens[0]);
+      const secondNum = parseFloat(tokens[1]);
+      if (firstNum >= 50 && firstNum <= 75000 && tokens[1].length >= 6) {
+        amt = firstNum;
+        targetAccount = tokens[1];
+      } else if (secondNum >= 50 && secondNum <= 75000 && tokens[0].length >= 6) {
+        amt = secondNum;
+        targetAccount = tokens[0];
+      }
+    } else {
+      const singleNum = parseFloat(rawAction.trim());
+      if (Number.isFinite(singleNum) && singleNum >= 50 && singleNum <= 75000 && rawAction.trim().length <= 6) {
+        const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+        if (singleNum > availWithdrawable) {
+          await sendTelegramMessage(
+            token,
+            chatId,
+            `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት፦ *${singleNum.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*`,
+            { inline_keyboard: [[{ text: '← ተመለስ', callback_data: 'menu_withdraw' }]] },
+            undefined,
+            true
+          );
+          return;
+        }
+        await sendWithdrawStep2Banks(singleNum);
+        return;
+      }
+    }
+
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    if (amt >= 50 && amt <= availWithdrawable) {
+      chatFlowByChatId.delete(chatId);
+      const newTx: ServerTransactionRecord = {
+        id: makeServerTxId('srv-tx'),
+        userId: currentPlayer.id,
+        userName: firstName || currentPlayer.name,
+        userPhone: regPhone,
+        chatId,
+        type: 'withdraw',
+        method,
+        amount: amt,
+        referenceNumber: targetAccount,
+        fullSmsText: `Telegram Withdraw: ${amt} ETB to ${method} (${targetAccount})`,
+        status: adminPinConfig.requireDepositApproval ? 'pending' : 'approved',
+        timestamp: new Date().toLocaleString(),
+      };
+      pushServerTransaction(newTx);
+
+      if (!adminPinConfig.requireDepositApproval) {
+        currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - amt).toFixed(2)));
+        currentPlayer.withdrawableBalance = Math.max(
+          0,
+          Number((getWithdrawableBalance(currentPlayer) - amt).toFixed(2))
+        );
+        clampBalancesAfterDebit(currentPlayer);
+        globalWalletBalance = currentPlayer.balance;
+      }
+      saveBotsToDisk();
+      broadcastRealtimeSync();
+
+      const confirmWithdrawMsg = adminPinConfig.requireDepositApproval
+        ? `⏳ *የወጪ ጥያቄዎ ተልኳል (በመጠባበቅ ላይ)*\n` +
+          `` +
+          `🏦 መንገድ፦ *${escapeTelegramMarkdown(method)}*\n` +
+          `💰 የብር መጠን፦ *${amt.toFixed(2)} ETB*\n` +
+          `🔢 ሂሳብ / ስልክ፦ \`${targetAccount}\`\n\n` +
+          `ጥያቄዎ ደርሶናል! ልክ ተጣርቶ ሲጸድቅ (*Approved*) ወዲያውኑ ወደ ሂሳብዎ ይላካል።`
+        : `✅ *የወጪ ጥያቄዎ ተፈጽሟል!*\n` +
+          `💰 *${amt.toFixed(2)} ETB* ወደ *${escapeTelegramMarkdown(method)}* (\`${targetAccount}\`) ተልኳል!\n` +
+          `አዲስ ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`;
+
+      await sendTelegramMessage(token, chatId, confirmWithdrawMsg, buildSubMenuInlineKeyboard(appUrl, regPhone));
+      return;
+    }
+
+    if (activeFlow.mode === 'withdraw_account') {
+      chatFlowByChatId.delete(chatId);
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ *የወጪ ጥያቄው አልተሳካም!*\nየጠየቁት፦ *${amt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB* (ዝቅተኛ 50 ETB)።`,
+        buildSubMenuInlineKeyboard(appUrl, regPhone)
+      );
+      return;
+    }
+  }
+
+  // 11. Detect Bank / Telebirr SMS, Deposit/Withdraw Amount (e.g. "1,500" or "ወጪ 200 0942742684"), or Transaction Ref pasted directly in Telegram Chat!
+  const parsedSms = parseEthiopianPaymentSms(rawAction);
+  const plainNumberMatch = rawAction
+    .trim()
+    .match(/^(?:etb|birr|ብር)?\s*(\d{1,3}(?:,\d{3})+|\d{2,6})(?:\.\d{1,2})?\s*(?:etb|birr|ብር)?$/i);
+  const plainAmountValue = plainNumberMatch
+    ? parseFloat(plainNumberMatch[1].replace(/,/g, ''))
+    : null;
+
+  // 11A. Automatically detect if the user typed an explicit Withdraw (ወጪ) command/message anywhere in chat (e.g. "ወጪ 200", "withdraw 300 0911...", "200 ብር ወጪ")
+  const isAutoWithdrawMessage =
+    !clean.startsWith('/') &&
+    !clean.startsWith('menu_') &&
+    !clean.startsWith('dep_') &&
+    !clean.startsWith('with_') &&
+    (parsedSms.detectedType === 'withdraw' ||
+      /(?:\bwithdraw\b|(?:^|[\s,.:;!?()\d])(?:ወጪ|ገንዘብ\s*ማውጣት)(?=$|[\s,.:;!?()\d]))/i.test(
+        rawAction
+      )) &&
+    !parsedSms.referenceNumber;
+
+  if (isAutoWithdrawMessage) {
+    const withAmt = parsedSms.amount ?? plainAmountValue;
+    const method: ServerTransactionRecord['method'] =
+      parsedSms.detectedBank || activeFlow?.method || 'Telebirr';
+
+    if (!withAmt || withAmt < 50) {
+      const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+      chatFlowByChatId.set(chatId, { mode: 'withdraw_amount', method });
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `💸 *የወጪ (Withdraw) ጥያቄ በራሱ ተለይቷል!*\n` +
+          `✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*\n\n` +
+          `እባክዎ የሚያወጡትን የብር መጠን ይምረጡ (ዝቅተኛ 50 ETB)፦`,
+        {
+          inline_keyboard: [
+            [
+              { text: '50 ETB', callback_data: `with_amt_${method}_50` },
+              { text: '100 ETB', callback_data: `with_amt_${method}_100` },
+              { text: '200 ETB', callback_data: `with_amt_${method}_200` },
+            ],
+            [
+              { text: '500 ETB', callback_data: `with_amt_${method}_500` },
+              { text: '1,000 ETB', callback_data: `with_amt_${method}_1000` },
+            ],
+          ],
+        }
+      );
+      return;
+    }
+
+    const availWithdrawable = getAvailableWithdrawableAfterPending(currentPlayer);
+    if (withAmt > availWithdrawable) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ *ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም!*\nየጠየቁት ወጪ፦ *${withAmt.toFixed(2)} ETB*\n✅ ወጪ ሊደረግ የሚችል፦ *${availWithdrawable.toFixed(2)} ETB*`,
+        buildSubMenuInlineKeyboard(appUrl, regPhone)
+      );
+      return;
+    }
+
+    // Extract target account if provided in the message (e.g., 1000... or 09...), otherwise use registered phone
+    const cbeAcctMatch = rawAction.match(/\b(1000\d{7,11})\b/);
+    const phoneAcctMatch = rawAction.match(/\b((?:\+?251|0)[79]\d{8})\b/);
+    const targetAccount = cbeAcctMatch
+      ? cbeAcctMatch[1]
+      : phoneAcctMatch
+      ? normalizeEthiopianPhone(phoneAcctMatch[1])
+      : regPhone;
+
+    // Prevent rapid duplicate identical withdrawal within 60 seconds
+    const recentDupWithdraw = serverTransactions.find(
+      (t) =>
+        t.type === 'withdraw' &&
+        t.userPhone === regPhone &&
+        t.amount === withAmt &&
+        t.status === 'pending' &&
+        Date.now() - Number(t.id.replace(/\D/g, '').slice(0, 13) || 0) < 60000
+    );
+    if (recentDupWithdraw) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `⚠️ *ይህ የ ${withAmt.toFixed(2)} ETB የወጪ ጥያቄ ቀድሞ ተልኳል (በመጠባበቅ ላይ ነው)!*\nእባክዎ በድጋሚ አይላኩ።`,
+        buildSubMenuInlineKeyboard(appUrl, regPhone)
+      );
+      return;
+    }
+
+    chatFlowByChatId.delete(chatId);
+    const newTx: ServerTransactionRecord = {
+      id: makeServerTxId('srv-tx'),
+      userId: currentPlayer.id,
+      userName: firstName || currentPlayer.name,
+      userPhone: regPhone,
+      chatId,
+      type: 'withdraw',
+      method,
+      amount: withAmt,
+      referenceNumber: targetAccount,
+      fullSmsText: `Auto-Detected Withdraw: ${withAmt} ETB to ${method} (${targetAccount})`,
+      status: adminPinConfig.requireDepositApproval ? 'pending' : 'approved',
+      timestamp: new Date().toLocaleString(),
+    };
+    pushServerTransaction(newTx);
+
+    if (!adminPinConfig.requireDepositApproval) {
+      currentPlayer.balance = Math.max(0, Number((currentPlayer.balance - withAmt).toFixed(2)));
+      currentPlayer.withdrawableBalance = Math.max(
+        0,
+        Number((getWithdrawableBalance(currentPlayer) - withAmt).toFixed(2))
+      );
+      clampBalancesAfterDebit(currentPlayer);
+      globalWalletBalance = currentPlayer.balance;
+    }
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+
+    const confirmWithdrawMsg = adminPinConfig.requireDepositApproval
+      ? `⏳ *የወጪ ጥያቄዎ በራሱ ተለይቶ ተልኳል (በመጠባበቅ ላይ)*\n` +
+        `` +
+        `🏷️ አይነት፦ *ወጪ (WITHDRAW)*\n` +
+        `🏦 መንገድ፦ *${method}*\n` +
+        `💰 የብር መጠን፦ *${withAmt.toFixed(2)} ETB*\n` +
+        `🔢 ሂሳብ / ስልክ፦ \`${targetAccount}\`\n\n` +
+        `ጥያቄዎ ደርሶናል! ልክ ተጣርቶ ሲጸድቅ (*Approved*) ወዲያውኑ ወደ ሂሳብዎ ይላካል።`
+      : `✅ *የወጪ ጥያቄዎ ተፈጽሟል!*\n` +
+        `💰 *${withAmt.toFixed(2)} ETB* ወደ *${method}* (\`${targetAccount}\`) ተልኳል!\n` +
+        `አዲስ ቀሪ ሂሳብ፦ *${currentPlayer.balance.toFixed(2)} ETB*`;
+
+    await sendTelegramMessage(token, chatId, confirmWithdrawMsg, buildSubMenuInlineKeyboard(appUrl, regPhone));
+    return;
+  }
+
+  const hasExplicitCurrencyWord = /(?:etb|birr|ብር)/i.test(rawAction);
+  const rawCompactTrimmed = rawAction.trim();
+  const isWaitingOnlyForTxRefInStep3 = Boolean(
+    activeFlow?.mode === 'deposit_sms' &&
+      activeFlow.amount &&
+      activeFlow.amount > 0 &&
+      activeFlow.method &&
+      !activeFlow.pendingBankRef &&
+      !activeFlow.pendingPhotoFileId &&
+      !hasExplicitCurrencyWord &&
+      rawCompactTrimmed.length >= 4
+  );
+  const isLikelyTxRefInStep2 = Boolean(
+    activeFlow?.mode === 'deposit_method' &&
+      activeFlow.amount &&
+      activeFlow.amount > 0 &&
+      !hasExplicitCurrencyWord &&
+      rawCompactTrimmed.length >= 5
+  );
+
+  // Step 2 trigger: User typed a numeric amount inside deposit_amount / deposit flow (WITHOUT a photo or Ref) -> send Payment details
+  if (
+    !photoFileId &&
+    plainAmountValue !== null &&
+    !parsedSms.referenceNumber &&
+    !isLikelyTxRefInStep2 &&
+    (activeFlow?.mode === 'deposit_amount' || activeFlow?.mode === 'deposit_method' || activeFlow?.mode === 'deposit')
+  ) {
+    const minDep = Math.max(10, Number(adminPinConfig.minDepositAmount || 10));
+    if (plainAmountValue < minDep || plainAmountValue > 500000) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ እባክዎ ከ *${minDep} ETB* እስከ *500,000 ETB* መካከል ትክክለኛ የብር መጠን ያስገቡ፦`,
+        buildSubMenuInlineKeyboard(appUrl, regPhone),
+        undefined,
+        true
+      );
+      return;
+    }
+    await sendDepositStep2PaymentDetails(plainAmountValue);
+    return;
+  }
+
+  // If user is in deposit_sms (Step 3) and ONLY typed a small currency/amount update (never a 4+ char Transaction Number), update the amount
+  if (
+    activeFlow?.mode === 'deposit_sms' &&
+    !photoFileId &&
+    !activeFlow.pendingPhotoFileId &&
+    !activeFlow.pendingBankRef &&
+    !isWaitingOnlyForTxRefInStep3 &&
+    plainAmountValue !== null &&
+    !parsedSms.referenceNumber &&
+    !/[a-zA-Z\u1200-\u137F]{3,}/.test(rawAction.replace(/(?:etb|birr|ብር)/gi, ''))
+  ) {
+    const minDep = Math.max(10, Number(adminPinConfig.minDepositAmount || 10));
+    if (plainAmountValue < minDep || plainAmountValue > 500000) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ እባክዎ ከ *${minDep} ETB* እስከ *500,000 ETB* መካከል ትክክለኛ የብር መጠን ያስገቡ፦`,
+        buildSubMenuInlineKeyboard(appUrl, regPhone),
+        undefined,
+        true
+      );
+      return;
+    }
+    chatFlowByChatId.set(chatId, {
+      ...activeFlow,
+      amount: plainAmountValue,
+    });
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `✅ የብር መጠኑ *${plainAmountValue.toFixed(2)} ETB* ተመዝግቧል!\n\n👇 አሁን የከፈሉበትን *Transaction Number* (የግብይት ቁጥር) ብቻ እዚህ ይላኩ (ለምሳሌ፦ \`FT26108XYZ\` ወይም \`CE84K29M1P\`)፦`,
+      {
+        inline_keyboard: [[{ text: '← ተመለስ (ባንክ ቀይር)', callback_data: `dep_amt_${plainAmountValue}` }]],
+      },
+      undefined,
+      true
+    );
+    return;
+  }
+
+  const isInDepositFlow = Boolean(
+    activeFlow &&
+      (activeFlow.mode === 'deposit_sms' ||
+        activeFlow.mode === 'deposit_method' ||
+        activeFlow.mode === 'deposit_amount' ||
+        activeFlow.mode === 'deposit')
+  );
+
+  const looksLikeBankRefOrSms =
+    !clean.startsWith('/') &&
+    !clean.startsWith('menu_') &&
+    !clean.startsWith('dep_') &&
+    !clean.startsWith('with_') &&
+    ((Boolean(photoFileId) && (isInDepositFlow || !isChatAuthorizedForAdminPost(chatId))) ||
+      (rawAction.trim().length >= 2 &&
+        (activeFlow?.mode === 'deposit_sms' ||
+          activeFlow?.mode === 'deposit_method' ||
+          activeFlow?.mode === 'deposit' ||
+          parsedSms.amount !== null ||
+          parsedSms.referenceNumber !== null ||
+          /ft\w+/i.test(rawAction) ||
+          /tb\w+/i.test(rawAction) ||
+          /boa\w+/i.test(rawAction) ||
+          /mp\w+/i.test(rawAction) ||
+          /etb|birr|ብር/i.test(rawAction) ||
+          /received|credited|transferred|transaction|ገቢ/i.test(rawAction))));
+
+  if (looksLikeBankRefOrSms) {
+    const userPhone = registeredChatPhones.get(chatId) || globalRegisteredPhone || '0942742684';
+    const player = ensurePlayerRecord(userPhone, firstName, chatId);
+    const effectivePhotoFileId = photoFileId || activeFlow?.pendingPhotoFileId;
+    const isPlainNumericFollowUp = Boolean(
+      !photoFileId &&
+        plainAmountValue !== null &&
+        !parsedSms.referenceNumber &&
+        (activeFlow?.pendingBankRef || activeFlow?.pendingPhotoFileId)
+    );
+    const isFullBankReceiptSms =
+      /(?:etb|birr|ብር|received|credited|transferred|debited|balance|ገቢ|ተልኳል|ቀሪ)/i.test(rawAction) ||
+      rawAction.trim().split(/\s+/).length >= 4;
+    const parsedAmount =
+      (isFullBankReceiptSms ? parsedSms.amount : null) ??
+      (isPlainNumericFollowUp ? plainAmountValue : null) ??
+      activeFlow?.amount ??
+      parsedSms.amount ??
+      plainAmountValue;
+
+    const flowRefCode = activeFlow?.reference || makeDepositRefCode();
+    const rawRefCandidate =
+      parsedSms.referenceNumber ||
+      activeFlow?.pendingBankRef ||
+      (!isPlainNumericFollowUp &&
+      rawAction.trim().length >= 3 &&
+      (plainAmountValue === null || Boolean(activeFlow?.amount && activeFlow.amount > 0))
+        ? rawAction.trim().replace(/\s+/g, '').slice(0, 32).toUpperCase()
+        : '') ||
+      (effectivePhotoFileId ? `PHOTO-${flowRefCode}` : `REF-${flowRefCode}`);
+    const refNo = normalizeTransactionReference(rawRefCandidate) || rawRefCandidate;
+    const isSyntheticRef =
+      refNo.startsWith('REF') || refNo.startsWith('PHOTO') || refNo.startsWith('CASH');
+
+    const method: ServerTransactionRecord['method'] =
+      parsedSms.detectedBank ||
+      activeFlow?.method ||
+      (/telebirr|tb/i.test(rawAction)
+        ? 'Telebirr'
+        : /abyssinia|boa/i.test(rawAction)
+        ? 'Abyssinia'
+        : /mpesa|mp/i.test(rawAction)
+        ? 'M-Pesa'
+        : 'CBE');
+
+    // DUPLICATE TRANSACTION CHECK (የተደገመ ደረሰኝ ወይም Transaction ID እንዳይቀበል!)
+    const normalizedIncomingSms = rawAction.trim().replace(/\s+/g, ' ').toLowerCase();
+    const duplicateDeposit = serverTransactions.find((t) => {
+      if (t.type !== 'deposit' || t.status === 'rejected') return false;
+      const existingRefNorm = normalizeTransactionReference(t.referenceNumber);
+      if (
+        refNo &&
+        refNo.length >= 4 &&
+        !isSyntheticRef &&
+        existingRefNorm &&
+        existingRefNorm === refNo
+      ) {
+        return true;
+      }
+      if (
+        normalizedIncomingSms.length >= 25 &&
+        t.fullSmsText &&
+        t.fullSmsText.trim().replace(/\s+/g, ' ').toLowerCase() === normalizedIncomingSms
+      ) {
+        return true;
+      }
+      return false;
+    });
+
+    if (duplicateDeposit) {
+      chatFlowByChatId.delete(chatId);
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ *የተደገመ የግብይት ቁጥር (Duplicate Transaction Rejected)!*\n` +
+          `` +
+          `🔖 Transaction No፦ \`${duplicateDeposit.referenceNumber}\`\n` +
+          `💰 መጠን፦ *${duplicateDeposit.amount.toFixed(2)} ETB*\n` +
+          `📌 ሁኔታ፦ *${duplicateDeposit.status === 'approved' ? 'ቀድሞ ጸድቋል (Already Approved)' : 'ቀድሞ ተልኳል (Already Pending)'}*\n\n` +
+          `⚠️ ይህ የግብይት ቁጥር (Transaction Number) ከዚህ በፊት ጥቅም ላይ ውሏል! የተደገመ ቁጥር ተቀባይነት የለውም።`,
+        buildSubMenuInlineKeyboard(appUrl, userPhone)
+      );
+      return;
+    }
+
+    // Check against chosen amount in activeFlow ONLY when user pasted a full bank SMS containing a different amount
+    if (
+      activeFlow?.mode === 'deposit_sms' &&
+      activeFlow.amount &&
+      isFullBankReceiptSms &&
+      parsedSms.amount !== null &&
+      Math.abs(parsedSms.amount - activeFlow.amount) > 0.01
+    ) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `⚠️ *የገንዘብ መጠን ልዩነት (Amount Mismatch)!*\n` +
+          `` +
+          `• የመረጡት መጠን፦ *${activeFlow.amount.toFixed(2)} ETB*\n` +
+          `• በግብይቱ ላይ የተገኘው፦ *${parsedSms.amount.toFixed(2)} ETB*\n\n` +
+          `እባክዎ ትክክለኛውን መጠን ይምረጡ ወይም Transaction Number ብቻ ይላኩ።`,
+        {
+          inline_keyboard: [
+            [{ text: `🔁 በ ${parsedSms.amount} ETB ቀጥል`, callback_data: `dep_amt_${parsedSms.amount}` }],
+            [{ text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_deposit' }],
+          ],
+        },
+        undefined,
+        true
+      );
+      return;
+    }
+
+    // If user ONLY sent a reference number or ONLY sent a receipt photo without an amount yet, preserve pendingBankRef / pendingPhotoFileId and ask for the ETB amount!
+    if (!parsedAmount || parsedAmount <= 0) {
+      chatFlowByChatId.set(chatId, {
+        mode: 'deposit_sms',
+        method,
+        reference: flowRefCode,
+        pendingBankRef: !isSyntheticRef ? refNo : activeFlow?.pendingBankRef,
+        pendingPhotoFileId: effectivePhotoFileId,
+      });
+      await sendTelegramMessage(
+        token,
+        chatId,
+        (effectivePhotoFileId && isSyntheticRef
+          ? `📸 *የደረሰኝ ፎቶ ደርሶናል!*\n\n`
+          : `🔖 የግብይት ቁጥር (\`${refNo}\`) ደርሶናል!\n\n`) +
+          `💰 እባክዎ የላኩትን *የብር መጠን (ETB)* ብቻ ይጻፉ (ለምሳሌ፦ \`100\` ወይም \`250\`)፦`,
+        {
+          inline_keyboard: [
+            [{ text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_deposit' }],
+          ],
+        }
+      );
+      return;
+    }
+
+    const minDep = Math.max(10, Number(adminPinConfig.minDepositAmount || 10));
+    if (parsedAmount < minDep || parsedAmount > 500000) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `❌ እባክዎ ከ *${minDep} ETB* እስከ *500,000 ETB* መካከል ትክክለኛ የብር መጠን ያስገቡ፦`,
+        {
+          inline_keyboard: [[{ text: '← ተመለስ (መጠን ቀይር)', callback_data: 'menu_deposit' }]],
+        },
+        undefined,
+        true
+      );
+      return;
+    }
+
+    chatFlowByChatId.delete(chatId);
+
+    // Detect if a player/sender phone number was mentioned in the SMS (e.g. "ከ 0942742684 ተቀብለዋል", "from 0911...", "payer 0912...")
+    const phoneMatch = rawAction.match(/(?:from|payer|ከ|sender|account|ሂሳብ)?\s*(\+?251[79]\d{8}|0[79]\d{8})\b/i);
+    const detectedSenderPhone = phoneMatch ? normalizeEthiopianPhone(phoneMatch[1]) : undefined;
+
+    // If the detected sender phone is a registered player (and not the admin receiver), credit that player! Otherwise credit the user interacting in this chat
+    const targetPlayer =
+      (detectedSenderPhone && detectedSenderPhone !== '0942742684' && playersByPhone.has(detectedSenderPhone))
+        ? playersByPhone.get(detectedSenderPhone)!
+        : player;
+
+    const targetPhone = targetPlayer.phone;
+
+    const normTelegramRef = normalizeTransactionReference(refNo);
+    const matchingPreVerified =
+      normTelegramRef && normTelegramRef.length >= 5 && !isSyntheticRef
+        ? verifiedBankSmsReceipts.find(
+            (r) =>
+              normalizeTransactionReference(r.referenceNumber) === normTelegramRef &&
+              r.status !== 'duplicate'
+          )
+        : null;
+
+    if (
+      matchingPreVerified &&
+      (matchingPreVerified.status === 'auto_approved' || Boolean(matchingPreVerified.matchedTxId))
+    ) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `ℹ️ *ይህ ደረሰኝ (\`${refNo}\`) ቀድሞ ተረጋግጦ ገቢ ሆኗል!*\n💵 ቀሪ ሂሳብ፦ *${targetPlayer.balance.toFixed(2)} ETB*`,
+        buildSubMenuInlineKeyboard(appUrl, targetPhone)
+      );
+      return;
+    }
+
+    // Strict Webhook Toggle Rule: Auto-approve ONLY when smsWebhookEnabled is ON AND a real bank SMS receipt already arrived via /api/webhook/sms!
+    // When smsWebhookEnabled is OFF, deposits stay 'pending' so Admin approves them manually!
+    const isAutoApproved = Boolean(
+      adminPinConfig.smsWebhookEnabled !== false &&
+        matchingPreVerified &&
+        matchingPreVerified.status === 'ready_for_claim'
+    );
+    const verifiedAmt = matchingPreVerified ? matchingPreVerified.amount : parsedAmount;
+    const bonusPct = getActiveDepositBonusPct();
+    const bonusAmt = isAutoApproved && bonusPct > 0 ? Number(((verifiedAmt * bonusPct) / 100).toFixed(2)) : 0;
+    const receiptImgUrl = effectivePhotoFileId ? `/api/tg-file/${effectivePhotoFileId}` : undefined;
+    const cleanCaptionOrSms = rawAction.trim();
+    const isLongSmsOrNote =
+      cleanCaptionOrSms.length > (normTelegramRef || refNo).length + 4 && /\s/.test(cleanCaptionOrSms);
+    const fullSmsSummary =
+      matchingPreVerified?.rawSms ||
+      (cleanCaptionOrSms && effectivePhotoFileId
+        ? `${cleanCaptionOrSms} (📸 Telegram Photo Receipt)`
+        : effectivePhotoFileId
+        ? `📸 የባንክ ደረሰኝ ፎቶ (Telegram Photo Receipt • ${verifiedAmt} ETB)`
+        : isLongSmsOrNote
+        ? cleanCaptionOrSms
+        : undefined);
+
+    const newTx: ServerTransactionRecord = {
+      id: makeServerTxId('srv-tx'),
+      userId: targetPlayer.id,
+      userName: firstName || targetPlayer.name,
+      userPhone: targetPhone,
+      chatId: targetPlayer.chatId || chatId,
+      type: 'deposit',
+      method: matchingPreVerified?.bank || method,
+      amount: verifiedAmt,
+      referenceNumber: normTelegramRef || refNo,
+      ...(fullSmsSummary ? { fullSmsText: fullSmsSummary } : {}),
+      ...(receiptImgUrl ? { receiptImageUrl: receiptImgUrl } : {}),
+      status: isAutoApproved ? 'approved' : 'pending',
+      timestamp: new Date().toLocaleString(),
+    };
+    pushServerTransaction(newTx);
+
+    if (isAutoApproved && matchingPreVerified) {
+      matchingPreVerified.status = 'auto_approved';
+      matchingPreVerified.matchedUserPhone = targetPhone;
+      matchingPreVerified.matchedTxId = newTx.id;
+
+      targetPlayer.balance = Number((targetPlayer.balance + verifiedAmt + bonusAmt).toFixed(2));
+      if (bonusAmt > 0) {
+        targetPlayer.bonusBalance = Number(((targetPlayer.bonusBalance || 0) + bonusAmt).toFixed(2));
+        targetPlayer.nonWithdrawableBonus = Number(
+          (getNonWithdrawableBonus(targetPlayer) + bonusAmt).toFixed(2)
+        );
+      }
+      if (
+        targetPlayer.phone === globalRegisteredPhone ||
+        targetPlayer.phone === '0942742684' ||
+        playersByPhone.size === 1
+      ) {
+        globalWalletBalance = targetPlayer.balance;
+      }
+
+      receivedWebhookSmsLogs.unshift({
+        id: `sms-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        timestamp: new Date().toLocaleString(),
+        sender: matchingPreVerified.bank,
+        rawText: matchingPreVerified.rawSms,
+        parsedAmount: verifiedAmt,
+        parsedRef: normTelegramRef || refNo,
+        detectedBank: matchingPreVerified.bank,
+        detectedType: 'deposit',
+        statusText: `✅ በባንክ SMS Webhook + ቴሌግራም ተረጋግጦ ገቢ ሆኗል (Auto-Credited to ${targetPhone})`,
+        matchedPlayerPhone: targetPhone,
+      });
+      if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+    }
+
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+
+    const acctForReceipt = getLiveBankAccount(
+      (/cbe/i.test(String(newTx.method))
+        ? 'CBE'
+        : /abyssinia|boa/i.test(String(newTx.method))
+        ? 'Abyssinia'
+        : /mpesa|m-pesa/i.test(String(newTx.method))
+        ? 'M-Pesa'
+        : 'Telebirr')
+    );
+
+    const moneyReceivedCard = [
+      `Receiver Name:   ${acctForReceipt.accountHolder}`,
+      `Amount:          ${verifiedAmt.toFixed(2)}ETB`,
+      `Transaction No:  ${normTelegramRef || refNo}`,
+      `Reference:       ${flowRefCode}`,
+    ].join('\n');
+
+    const statusLine = isAutoApproved
+      ? `✅ *ክፍያዎ ተረጋግጦ +${verifiedAmt.toFixed(2)} ETB${bonusAmt > 0 ? ` (+${bonusAmt.toFixed(2)} ETB ቦነስ)` : ''} ወደ ዋሌትዎ ገብቷል!*\n💵 አዲስ ቀሪ ሂሳብ፦ *${targetPlayer.balance.toFixed(2)} ETB*`
+      : `⏳ *የገቢ ጥያቄዎ ወደ አድሚን ተልኳል (በመጠባበቅ ላይ)*\nሲረጋገጥ ወዲያውኑ ወደ ዋሌትዎ ይገባል እና እዚሁ መልእክት ይደርስዎታል!`;
+
+    const replyText = `Money Received\n\`\`\`\n${moneyReceivedCard}\n\`\`\`\n${statusLine}`;
+
+    await sendTelegramMessage(token, chatId, replyText, buildSubMenuInlineKeyboard(appUrl, userPhone));
+
+    // Also notify targetPlayer if different from chatId
+    if (targetPlayer.chatId && targetPlayer.chatId !== chatId) {
+      const directNotify =
+        `✅ *የገቢ ክፍያዎ ተረጋግጦ ወደ ዋሌትዎ ገቢ ሆኗል!*\n` +
+        `` +
+        `💳 መንገድ፦ *${method}*\n` +
+        `💰 *+${verifiedAmt.toFixed(2)} ETB* ወደ ዋሌትዎ ተጨምሯል!\n` +
+        `🔖 Ref No፦ \`${refNo}\`\n` +
+        `💵 አዲስ ቀሪ ሂሳብ፦ *${targetPlayer.balance.toFixed(2)} ETB*`;
+      sendTelegramMessage(token, targetPlayer.chatId, directNotify, buildSubMenuInlineKeyboard(appUrl, targetPhone)).catch(() => {});
+    }
+
+    return;
+  }
+
+  // Default: /start, /menu or menu_main for registered users ->
+  // Sends a fresh Welcome Message + Inline Keyboard Card at the bottom while keeping previous messages intact
+  const welcomeText = buildWelcomeMessageText(
+    firstName,
+    registeredChatPhones.get(chatId),
+    chatWelcomeBonusClaimed.has(chatId)
+  );
+  await sendTelegramMessage(
+    token,
+    chatId,
+    welcomeText,
+    buildInlineWelcomeMenuKeyboard(appUrl, regPhone),
+    undefined,
+    isExplicitMenuCmd
+  );
+}
+
+async function processTelegramUpdate(token: string, update: any) {
+  if (!update || typeof update !== 'object') return;
+  const botState = activeBots.get(token);
+  if (botState) {
+    botState.lastUpdateAt = Date.now();
+    botState.lastError = undefined;
+  }
+
+  if (typeof update.update_id === 'number') {
+    if (botState && update.update_id + 1 > botState.offset) {
+      botState.offset = update.update_id + 1;
+      saveBotsToDisk();
+    }
+    const uniqueKey = `${token}:${update.update_id}`;
+    if (processedUpdateIds.has(uniqueKey)) {
+      return;
+    }
+    trackProcessedUpdateId(uniqueKey);
+    const claimed = await claimTelegramUpdateOnce(`upd:${update.update_id}`);
+    if (!claimed) {
+      return;
+    }
+  }
+
+  if (update.callback_query) {
+    const cb = update.callback_query;
+    const cbIdKey = `cb:${cb.id}`;
+    if (processedUpdateIds.has(cbIdKey)) {
+      return;
+    }
+    trackProcessedUpdateId(cbIdKey);
+    const cbClaimed = await claimTelegramUpdateOnce(cbIdKey);
+    if (!cbClaimed) {
+      return;
+    }
+
+    const chatId = cb.message?.chat?.id;
+    const cbMsgId = cb.message?.message_id;
+    const cbData = String(cb.data || '');
+    const firstName = cb.from?.first_name || cb.message?.chat?.first_name || 'King';
+
+    fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callback_query_id: cb.id,
+      }),
+    }).catch(() => {});
+
+    if (chatId && cbData === 'share_phone_prompt') {
+      await sendBottomContactKeyboardPromptOnly(token, chatId);
+    } else if (chatId && cbData) {
+      await handleTelegramMenuAction(token, chatId, cbData, firstName, false, cbMsgId);
+    }
+    return;
+  }
+
+  const msg = update.message || update.channel_post;
+  if (msg && msg.chat && msg.chat.id) {
+    const msgKey = `msg:${msg.chat.id}:${msg.message_id}`;
+    if (processedUpdateIds.has(msgKey)) {
+      return;
+    }
+    trackProcessedUpdateId(msgKey);
+    const msgClaimed = await claimTelegramUpdateOnce(msgKey);
+    if (!msgClaimed) {
+      return;
+    }
+    const firstName = msg.from?.first_name || msg.chat?.first_name || 'King';
+
+    // Handle shared phone contact from Telegram's "📱 Share Phone Number" button (accepts ANY phone number format!)
+    if (msg.contact && msg.contact.phone_number) {
+      await handleTelegramMenuAction(
+        token,
+        msg.chat.id,
+        String(msg.contact.phone_number),
+        firstName,
+        true
+      );
+      return;
+    }
+
+    const rawText = typeof msg.text === 'string' ? msg.text : typeof msg.caption === 'string' ? msg.caption : '';
+    const photoArr = Array.isArray(msg.photo) ? msg.photo : [];
+    const largestPhoto = photoArr.length > 0 ? photoArr[photoArr.length - 1] : null;
+    const photoFileId = largestPhoto?.file_id ? String(largestPhoto.file_id) : undefined;
+    if (rawText.trim().length > 0 || photoFileId) {
+      await handleTelegramMenuAction(token, msg.chat.id, rawText, firstName, false, undefined, photoFileId);
+    }
+  }
+}
+
+async function pollBotUpdates(token: string) {
+  const botState = activeBots.get(token);
+  if (!botState || !botState.isRunning || botState.pollingInFlight) return;
+  botState.pollingInFlight = true;
+  let nextDelayMs = 1200;
+
+  try {
+    const allowed = encodeURIComponent(
+      JSON.stringify(['message', 'callback_query', 'channel_post', 'edited_channel_post'])
+    );
+    const res = await fetch(
+      `https://api.telegram.org/bot${token}/getUpdates?offset=${botState.offset}&timeout=20&allowed_updates=${allowed}`,
+      { signal: AbortSignal.timeout(30000) }
+    );
+    const data = await res.json().catch(() => null);
+
+    if (data && data.ok === false) {
+      botState.lastError = `${data.error_code || ''} ${data.description || 'Unknown Telegram API error'}`.trim();
+      if (data.error_code === 409) {
+        const desc = String(data.description || '').toLowerCase();
+        if (desc.includes('webhook')) {
+          // A webhook was left active on Telegram — delete it automatically so /start works immediately!
+          await fetch(`https://api.telegram.org/bot${token}/deleteWebhook?drop_pending_updates=false`).catch(() => {});
+          nextDelayMs = 1500;
+        } else if (!IS_RENDER_HOST) {
+          // Live Render server is actively polling this bot — yield local AI Studio preview immediately so messages never duplicate!
+          botState.isRunning = false;
+          botState.lastError = 'Handled by live Render server (local preview yielded to prevent duplicate messages).';
+          return;
+        } else {
+          // Another instance temporarily polling during Render rolling deploy — back off cleanly
+          nextDelayMs = 5000;
+        }
+      } else if (data.error_code === 401 || data.error_code === 404) {
+        // Invalid/revoked bot token
+        botState.isRunning = false;
+        return;
+      } else {
+        nextDelayMs = 3000;
+      }
+    } else if (data && data.ok && Array.isArray(data.result)) {
+      botState.lastError = undefined;
+      if (data.result.length > 0) {
+        let maxUid = botState.offset - 1;
+        for (const u of data.result) {
+          if (typeof u?.update_id === 'number' && u.update_id > maxUid) {
+            maxUid = u.update_id;
+          }
+        }
+        if (maxUid + 1 > botState.offset) {
+          botState.offset = maxUid + 1;
+          saveBotsToDisk();
+        }
+        for (const update of data.result) {
+          await processTelegramUpdate(token, update);
+        }
+      }
+    }
+  } catch (err: any) {
+    if (err?.name !== 'AbortError' && err?.name !== 'TimeoutError') {
+      botState.lastError = String(err?.message || 'Network error');
+    }
+    nextDelayMs = 2500;
+  } finally {
+    botState.pollingInFlight = false;
+  }
+
+  if (activeBots.get(token)?.isRunning) {
+    setTimeout(() => pollBotUpdates(token), nextDelayMs);
+  }
+}
+
+app.get('/api/telegram/status', (_req, res) => {
+  res.json({
+    ok: true,
+    activeCount: activeBots.size,
+    bots: Array.from(activeBots.values()).map((b) => b.botUsername),
+    details: Array.from(activeBots.values()).map((b) => ({
+      botUsername: b.botUsername,
+      botFirstName: b.botFirstName,
+      isRunning: b.isRunning,
+      appUrl: b.appUrl,
+      lastError: b.lastError || null,
+      lastUpdateAt: b.lastUpdateAt || null,
+    })),
+  });
+});
+
+// Optional Telegram Webhook endpoint (handles updates cleanly if webhook mode is ever configured)
+app.post('/api/telegram/webhook/:token?', async (req, res) => {
+  const paramToken = String(req.params?.token || '').trim();
+  const targetToken =
+    (paramToken && activeBots.has(paramToken) ? paramToken : null) ||
+    Array.from(activeBots.keys())[0] ||
+    (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+  if (targetToken && req.body) {
+    processTelegramUpdate(targetToken, req.body).catch((err) =>
+      console.error('Telegram webhook update error:', err)
+    );
+  }
+  res.json({ ok: true });
+});
+
+// Check whether the specific Telegram chatId or phone has registered its phone number (NEVER leak another user's phone to a different device!)
+app.get('/api/telegram/user-status', (req, res) => {
+  const chatIdParam = Number(req.query.chatId || 0);
+  const rawPhoneParam = String(req.query.phone || '').trim();
+  const phoneParam = normalizeEthiopianPhone(rawPhoneParam) || rawPhoneParam;
+
+  if (chatIdParam && registeredChatPhones.has(chatIdParam)) {
+    const ph = registeredChatPhones.get(chatIdParam)!;
+    const player = ensurePlayerRecord(ph);
+    res.json({
+      ok: true,
+      registered: true,
+      phone: ph,
+      name: player.name,
+      bonusClaimed: chatWelcomeBonusClaimed.has(chatIdParam),
+      balance: player.balance,
+      bonusBalance: player.bonusBalance,
+      accountToken: createSignedPlayerToken(player),
+    });
+    return;
+  }
+
+  if (phoneParam && playersByPhone.has(phoneParam)) {
+    const player = playersByPhone.get(phoneParam)!;
+    res.json({
+      ok: true,
+      registered: true,
+      phone: player.phone,
+      name: player.name,
+      bonusClaimed: true,
+      balance: player.balance,
+      bonusBalance: player.bonusBalance,
+      accountToken: createSignedPlayerToken(player),
+    });
+    return;
+  }
+
+  res.json({
+    ok: true,
+    registered: false,
+    phone: null,
+    bonusClaimed: false,
+    balance: 15.0,
+    bonusBalance: 15.0,
+  });
+});
+
+// Per-Player Wallet Sync endpoint (Hardened: Clients can never arbitrarily increase their own balance!)
+app.post('/api/wallet/sync', (req, res) => {
+  const { phone, name, balance, bonusBalance, accountToken } = req.body as {
+    phone?: string;
+    name?: string;
+    balance?: number;
+    bonusBalance?: number;
+    isBlocked?: boolean;
+    accountToken?: string;
+  };
+  if (accountToken) {
+    restorePlayerFromSignedTokenIfMissing(accountToken);
+  }
+  const cleanPhone = normalizeEthiopianPhone(String(phone || '')) || String(phone || '').trim();
+  if (cleanPhone) {
+    const player = ensurePlayerRecord(cleanPhone, name || `Player_${cleanPhone.slice(-4)}`);
+    if (name && name.trim() && !name.trim().startsWith('Player_')) {
+      player.name = name.trim();
+    }
+    if (typeof balance === 'number' && Number.isFinite(balance) && balance >= 0) {
+      if (balance < player.balance) {
+        player.balance = Number(balance.toFixed(2));
+        clampBalancesAfterDebit(player);
+      }
+    }
+    if (typeof bonusBalance === 'number' && Number.isFinite(bonusBalance) && bonusBalance >= 0) {
+      if (bonusBalance < player.bonusBalance) {
+        player.bonusBalance = Number(bonusBalance.toFixed(2));
+      }
+    }
+    player.updatedAt = new Date().toLocaleString();
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+    res.json({
+      ok: true,
+      phone: player.phone,
+      balance: player.balance,
+      bonusBalance: player.bonusBalance,
+      isBlocked: player.isBlocked,
+      accountToken: createSignedPlayerToken(player),
+      players: Array.from(playersByPhone.values()),
+    });
+    return;
+  }
+  res.json({
+    ok: true,
+    balance: 15,
+    bonusBalance: 15,
+  });
+});
+
+// Admin endpoint to manually register or update a user account in User Management System
+app.post('/api/admin/users/upsert', (req, res) => {
+  const { phone, name, balance, bonusBalance, isBlocked } = req.body as {
+    phone?: string;
+    name?: string;
+    balance?: number;
+    bonusBalance?: number;
+    isBlocked?: boolean;
+  };
+  const cleanPhone = String(phone || '')
+    .trim()
+    .replace(/[\s\-+()]/g, '');
+  if (!cleanPhone) {
+    res.status(400).json({ ok: false, error: 'እባክዎ የተጫዋች ስልክ ቁጥር ያስገቡ።' });
+    return;
+  }
+  const normalizedPhone = normalizeEthiopianPhone(cleanPhone) || cleanPhone;
+
+  const player = ensurePlayerRecord(
+    normalizedPhone,
+    (name || '').trim() || `Player_${normalizedPhone.slice(-4)}`
+  );
+  if (name && name.trim()) {
+    player.name = name.trim();
+  }
+  if (typeof balance === 'number' && Number.isFinite(balance)) {
+    player.balance = Math.max(0, Number(balance.toFixed(2)));
+  }
+  if (typeof bonusBalance === 'number' && Number.isFinite(bonusBalance)) {
+    player.bonusBalance = Math.max(0, Number(bonusBalance.toFixed(2)));
+  }
+  if (typeof isBlocked === 'boolean') {
+    player.isBlocked = isBlocked;
+  }
+  player.updatedAt = new Date().toLocaleString();
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+  res.json({
+    ok: true,
+    player,
+    players: Array.from(playersByPhone.values()),
+  });
+});
+
+// Admin endpoint to remove a user account from User Management System
+app.post('/api/admin/users/delete', (req, res) => {
+  const { phone } = req.body as { phone?: string };
+  const cleanPhone = normalizeEthiopianPhone(String(phone || '')) || String(phone || '').trim();
+  if (cleanPhone && playersByPhone.has(cleanPhone)) {
+    playersByPhone.delete(cleanPhone);
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+  }
+  res.json({
+    ok: true,
+    players: Array.from(playersByPhone.values()),
+  });
+});
+
+// Sync phone registration from WebApp to backend for this specific user/device
+app.post('/api/telegram/register-phone', (req, res) => {
+  const { chatId, phone, name, password, accountToken } = req.body as {
+    chatId?: number;
+    phone?: string;
+    name?: string;
+    password?: string;
+    accountToken?: string;
+  };
+  if (accountToken) {
+    restorePlayerFromSignedTokenIfMissing(accountToken);
+  }
+  const cleanPhone = String(phone || '')
+    .trim()
+    .replace(/[\s\-+()]/g, '');
+  const normalizedPhone =
+    normalizeEthiopianPhone(cleanPhone) || `0911${Math.floor(100000 + Math.random() * 900000)}`;
+  const player = ensurePlayerRecord(
+    normalizedPhone,
+    name || `Player_${normalizedPhone.slice(-4)}`,
+    chatId ? Number(chatId) : undefined
+  );
+  if (password && String(password).trim().length >= 4) {
+    player.passwordHash = String(password).trim();
+  }
+  if (chatId && Number.isFinite(Number(chatId))) {
+    const cid = Number(chatId);
+    registeredChatPhones.set(cid, normalizedPhone);
+    chatWelcomeBonusClaimed.add(cid);
+    const firstActiveBot = Array.from(activeBots.keys())[0];
+    if (firstActiveBot) {
+      deleteOldPhonePromptMessages(firstActiveBot, cid).catch(() => {});
+    }
+  }
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+  res.json({
+    ok: true,
+    registered: true,
+    phone: normalizedPhone,
+    player,
+    accountToken: createSignedPlayerToken(player),
+  });
+});
+
+// ============================================================================
+// PLAYER AUTHENTICATION SYSTEM (Telegram-Only OTP, Password Login, Durable Session Restore, Profile Update)
+// ============================================================================
+
+// 0. Restore Verified Account Snapshot after Server Restart (HMAC-verified)
+app.post('/api/auth/restore-session', (req, res) => {
+  const { accountToken } = req.body as { accountToken?: string };
+  const snap = verifySignedPlayerToken(accountToken);
+  if (!snap) {
+    res.status(401).json({ ok: false, error: 'Invalid or expired session token' });
+    return;
+  }
+  const cleanPhone = normalizeEthiopianPhone(snap.phone) || snap.phone;
+  const existing = playersByPhone.get(cleanPhone);
+  let player: ServerPlayerRecord;
+  if (!existing) {
+    player = restorePlayerFromSignedTokenIfMissing(accountToken)!;
+  } else {
+    player = existing;
+    if (snap.name && (!player.name || player.name.startsWith('Player_'))) {
+      player.name = snap.name;
+    }
+    if (snap.passwordHash && (!player.passwordHash || player.passwordHash === '****')) {
+      player.passwordHash = snap.passwordHash;
+    }
+    if (snap.chatId && !player.chatId) {
+      player.chatId = snap.chatId;
+      registeredChatPhones.set(snap.chatId, cleanPhone);
+    }
+    saveBotsToDisk();
+  }
+  broadcastRealtimeSync();
+  res.json({
+    ok: true,
+    player,
+    accountToken: createSignedPlayerToken(player),
+    players: Array.from(playersByPhone.values()),
+  });
+});
+
+// 0.1 Fetch Signed Account Snapshot Token for an active player session
+app.get('/api/auth/token', (req, res) => {
+  const rawPhone = String(req.query.phone || '').trim();
+  const cleanPhone = normalizeEthiopianPhone(rawPhone) || rawPhone;
+  if (!cleanPhone) {
+    res.status(400).json({ ok: false, error: 'Phone is required' });
+    return;
+  }
+  const player = playersByPhone.get(cleanPhone);
+  if (!player) {
+    res.status(404).json({ ok: false, error: 'Player not found' });
+    return;
+  }
+  res.json({
+    ok: true,
+    player,
+    accountToken: createSignedPlayerToken(player),
+  });
+});
+
+// 0.5 Update Player Username/Profile across Server & Active Locked Cartelas
+app.post('/api/player/update-profile', (req, res) => {
+  const { phone, name } = req.body as { phone?: string; name?: string };
+  const normalizedPhone = normalizeEthiopianPhone(String(phone || ''));
+  const cleanName = String(name || '').trim();
+  if (!normalizedPhone || cleanName.length < 2) {
+    res.status(400).json({ ok: false, error: 'እባክዎ ትክክለኛ ስም (ቢያንስ 2 ፊደላት) ያስገቡ።' });
+    return;
+  }
+  const player = ensurePlayerRecord(normalizedPhone, cleanName);
+  player.name = cleanName.slice(0, 32);
+  player.updatedAt = new Date().toLocaleString();
+
+  for (const stk of FAST_STAKE_TIERS) {
+    const lMap = fastLockedCartelasByStake[stk];
+    if (lMap) {
+      for (const item of lMap.values()) {
+        if (normalizeEthiopianPhone(item.ownerPhone) === normalizedPhone) {
+          item.ownerName = player.name;
+        }
+      }
+    }
+  }
+  for (const item of regularRoomLockedCartelas.values()) {
+    if (normalizeEthiopianPhone(item.ownerPhone) === normalizedPhone) {
+      item.ownerName = player.name;
+    }
+  }
+
+  saveBotsToDisk();
+  broadcastRealtimeSync('both');
+  res.json({
+    ok: true,
+    player,
+    accountToken: createSignedPlayerToken(player),
+    players: Array.from(playersByPhone.values()),
+  });
+});
+
+// 1. Send OTP Strictly via Telegram ONLY (NEVER return otpCode in HTTP response!)
+app.post('/api/auth/send-otp', (req, res) => {
+  const { phone, name, purpose } = req.body as {
+    phone?: string;
+    name?: string;
+    purpose?: 'register' | 'forgot';
+  };
+  const normalizedPhone = normalizeEthiopianPhone(String(phone || ''));
+  if (!normalizedPhone || normalizedPhone.length < 9) {
+    res.status(400).json({
+      ok: false,
+      error: 'እባክዎ ትክክለኛ የኢትዮጵያ ስልክ ቁጥር ያስገቡ (ለምሳሌ 0912345678 ወይም 0712345678)።',
+    });
+    return;
+  }
+
+  const existingPlayer = playersByPhone.get(normalizedPhone);
+  if (!existingPlayer) {
+    ensurePlayerRecord(normalizedPhone, name || `Player_${normalizedPhone.slice(-4)}`);
+  }
+
+  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+  pendingOtpByPhone.set(normalizedPhone, {
+    code: otpCode,
+    name: (name || '').trim() || undefined,
+    purpose: purpose === 'forgot' ? 'forgot' : 'register',
+    expiresAt: Date.now() + 10 * 60 * 1000,
+  });
+
+  // Deliver OTP ONLY via Telegram bot
+  const playerRec = playersByPhone.get(normalizedPhone);
+  const linkedChatId =
+    playerRec?.chatId ||
+    Array.from(registeredChatPhones.entries()).find(
+      ([, ph]) => normalizeEthiopianPhone(ph) === normalizedPhone
+    )?.[0];
+  const firstActiveBot = Array.from(activeBots.entries())[0];
+  let sentToTelegram = false;
+  if (linkedChatId && firstActiveBot) {
+    const [botToken] = firstActiveBot;
+    const otpMsg =
+      `🔐 *የ Sun Bingo ማረጋገጫ ኮድ (OTP Verification)*\n` +
+      `` +
+      `📱 ስልክ፦ \`${normalizedPhone}\`\n` +
+      `🔑 የእርስዎ ባለ 6-አሃዝ OTP ኮድ፦ *\`${otpCode}\`*\n` +
+      `⏳ ይህ ኮድ ለ 10 ደቂቃ ያገለግላል።\n` +
+      `⚠️ ይህንን ኮድ ወደ ማረጋገጫ ሳጥኑ ይጻፉ (በስክሪኑ ላይ አይታይም)።`;
+    sendTelegramMessage(botToken, linkedChatId, otpMsg, undefined, undefined, true).catch(() => {});
+    sentToTelegram = true;
+  }
+
+  const firstBotInfo = Array.from(activeBots.values())[0];
+  const botUsername = firstBotInfo?.botUsername || 'Sungamsbot';
+  const telegramOtpUrl = `https://t.me/${botUsername}?start=otp_${normalizedPhone}`;
+
+  res.json({
+    ok: true,
+    phone: normalizedPhone,
+    sentToTelegram,
+    needsBotLink: !sentToTelegram,
+    telegramOtpUrl,
+    botUsername,
+    message: sentToTelegram
+      ? `✅ ባለ 6-አሃዝ የማረጋገጫ ኮድ (OTP) በቀጥታ ወደ Telegram ቦት (@${botUsername}) ተልኳል! Telegram ዎን ይክፈቱ።`
+      : `📱 ኮዱን በ Telegram ለመቀበል ከታች ያለውን «በ Telegram OTP ውሰድ (@${botUsername})» የሚለውን ቁልፍ ይጫኑ!`,
+  });
+});
+
+// 2. Verify Telegram OTP & Complete Registration
+app.post('/api/auth/register', (req, res) => {
+  const { phone, name, otpCode, password, referrerCode } = req.body as {
+    phone?: string;
+    name?: string;
+    otpCode?: string;
+    password?: string;
+    referrerCode?: string;
+  };
+  const normalizedPhone = normalizeEthiopianPhone(String(phone || ''));
+  if (!normalizedPhone || normalizedPhone.length < 9) {
+    res.status(400).json({ ok: false, error: 'እባክዎ ትክክለኛ ስልክ ቁጥር ያስገቡ።' });
+    return;
+  }
+
+  const cleanOtp = String(otpCode || '').trim();
+  const pending = pendingOtpByPhone.get(normalizedPhone);
+  if (!cleanOtp || !pending || pending.expiresAt < Date.now() || pending.code !== cleanOtp) {
+    res.status(400).json({
+      ok: false,
+      error: 'የተሳሳተ ወይም ጊዜው ያለፈበት የማረጋገጫ ኮድ (OTP)! እባክዎ በ Telegram የተላከውን ባለ 6-አሃዝ ኮድ በትክክል ያስገቡ።',
+    });
+    return;
+  }
+
+  const cleanPassword = String(password || '').trim();
+  if (cleanPassword.length < 4) {
+    res.status(400).json({
+      ok: false,
+      error: 'አዲሱ የይለፍ ቃል (Password) ቢያንስ 4 ፊደላት ወይም ቁጥሮች መሆን አለበት።',
+    });
+    return;
+  }
+
+  const resolvedName =
+    (name || pending?.name || '').trim() || `Player_${normalizedPhone.slice(-4)}`;
+  const player = ensurePlayerRecord(normalizedPhone, resolvedName);
+  player.name = resolvedName;
+  player.passwordHash = cleanPassword;
+  player.updatedAt = new Date().toLocaleString();
+  pendingOtpByPhone.delete(normalizedPhone);
+
+  // If registered via a referral code or link, reward the referrer!
+  const cleanRef = String(referrerCode || '').trim();
+  if (cleanRef) {
+    const referrer = Array.from(playersByPhone.values()).find(
+      (p) =>
+        p.phone === cleanRef ||
+        p.id === cleanRef ||
+        p.phone.slice(-6) === cleanRef
+    );
+    if (referrer && referrer.phone !== player.phone) {
+      const bonus = adminPinConfig.referralBonusAmount || 25;
+      referrer.balance = Number((referrer.balance + bonus).toFixed(2));
+      referrer.referralEarnings = Number(((referrer.referralEarnings || 0) + bonus).toFixed(2));
+      referrer.referredCount = (referrer.referredCount || 0) + 1;
+
+      serverTransactions.unshift({
+        id: `tx-ref-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        userId: referrer.id,
+        userName: referrer.name,
+        userPhone: referrer.phone,
+        type: 'referral',
+        method: 'System',
+        amount: bonus,
+        referenceNumber: `REF-${Date.now().toString().slice(-6)}`,
+        status: 'approved',
+        timestamp: new Date().toLocaleTimeString(),
+        note: `የሪፈራል ግብዣ ሽልማት (ተጋባዥ፦ ${player.name} - ${player.phone})`,
+      });
+    }
+  }
+
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+
+  res.json({
+    ok: true,
+    player,
+    accountToken: createSignedPlayerToken(player),
+    players: Array.from(playersByPhone.values()),
+    message: `እንኳን ደህና መጡ ${player.name}! አካውንትዎ በ Telegram OTP ተረጋግጦ ተከፍቷል።`,
+  });
+});
+
+// Direct Player Friend Invite Endpoint (awards referral bonus and logs transaction)
+app.post('/api/player/invite', (req, res) => {
+  const { referrerPhone, friendPhone } = req.body as {
+    referrerPhone?: string;
+    friendPhone?: string;
+  };
+  const normRef = normalizeEthiopianPhone(String(referrerPhone || ''));
+  const normFriend = normalizeEthiopianPhone(String(friendPhone || ''));
+  if (!normRef || !normFriend) {
+    res.status(400).json({ ok: false, error: 'ትክክለኛ ስልክ ቁጥር ያስገቡ።' });
+    return;
+  }
+  const referrer = ensurePlayerRecord(normRef, `Player_${normRef.slice(-4)}`);
+  const bonus = adminPinConfig.referralBonusAmount || 25;
+  referrer.balance = Number((referrer.balance + bonus).toFixed(2));
+  referrer.referralEarnings = Number(((referrer.referralEarnings || 0) + bonus).toFixed(2));
+  referrer.referredCount = (referrer.referredCount || 0) + 1;
+
+  serverTransactions.unshift({
+    id: `tx-ref-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    userId: referrer.id,
+    userName: referrer.name,
+    userPhone: referrer.phone,
+    type: 'referral',
+    method: 'System',
+    amount: bonus,
+    referenceNumber: `INV-${Date.now().toString().slice(-6)}`,
+    status: 'approved',
+    timestamp: new Date().toLocaleTimeString(),
+    note: `የጓደኛ ግብዣ ሽልማት ለ ${normFriend}`,
+  });
+
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+
+  res.json({
+    ok: true,
+    message: `ጓደኛዎ (${normFriend}) ተጋብዟል! +${bonus}.00 ETB ወደ ዋሌትዎ ገብቷል።`,
+    player: referrer,
+    accountToken: createSignedPlayerToken(referrer),
+    balance: referrer.balance,
+  });
+});
+
+
+// 3. Player Login with Phone + Password (supports signed accountToken restore across server restarts)
+app.post('/api/auth/login', (req, res) => {
+  const { phone, password, name, accountToken } = req.body as {
+    phone?: string;
+    password?: string;
+    name?: string;
+    accountToken?: string;
+  };
+  if (accountToken) {
+    restorePlayerFromSignedTokenIfMissing(accountToken);
+  }
+  const normalizedPhone = normalizeEthiopianPhone(String(phone || ''));
+  if (!normalizedPhone || normalizedPhone.length < 9) {
+    res.status(400).json({
+      ok: false,
+      error: 'እባክዎ ትክክለኛ ስልክ ቁጥር ያስገቡ (09******** ወይም 07********)።',
+    });
+    return;
+  }
+
+  const cleanPassword = String(password || '').trim();
+  if (!cleanPassword || cleanPassword.length < 4) {
+    res.status(400).json({
+      ok: false,
+      error: 'እባክዎ ቢያንስ 4 ፊደላት ወይም ቁጥሮች ያሉት የይለፍ ቃል (Password) ያስገቡ።',
+    });
+    return;
+  }
+
+  let player = playersByPhone.get(normalizedPhone);
+  if (!player) {
+    player = ensurePlayerRecord(
+      normalizedPhone,
+      (name || '').trim() || `Player_${normalizedPhone.slice(-4)}`
+    );
+    player.passwordHash = cleanPassword;
+  }
+
+  if (player.isBlocked) {
+    res.status(403).json({
+      ok: false,
+      error: 'ይህ አካውንት ታግዷል (Blocked)። እባክዎ የደንበኞች ድጋፍን ያነጋግሩ።',
+    });
+    return;
+  }
+
+  // Verify password if already set
+  if (
+    player.passwordHash &&
+    player.passwordHash !== '****' &&
+    player.passwordHash !== cleanPassword
+  ) {
+    res.status(401).json({
+      ok: false,
+      invalidPassword: true,
+      error: 'የተሳሳተ የይለፍ ቃል (Incorrect Password)! የይለፍ ቃልዎ ከጠፋብዎት "Password ረሳሁ (Forgot Password)" የሚለውን ይጫኑ።',
+    });
+    return;
+  }
+
+  if (!player.passwordHash || player.passwordHash === '****') {
+    player.passwordHash = cleanPassword;
+  }
+  player.updatedAt = new Date().toLocaleString();
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+
+  res.json({
+    ok: true,
+    player,
+    accountToken: createSignedPlayerToken(player),
+    players: Array.from(playersByPhone.values()),
+    message: `እንኳን ደህና መጡ ${player.name}!`,
+  });
+});
+
+// 4. Forgot Password -> Verify Telegram OTP & Set New Password
+app.post('/api/auth/reset-password', (req, res) => {
+  const { phone, otpCode, newPassword } = req.body as {
+    phone?: string;
+    otpCode?: string;
+    newPassword?: string;
+  };
+  const normalizedPhone = normalizeEthiopianPhone(String(phone || ''));
+  if (!normalizedPhone || normalizedPhone.length < 9) {
+    res.status(400).json({ ok: false, error: 'እባክዎ ትክክለኛ ስልክ ቁጥር ያስገቡ።' });
+    return;
+  }
+
+  const cleanOtp = String(otpCode || '').trim();
+  const pending = pendingOtpByPhone.get(normalizedPhone);
+  if (!cleanOtp || !pending || pending.expiresAt < Date.now() || pending.code !== cleanOtp) {
+    res.status(400).json({
+      ok: false,
+      error: 'የተሳሳተ ወይም ጊዜው ያለፈበት የማረጋገጫ ኮድ (OTP)! እባክዎ በ Telegram የተላከውን ባለ 6-አሃዝ ኮድ ያስገቡ።',
+    });
+    return;
+  }
+
+  const cleanPass = String(newPassword || '').trim();
+  if (cleanPass.length < 4) {
+    res.status(400).json({
+      ok: false,
+      error: 'አዲሱ የይለፍ ቃል ቢያንስ 4 ፊደላት ወይም ቁጥሮች መሆን አለበት።',
+    });
+    return;
+  }
+
+  const player = ensurePlayerRecord(normalizedPhone);
+  player.passwordHash = cleanPass;
+  player.updatedAt = new Date().toLocaleString();
+  pendingOtpByPhone.delete(normalizedPhone);
+
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+
+  res.json({
+    ok: true,
+    player,
+    accountToken: createSignedPlayerToken(player),
+    players: Array.from(playersByPhone.values()),
+    message: 'አዲሱ የይለፍ ቃልዎ (Password) በተሳካ ሁኔታ ተቀይሯል!',
+  });
+});
+
+// ============================================================================
+// PRODUCTION UPGRADE API ROUTES:
+// 1. Live Multiplayer Server Room & Real-Time Cartela Locking
+// 2. Per-Player Database Accounts & Admin Deposit/Withdraw Approval Queue
+// 3. Server-Verified Admin PIN / Password Protection
+// ============================================================================
+
+// Direct HTTP Download Endpoint for the signed Native Android APK (Ezi-Bingo.apk)
+const serveNativeAndroidApkFile = async (_req: express.Request, res: express.Response) => {
+  const apkCandidates = [
+    '/tmp/Ezi-Bingo.apk',
+    path.join(__dirname, 'public', 'Ezi-Bingo.apk'),
+    path.join(__dirname, 'dist', 'Ezi-Bingo.apk'),
+  ];
+  for (const apkPath of apkCandidates) {
+    if (fs.existsSync(apkPath)) {
+      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+      res.setHeader('Content-Disposition', 'attachment; filename="Ezi-Bingo.apk"');
+      res.sendFile(apkPath);
+      return;
+    }
+  }
+  // Fetch from Telegram CDN via our permanent file_id and cache in /tmp so public/ and dist/ stay small and fast!
+  const firstToken =
+    Array.from(activeBots.keys())[0] || persistedBotTokensCache[0]?.token;
+  const EZI_APK_TELEGRAM_FILE_ID =
+    'BQACAgQAAxkDAAICb2rMcRJ8tXu221eD-Spd-oCKW36bAALuHgAC-YRhUk48IbK4pANjPQQ';
+  if (firstToken) {
+    try {
+      const gfRes = await fetch(
+        `https://api.telegram.org/bot${firstToken}/getFile?file_id=${EZI_APK_TELEGRAM_FILE_ID}`
+      );
+      const gfData = await gfRes.json();
+      const filePath = gfData?.result?.file_path;
+      if (filePath) {
+        const dlRes = await fetch(`https://api.telegram.org/file/bot${firstToken}/${filePath}`);
+        if (dlRes.ok) {
+          const arrBuf = await dlRes.arrayBuffer();
+          const buf = Buffer.from(arrBuf);
+          try {
+            fs.writeFileSync('/tmp/Ezi-Bingo.apk', buf);
+          } catch {
+            // ignore cache write error
+          }
+          res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+          res.setHeader('Content-Disposition', 'attachment; filename="Ezi-Bingo.apk"');
+          res.setHeader('Content-Length', String(buf.length));
+          res.send(buf);
+          return;
+        }
+      }
+    } catch {
+      // ignore fallback error
+    }
+  }
+  res.status(404).send('APK not found');
+};
+
+app.get('/Sun-Bingo.apk', serveNativeAndroidApkFile);
+app.get('/Ezi-Bingo.apk', serveNativeAndroidApkFile);
+app.get('/download-apk', serveNativeAndroidApkFile);
+app.get('/api/download-apk', serveNativeAndroidApkFile);
+
+// Ensure any stale browser Service Worker (/sw.js or /dev-sw.js) immediately unregisters and clears outdated precaches so refreshing never produces a blank screen
+app.get(['/sw.js', '/dev-sw.js', '/registerSW.js'], (_req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.send(`
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).then(() => self.registration.unregister())
+  );
+});
+`);
+});
+
+// Serve Digital Asset Links for fullscreen TWA verification
+app.get('/.well-known/assetlinks.json', (_req, res) => {
+  const assetLinksCandidates = [
+    path.join(__dirname, 'public', '.well-known', 'assetlinks.json'),
+    path.join(__dirname, 'dist', '.well-known', 'assetlinks.json'),
+  ];
+  for (const p of assetLinksCandidates) {
+    if (fs.existsSync(p)) {
+      res.setHeader('Content-Type', 'application/json');
+      res.sendFile(p);
+      return;
+    }
+  }
+  res.json([
+    {
+      relation: ['delegate_permission/common.handle_all_urls'],
+      target: {
+        namespace: 'android_app',
+        package_name: 'com.ezibingo.pro',
+        sha256_cert_fingerprints: [
+          '0C:2F:13:0A:26:86:AE:9C:D2:1D:5C:EA:FD:63:9D:E4:F8:CC:58:B2:1C:14:E3:FA:C6:76:15:73:B2:9F:38:2B',
+        ],
+      },
+    },
+    {
+      relation: ['delegate_permission/common.handle_all_urls'],
+      target: {
+        namespace: 'android_app',
+        package_name: 'com.ezibingo.app',
+        sha256_cert_fingerprints: [
+          '0C:2F:13:0A:26:86:AE:9C:D2:1D:5C:EA:FD:63:9D:E4:F8:CC:58:B2:1C:14:E3:FA:C6:76:15:73:B2:9F:38:2B',
+          'C0:EC:05:21:92:03:79:4C:99:FF:0A:7E:CC:35:7F:00:B9:E3:68:D3:6B:F2:0B:F5:4A:FA:B0:7C:EE:40:36:0F',
+        ],
+      },
+    },
+  ]);
+});
+
+app.get('/manifest.jso', (_req, res) => {
+  const p = path.join(__dirname, 'public', 'manifest.json');
+  if (fs.existsSync(p)) {
+    res.setHeader('Content-Type', 'application/manifest+json');
+    res.sendFile(p);
+    return;
+  }
+  res.status(404).end();
+});
+
+// Direct HTTP Download Endpoint for the complete 1.7 MB self-contained Android App file
+const serveStandaloneAndroidAppFile = (_req: express.Request, res: express.Response) => {
+  const candidates = [
+    path.join(__dirname, 'public', 'Ezi-Bingo-App.html'),
+    path.join(__dirname, 'dist', 'Ezi-Bingo-App.html'),
+  ];
+  for (const filePath of candidates) {
+    if (fs.existsSync(filePath)) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename="Ezi-Bingo-Android-App.html"'
+      );
+      res.sendFile(filePath);
+      return;
+    }
+  }
+  res.redirect(SHARED_APP_URL);
+};
+
+app.get('/download-android-app', serveStandaloneAndroidAppFile);
+app.get('/Sun-Bingo-Android-App.html', serveStandaloneAndroidAppFile);
+app.get('/Ezi-Bingo-Android-App.html', serveStandaloneAndroidAppFile);
+
+// ============================================================================
+// FULL PROJECT SOURCE CODE & ASSETS ZIP ARCHIVE GENERATOR
+// ============================================================================
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+
+function computeCrc32(buf: Buffer): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc = CRC32_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function collectProjectFilesForZip(
+  dirPath: string,
+  baseDir: string,
+  rootFolder = 'Sun-Ramino-Project',
+  out: { relPath: string; data: Buffer }[] = []
+): { relPath: string; data: Buffer }[] {
+  const SKIP_DIRS = new Set([
+    'node_modules',
+    '.git',
+    '.vite',
+    '.aistudio',
+    'aistudio',
+    'dist',
+  ]);
+  const SKIP_FILES = new Set([
+    '.telegram-bots.json',
+    '.render-deploy.json',
+    'package-lock.json',
+    'bun.lock',
+    'fast_keno_source_code.zip',
+    'server.js',
+  ]);
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    if (SKIP_FILES.has(entry.name)) continue;
+    if (entry.name.startsWith('.bots-') || entry.name.startsWith('.server-state')) continue;
+    const fullPath = path.join(dirPath, entry.name);
+    const relPath = path.relative(baseDir, fullPath).split(path.sep).join('/');
+    if (entry.isDirectory()) {
+      collectProjectFilesForZip(fullPath, baseDir, rootFolder, out);
+    } else if (entry.isFile()) {
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.size <= 15 * 1024 * 1024) {
+          out.push({
+            relPath: `${rootFolder}/${relPath}`,
+            data: fs.readFileSync(fullPath),
+          });
+        }
+      } catch {
+        // ignore unreadable file
+      }
+    }
+  }
+  return out;
+}
+
+function buildFullProjectZipBuffer(rootFolder = 'Sun-Ramino-Project'): Buffer {
+  const files = collectProjectFilesForZip(__dirname, __dirname, rootFolder);
+  const readmeText = `# SUN Ramino — Full-Stack Production Server
+
+ይህ ሙሉ የ SUN Ramino (ራሚኖ ብቻ + የቴሌግራም ቦት + Voice Chat + Wallet & Admin Panel + WebSocket Real-Time Server) የሚሰራ ሙሉ ፕሮጀክት ነው።
+
+## 1. በ Render.com ላይ ለመጫን (Deploy on Render):
+1. ይህንን \`.ZIP\` ፋይል Unzip (Extract) ያድርጉ።
+2. \`${rootFolder}\` ፎልደር ውስጥ ያሉትን ፋይሎች ወደ GitHub Repository ይጫኑ።
+3. በ Render.com ላይ **New Web Service** ይፍጠሩ እና GitHub repo-ውን ይምረጡ፦
+   - **Build Command:** \`npm install --legacy-peer-deps && npm run build\`
+   - **Start Command:** \`npm start\`
+4. ከተጫነ በኋላ አዲሱን URL ከ \`@Sungamsbot\` / Admin Panel ጋር ያገናኙ።
+
+## 2. በኮምፒውተር ወይም VPS ላይ ለማስጀመር:
+\`\`\`bash
+npm install
+npm run build
+npm start
+\`\`\`
+`;
+  files.push({
+    relPath: `${rootFolder}/DEPLOY_GUIDE.md`,
+    data: Buffer.from(readmeText, 'utf8'),
+  });
+
+  const localFileChunks: Buffer[] = [];
+  const centralDirChunks: Buffer[] = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const nameBuf = Buffer.from(file.relPath, 'utf8');
+    const uncompressed = file.data;
+    const crc = computeCrc32(uncompressed);
+    const compressed = zlib.deflateRawSync(uncompressed);
+    const useDeflate = compressed.length < uncompressed.length;
+    const payload = useDeflate ? compressed : uncompressed;
+    const method = useDeflate ? 8 : 0;
+
+    // Local file header (30 bytes + filename)
+    const localHeader = Buffer.alloc(30 + nameBuf.length);
+    localHeader.writeUInt32LE(0x04034b50, 0); // signature
+    localHeader.writeUInt16LE(20, 4); // version needed
+    localHeader.writeUInt16LE(0x0800, 6); // UTF-8 flag
+    localHeader.writeUInt16LE(method, 8); // compression method
+    localHeader.writeUInt16LE(0, 10); // mod time
+    localHeader.writeUInt16LE(0x5421, 12); // mod date
+    localHeader.writeUInt32LE(crc, 14); // crc32
+    localHeader.writeUInt32LE(payload.length, 18); // compressed size
+    localHeader.writeUInt32LE(uncompressed.length, 22); // uncompressed size
+    localHeader.writeUInt16LE(nameBuf.length, 26); // file name length
+    localHeader.writeUInt16LE(0, 28); // extra field length
+    nameBuf.copy(localHeader, 30);
+
+    localFileChunks.push(localHeader, payload);
+
+    // Central directory header (46 bytes + filename)
+    const centralHeader = Buffer.alloc(46 + nameBuf.length);
+    centralHeader.writeUInt32LE(0x02014b50, 0); // signature
+    centralHeader.writeUInt16LE(20, 4); // version made by
+    centralHeader.writeUInt16LE(20, 6); // version needed
+    centralHeader.writeUInt16LE(0x0800, 8); // UTF-8 flag
+    centralHeader.writeUInt16LE(method, 10); // compression method
+    centralHeader.writeUInt16LE(0, 12); // mod time
+    centralHeader.writeUInt16LE(0x5421, 14); // mod date
+    centralHeader.writeUInt32LE(crc, 16); // crc32
+    centralHeader.writeUInt32LE(payload.length, 20); // compressed size
+    centralHeader.writeUInt32LE(uncompressed.length, 24); // uncompressed size
+    centralHeader.writeUInt16LE(nameBuf.length, 28); // file name length
+    centralHeader.writeUInt16LE(0, 30); // extra length
+    centralHeader.writeUInt16LE(0, 32); // comment length
+    centralHeader.writeUInt16LE(0, 34); // disk number
+    centralHeader.writeUInt16LE(0, 36); // internal attrs
+    centralHeader.writeUInt32LE(0, 38); // external attrs
+    centralHeader.writeUInt32LE(offset, 42); // relative offset of local header
+    nameBuf.copy(centralHeader, 46);
+
+    centralDirChunks.push(centralHeader);
+    offset += localHeader.length + payload.length;
+  }
+
+  const centralDirBuf = Buffer.concat(centralDirChunks);
+  const endOfCentralDir = Buffer.alloc(22);
+  endOfCentralDir.writeUInt32LE(0x06054b50, 0); // EOCD signature
+  endOfCentralDir.writeUInt16LE(0, 4); // disk number
+  endOfCentralDir.writeUInt16LE(0, 6); // central dir start disk
+  endOfCentralDir.writeUInt16LE(files.length, 8); // entries on disk
+  endOfCentralDir.writeUInt16LE(files.length, 10); // total entries
+  endOfCentralDir.writeUInt32LE(centralDirBuf.length, 12); // size of central dir
+  endOfCentralDir.writeUInt32LE(offset, 16); // offset of central dir
+  endOfCentralDir.writeUInt16LE(0, 20); // comment length
+
+  return Buffer.concat([...localFileChunks, centralDirBuf, endOfCentralDir]);
+}
+
+const serveFullProjectZip = (_req: express.Request, res: express.Response) => {
+  try {
+    const zipBuffer = buildFullProjectZipBuffer('Sun-Ramino-Project');
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="Sun-Ramino-Project.zip"'
+    );
+    res.setHeader('Content-Length', String(zipBuffer.length));
+    res.send(zipBuffer);
+  } catch (err) {
+    console.error('Failed to build project zip:', err);
+    res.status(500).json({ ok: false, error: 'Failed to create ZIP archive' });
+  }
+};
+
+app.get('/api/download-full-project', serveFullProjectZip);
+app.get('/api/download-ramino-project', serveFullProjectZip);
+app.get('/Sun-Ramino-Project.zip', serveFullProjectZip);
+app.get('/Ezi-Bingo-Full-Project.zip', serveFullProjectZip);
+
+const RENDER_DEPLOY_CONFIG_PATH = path.join(__dirname, '.render-deploy.json');
+
+interface RenderDeployConfig {
+  deployHookUrl: string;
+  renderAppUrl: string;
+  lastDeployAt?: number;
+  lastDeployStatus?: string;
+}
+
+function loadRenderDeployConfig(): RenderDeployConfig {
+  try {
+    if (fs.existsSync(RENDER_DEPLOY_CONFIG_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(RENDER_DEPLOY_CONFIG_PATH, 'utf-8'));
+      return {
+        deployHookUrl: String(parsed?.deployHookUrl || process.env.RENDER_DEPLOY_HOOK_URL || '').trim(),
+        renderAppUrl: String(parsed?.renderAppUrl || 'https://sun-bingo-faap.onrender.com').trim(),
+        lastDeployAt: typeof parsed?.lastDeployAt === 'number' ? parsed.lastDeployAt : undefined,
+        lastDeployStatus: typeof parsed?.lastDeployStatus === 'string' ? parsed.lastDeployStatus : undefined,
+      };
+    }
+  } catch {}
+  return {
+    deployHookUrl: String(process.env.RENDER_DEPLOY_HOOK_URL || '').trim(),
+    renderAppUrl: 'https://sun-bingo-faap.onrender.com',
+  };
+}
+
+function saveRenderDeployConfig(cfg: RenderDeployConfig) {
+  try {
+    fs.writeFileSync(RENDER_DEPLOY_CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed saving .render-deploy.json:', err);
+  }
+}
+
+function maskRenderDeployHook(url: string): string {
+  const clean = url.trim();
+  if (!clean) return '';
+  return clean.replace(/([?&]key=)[^&]+/i, '$1••••••••');
+}
+
+async function triggerRenderDeployHook(hookUrlOverride?: string): Promise<{
+  ok: boolean;
+  status: number;
+  bodyText: string;
+  message: string;
+}> {
+  const cfg = loadRenderDeployConfig();
+  const targetHook = (hookUrlOverride || cfg.deployHookUrl || process.env.RENDER_DEPLOY_HOOK_URL || '').trim();
+  if (!targetHook || !/^https:\/\/api\.render\.com\/deploy\/srv-[A-Za-z0-9_-]+/i.test(targetHook)) {
+    return {
+      ok: false,
+      status: 400,
+      bodyText: '',
+      message: 'ትክክለኛ የ Render Deploy Hook URL አልተገኘም (ምሳሌ: https://api.render.com/deploy/srv-xxxx?key=yyyy)።',
+    };
+  }
+  const resp = await fetch(targetHook, { method: 'POST' });
+  const bodyText = await resp.text();
+  if (!resp.ok) {
+    return {
+      ok: false,
+      status: resp.status,
+      bodyText,
+      message: `Render Deploy Hook አልተቀበለም (HTTP ${resp.status})`,
+    };
+  }
+  saveRenderDeployConfig({
+    ...cfg,
+    deployHookUrl: targetHook,
+    lastDeployAt: Date.now(),
+    lastDeployStatus: 'triggered',
+  });
+  return {
+    ok: true,
+    status: resp.status,
+    bodyText,
+    message: '✅ Render Auto-Deploy በተሳካ ሁኔታ ተጀምሯል! በ 1-2 ደቂቃ ውስጥ Live ይሆናል።',
+  };
+}
+
+app.get('/api/admin/render-config', (_req, res) => {
+  const cfg = loadRenderDeployConfig();
+  let gitHead = '';
+  try {
+    gitHead = execSync('git log -n 1 --oneline', { cwd: __dirname, encoding: 'utf8', timeout: 3000 }).trim();
+  } catch {
+    gitHead = '';
+  }
+  res.json({
+    ok: true,
+    hasDeployHook: Boolean(cfg.deployHookUrl),
+    maskedDeployHook: maskRenderDeployHook(cfg.deployHookUrl),
+    renderAppUrl: cfg.renderAppUrl,
+    lastDeployAt: cfg.lastDeployAt || null,
+    lastDeployStatus: cfg.lastDeployStatus || null,
+    isRenderHost: IS_RENDER_HOST,
+    hasDatabaseUrl: Boolean(getPostgresConnectionString()),
+    pgReady,
+    pgError: lastPgError || null,
+    playersCount: playersByPhone.size,
+    nodeVersion: process.version,
+    autoDeployBlueprint: true,
+    uptimeSeconds: Math.floor(process.uptime()),
+    gitHead,
+  });
+});
+
+app.post('/api/admin/render-config', (req, res) => {
+  const { deployHookUrl, renderAppUrl } = req.body as {
+    deployHookUrl?: string;
+    renderAppUrl?: string;
+  };
+  const cfg = loadRenderDeployConfig();
+  const nextHook =
+    deployHookUrl !== undefined ? String(deployHookUrl).trim() : cfg.deployHookUrl;
+  if (nextHook && !/^https:\/\/api\.render\.com\/deploy\/srv-[A-Za-z0-9_-]+/i.test(nextHook)) {
+    res.status(400).json({
+      ok: false,
+      error: 'Deploy Hook URL በ https://api.render.com/deploy/srv-... መጀመር አለበት።',
+    });
+    return;
+  }
+  const nextUrl =
+    renderAppUrl !== undefined && String(renderAppUrl).trim()
+      ? String(renderAppUrl).trim()
+      : cfg.renderAppUrl;
+
+  const updated: RenderDeployConfig = {
+    ...cfg,
+    deployHookUrl: nextHook,
+    renderAppUrl: nextUrl,
+  };
+  saveRenderDeployConfig(updated);
+  res.json({
+    ok: true,
+    hasDeployHook: Boolean(updated.deployHookUrl),
+    maskedDeployHook: maskRenderDeployHook(updated.deployHookUrl),
+    renderAppUrl: updated.renderAppUrl,
+    message: '✅ የ Render Auto-Deploy ቅንብር ተቀምጧል!',
+  });
+});
+
+app.post('/api/admin/render-deploy', async (req, res) => {
+  try {
+    const { deployHookUrl } = (req.body || {}) as { deployHookUrl?: string };
+    const result = await triggerRenderDeployHook(deployHookUrl);
+    if (!result.ok) {
+      res.status(result.status || 400).json({
+        ok: false,
+        error: result.message,
+        details: result.bodyText,
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      message: result.message,
+      details: result.bodyText,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      error: `❌ Render Deploy Hook ስህተት፦ ${err?.message || String(err)}`,
+    });
+  }
+});
+
+// 1-Click Automated Git Push to GitHub (triggers Render Auto-Deploy automatically)
+app.post('/api/admin/git-push', async (req, res) => {
+  let sanitizedPublicUrl = '';
+  let cleanToken = '';
+  const redactSecret = (text: string) => {
+    let out = String(text || '');
+    if (cleanToken) {
+      out = out.split(cleanToken).join('***');
+      out = out.split(encodeURIComponent(cleanToken)).join('***');
+    }
+    return out.replace(/https:\/\/[^@\s]+@github\.com/gi, 'https://***@github.com');
+  };
+
+  try {
+    const { repoUrl, token, branch = 'main', commitMessage, deployHookUrl } = (req.body || {}) as {
+      repoUrl?: string;
+      token?: string;
+      branch?: string;
+      commitMessage?: string;
+      deployHookUrl?: string;
+    };
+
+    const rawUrl = String(repoUrl || '').trim().replace(/^http:\/\//i, 'https://');
+    cleanToken = String(token || '').trim();
+    const safeBranch = String(branch || 'main').trim().replace(/[^a-zA-Z0-9._/-]/g, '') || 'main';
+
+    sanitizedPublicUrl = rawUrl
+      .replace(/^https:\/\/[^@]+@(?:www\.)?github\.com\//i, 'https://github.com/')
+      .replace(/^https:\/\/www\.github\.com\//i, 'https://github.com/');
+    if (/^github\.com\//i.test(sanitizedPublicUrl)) {
+      sanitizedPublicUrl = `https://${sanitizedPublicUrl}`;
+    }
+    if (/^https:\/\/github\.com\/[^/]+\/[^/]+$/i.test(sanitizedPublicUrl) && !sanitizedPublicUrl.endsWith('.git')) {
+      sanitizedPublicUrl = `${sanitizedPublicUrl}.git`;
+    }
+
+    if (!sanitizedPublicUrl) {
+      res.status(400).json({
+        ok: false,
+        error: '❌ እባክዎ የ GitHub Repository URL ያስገቡ (ለምሳሌ: https://github.com/ezana0923/Sun-bingo.git)።',
+      });
+      return;
+    }
+
+    if (!cleanToken) {
+      res.status(400).json({
+        ok: false,
+        error: '❌ እባክዎ ትክክለኛ የGitHub Personal Access Token (PAT) ያስገቡ!',
+      });
+      return;
+    }
+
+    if (IS_RENDER_HOST) {
+      res.status(400).json({
+        ok: false,
+        error: '⚠️ ይህ Render Live ሰርቨር ነው — አዲሱን ኮድ Push ለማድረግ እባክዎ AI Studio Preview ሊንኩን (ais-dev-.../#admin0923) ይጠቀሙ!',
+      });
+      return;
+    }
+
+    const authRemoteUrl = sanitizedPublicUrl.replace(
+      /^https:\/\/github\.com\//i,
+      `https://x-access-token:${encodeURIComponent(cleanToken)}@github.com/`
+    );
+
+    const gitEnv = {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GCM_INTERACTIVE: 'never',
+    };
+
+    // Clear any stale git lockfile if a previous git command was interrupted
+    const gitLockPath = path.join(__dirname, '.git', 'index.lock');
+    try {
+      if (fs.existsSync(gitLockPath)) fs.unlinkSync(gitLockPath);
+    } catch {}
+
+    // Ensure safe directory & initialize git repository if missing
+    try {
+      execSync(`git config --global --add safe.directory "${__dirname}"`, { env: gitEnv });
+    } catch {}
+
+    if (!fs.existsSync(path.join(__dirname, '.git'))) {
+      execSync('git init', { cwd: __dirname, env: gitEnv });
+    }
+
+    execSync('git config user.name "Sun Games Bot" && git config user.email "admin@sungames.et"', {
+      cwd: __dirname,
+      env: gitEnv,
+    });
+    try {
+      execSync('git config http.postBuffer 524288000', { cwd: __dirname, env: gitEnv });
+    } catch {}
+
+    // Stage and commit latest changes cleanly (respecting .gitignore)
+    const msg = (commitMessage || 'Auto-deploy Sun Games to Render').replace(/["`$\\]/g, '');
+    execSync('git add -A', { cwd: __dirname, env: gitEnv });
+    try {
+      execSync(`git commit -m "${msg}"`, { cwd: __dirname, env: gitEnv });
+    } catch {
+      // No new changes to commit
+    }
+
+    try {
+      execSync('git remote remove origin', { cwd: __dirname, env: gitEnv });
+    } catch {}
+
+    execSync(`git remote add origin "${authRemoteUrl}"`, { cwd: __dirname, env: gitEnv });
+    execSync(`git branch -M "${safeBranch}"`, { cwd: __dirname, env: gitEnv });
+
+    // Push to GitHub (capture stderr too since git writes progress/errors to stderr)
+    const pushOutput = execSync(`git push -u origin "${safeBranch}" --force 2>&1`, {
+      cwd: __dirname,
+      encoding: 'utf8',
+      timeout: 120000,
+      env: gitEnv,
+    });
+
+    // Immediately strip PAT from .git/config remote origin so no secret stays on disk
+    try {
+      execSync(`git remote set-url origin "${sanitizedPublicUrl}"`, { cwd: __dirname, env: gitEnv });
+    } catch {}
+
+    // If Render Deploy Hook URL is configured, also trigger Render directly
+    let deployHookResult: { ok: boolean; message: string; details?: string } | null = null;
+    const cfg = loadRenderDeployConfig();
+    const effectiveHook = (deployHookUrl || cfg.deployHookUrl || process.env.RENDER_DEPLOY_HOOK_URL || '').trim();
+    if (effectiveHook) {
+      deployHookResult = await triggerRenderDeployHook(effectiveHook).catch((e) => ({
+        ok: false,
+        message: String(e),
+      }));
+    }
+
+    res.json({
+      ok: true,
+      message: deployHookResult?.ok
+        ? '✅ ኮዱ ወደ GitHub ተልኳል እና Render Auto-Deploy በቀጥታ ተጀምሯል!'
+        : '✅ ኮዱ በተሳካ ሁኔታ ወደ GitHub ተልኳል (git push succeeded)! Render አሁን አውቶማቲክ Deploy ያደርጋል።',
+      output: redactSecret(pushOutput),
+      deployHookTriggered: Boolean(deployHookResult?.ok),
+    });
+  } catch (err: any) {
+    if (sanitizedPublicUrl) {
+      try {
+        execSync(`git remote set-url origin "${sanitizedPublicUrl}"`, { cwd: __dirname });
+      } catch {}
+    }
+    const rawOut = Buffer.isBuffer(err?.stdout) ? err.stdout.toString('utf8') : String(err?.stdout || '');
+    const rawErr = Buffer.isBuffer(err?.stderr) ? err.stderr.toString('utf8') : String(err?.stderr || '');
+    const rawDetail = redactSecret(rawErr || rawOut || err?.message || String(err));
+    const isAuthFail = /Authentication failed|Invalid username or password|403|401|Write access to repository not granted|Permission to .* denied|bad credentials/i.test(rawDetail);
+    const isTimeout = /ETIMEDOUT|timed out/i.test(rawDetail) || err?.code === 'ETIMEDOUT';
+    console.error('Git push error:', rawDetail);
+    res.status(500).json({
+      ok: false,
+      error: isAuthFail
+        ? '❌ የGitHub Token ዎ ጊዜው አልፎበታል ወይም "repo" ፍቃድ የለውም! እባክዎ ከGitHub Settings አዲስ Token አውጥተው ይሞክሩ።'
+        : isTimeout
+        ? '❌ GitHub Push ሰዓቱ አልቋል (Timed out) — እባክዎ እንደገና ይሞክሩ።'
+        : `❌ git push አልተሳካም፦ ${rawDetail.split('\n').filter(Boolean).slice(-2).join(' | ')}`,
+      details: rawDetail,
+    });
+  }
+});
+
+// Real-Time Server-Sent Events (SSE) Stream so even phones behind WebSocket-blocking proxies get instant (<20ms) real-time updates!
+app.get('/api/live-room/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  sseClients.add(res);
+
+  const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+  const initialPayload = JSON.stringify({
+    type: 'room:sync',
+    changedMode: 'both',
+    fastRoom: fastRoomsByStake[10],
+    fastLockedCartelas: lockedObj[10] || [],
+    fastRoomsByStake: roomsObj,
+    fastLockedCartelasByStake: lockedObj,
+    regularRoom: regularLiveRoomState,
+    regularLockedCartelas: Array.from(regularRoomLockedCartelas.values()),
+    transactions: serverTransactions,
+    players: Array.from(playersByPhone.values()),
+    bankAccounts: persistedBankAccounts,
+    homeAdsEnabled: persistedHomeAdsEnabled,
+    homeHeroAds: persistedHomeHeroAds,
+    homeHeroAdsVersion,
+    requireDepositApproval: adminPinConfig.requireDepositApproval,
+    depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
+    depositBonusPercent: adminPinConfig.depositBonusPercent,
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+    autoNotifyGames: adminPinConfig.autoNotifyGames,
+    timestamp: Date.now(),
+  });
+  safeSseWrite(res, initialPayload);
+  broadcastRealtimeSync();
+
+  req.on('close', () => {
+    sseClients.delete(res);
+    broadcastRealtimeSync();
+  });
+  res.on('error', () => {
+    sseClients.delete(res);
+  });
+});
+
+// ============================================================================
+// RENDER.COM & GITHUB CRON-JOB INTEGRATION ENDPOINTS
+// Keeps Render.com free tier awake 24/7 without sleeping!
+// ============================================================================
+app.get('/api/health', (_req, res) => {
+  const mem = process.memoryUsage();
+  res.json({
+    status: 'ok',
+    service: 'Ezi-Bingo Live Multiplayer Server',
+    uptimeSeconds: Math.floor(process.uptime()),
+    memoryMB: {
+      rss: Math.round(mem.rss / 1048576),
+      heapUsed: Math.round(mem.heapUsed / 1048576),
+      heapTotal: Math.round(mem.heapTotal / 1048576),
+    },
+    wsClients: wsClients.size,
+    sseClients: sseClients.size,
+    storageBackend: pgReady ? 'postgresql' : 'local-disk',
+    database: pgReady
+      ? 'postgresql-connected'
+      : getPostgresConnectionString()
+      ? 'postgresql-reconnecting'
+      : 'local-disk',
+    playersCount: playersByPhone.size,
+    timestamp: Date.now(),
+    dateTime: new Date().toISOString(),
+  });
+});
+
+app.all(['/api/cron', '/api/keep-alive'], (req, res) => {
+  const ua = req.headers['user-agent'] || 'cron-job';
+  res.json({
+    ok: true,
+    message: 'Render keep-alive ping successful. Instance is active!',
+    source: ua,
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: Date.now(),
+  });
+});
+
+const activeHttpClients = new Map<string, number>();
+
+app.get('/api/live-room/state', (req, res) => {
+  const clientIdParam = String(req.query.clientId || '').trim();
+  const rawPhoneParam = String(req.query.phone || '').trim();
+  const phoneParam = normalizeEthiopianPhone(rawPhoneParam) || rawPhoneParam;
+  const nameParam = String(req.query.name || '').trim();
+  const accountTokenParam = String(req.headers['x-account-token'] || req.query.accountToken || '').trim();
+  const modeParam = String(req.query.mode || 'fast') === 'regular' ? 'regular' : 'fast';
+  const stakeParam = normalizeFastStakeTier(req.query.stake);
+
+  if (accountTokenParam) {
+    restorePlayerFromSignedTokenIfMissing(accountTokenParam);
+  }
+
+  if (clientIdParam) {
+    activeHttpClients.set(clientIdParam, Date.now());
+  }
+  const now = Date.now();
+  for (const [cid, lastSeen] of activeHttpClients.entries()) {
+    if (now - lastSeen > 12000) {
+      activeHttpClients.delete(cid);
+    }
+  }
+
+  const { room, lockedMap } = getRoomByMode(modeParam, stakeParam);
+  const resolvedPhone = phoneParam || `0911${(clientIdParam || '1001').slice(-6)}`;
+  const player =
+    phoneParam && (playersByPhone.has(phoneParam) || /^0[79]\d{8}$/.test(phoneParam))
+      ? ensurePlayerRecord(phoneParam, nameParam || `Player_${phoneParam.slice(-4)}`)
+      : playersByPhone.get(resolvedPhone) || {
+          id: `usr-${resolvedPhone.slice(-4)}`,
+          phone: resolvedPhone,
+          name: nameParam || `Player_${resolvedPhone.slice(-4)}`,
+          balance: 15.0,
+          bonusBalance: 15.0,
+          referralEarnings: 0,
+          referredCount: 0,
+          isBlocked: false,
+          updatedAt: new Date().toLocaleString(),
+        };
+  const allLocked = Array.from(lockedMap.values());
+  const lockedByOthers = allLocked
+    .filter((item) =>
+      clientIdParam && item.clientId
+        ? item.clientId !== clientIdParam
+        : item.ownerPhone !== resolvedPhone
+    )
+    .map((item) => ({
+      cartelaId: item.cartelaId,
+      ownerName: item.ownerName,
+      ownerPhone: item.ownerPhone,
+      clientId: item.clientId,
+      isBonus: Boolean(item.isBonus),
+    }));
+
+  const liveConnectionsCount = Math.max(
+    1,
+    activeHttpClients.size,
+    Array.from(wsClients).filter((c) => c.readyState === WebSocket.OPEN).length + sseClients.size
+  );
+  for (const stk of FAST_STAKE_TIERS) {
+    const r = fastRoomsByStake[stk];
+    const lMap = fastLockedCartelasByStake[stk];
+    r.onlinePlayersCount = Math.max(
+      liveConnectionsCount,
+      new Set(Array.from(lMap.values()).map((c) => c.clientId || c.ownerPhone)).size
+    );
+  }
+  regularLiveRoomState.onlinePlayersCount = Math.max(
+    liveConnectionsCount,
+    new Set(Array.from(regularRoomLockedCartelas.values()).map((c) => c.clientId || c.ownerPhone)).size
+  );
+
+  const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+
+  const clientAdsVer = Number(req.query.adsVer ?? -1);
+  const includeHomeAds = req.query.includeAds === '1' || clientAdsVer !== homeHeroAdsVersion;
+
+  res.json({
+    ok: true,
+    room,
+    fastRoom: room,
+    fastLockedCartelas: allLocked,
+    fastRoomsByStake: roomsObj,
+    fastLockedCartelasByStake: lockedObj,
+    regularRoom: regularLiveRoomState,
+    regularLockedCartelas: Array.from(regularRoomLockedCartelas.values()),
+    lockedCartelas: allLocked,
+    lockedByOthers,
+    onlinePlayersCount: room.onlinePlayersCount,
+    player,
+    accountToken: playersByPhone.has(player.phone) ? createSignedPlayerToken(player) : undefined,
+    players: Array.from(playersByPhone.values()),
+    bankAccounts: persistedBankAccounts,
+    homeAdsEnabled: persistedHomeAdsEnabled,
+    ...(includeHomeAds ? { homeHeroAds: persistedHomeHeroAds } : {}),
+    homeHeroAdsVersion,
+    transactions: serverTransactions,
+    pendingCount: serverTransactions.filter((t) => t.status === 'pending').length,
+    requireDepositApproval: adminPinConfig.requireDepositApproval,
+    depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
+    depositBonusPercent: adminPinConfig.depositBonusPercent,
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+    autoNotifyGames: adminPinConfig.autoNotifyGames,
+  });
+});
+
+// Unified Real-Time Multiplayer Game Action Endpoint (Play, Pause, Countdown, Next Ball, Reset, Claim Win, Block, Config)
+app.post('/api/live-room/action', (req, res) => {
+  const {
+    mode: rawMode,
+    action,
+    countdownSeconds,
+    callSpeedSec,
+    stakeAmount,
+    prizeAmount,
+    activePatternId,
+    jackpotPool,
+    cartelaId,
+    winner,
+    houseShareBirr,
+    jackpotWonInRound,
+    updatedJackpotPool,
+    forcedBalls,
+    lastBall,
+  } = req.body as {
+    mode?: 'fast' | 'regular';
+    action:
+      | 'start_countdown'
+      | 'cancel_countdown'
+      | 'play'
+      | 'pause'
+      | 'toggle_pause'
+      | 'draw_next'
+      | 'reset_round'
+      | 'reset'
+      | 'submit_pending_claim'
+      | 'set_speed'
+      | 'update_settings'
+      | 'claim_win'
+      | 'block_cartela'
+      | 'unblock_cartela'
+      | 'force_balls'
+      | 'set_admin_message'
+      | 'set_bonus_over_20'
+      | 'set_hero_banners'
+      | 'set_bank_accounts'
+      | 'set_jackpot';
+    countdownSeconds?: number;
+    callSpeedSec?: number;
+    stakeAmount?: number;
+    prizeAmount?: number;
+    activePatternId?: number;
+    jackpotPool?: number;
+    cartelaId?: number;
+    winner?: ServerWinnerAnnouncement;
+    houseShareBirr?: number;
+    jackpotWonInRound?: number;
+    updatedJackpotPool?: number;
+    forcedBalls?: number[];
+    lastBall?: number;
+  };
+
+  const mode = rawMode === 'regular' ? 'regular' : 'fast';
+  const { room, lockedMap } = getRoomByMode(mode, stakeAmount);
+  const applyAllRooms = Boolean((req.body as { applyAllRooms?: boolean }).applyAllRooms);
+
+  if (action === 'start_countdown') {
+    if (!room.isPlaying && room.calledBalls.length === 0) {
+      room.isPaused = false;
+      room.winnersList = [];
+      room.winnerDisplayCountdown = null;
+      room.hasRunPostGameCountdown = false;
+      room.jackpotWonInRound = 0;
+      room.preGameCountdown = Math.max(1, Number(countdownSeconds) || (mode === 'fast' ? 15 : 30));
+      room.lastCountdownTickAt = Date.now();
+      broadcastRealtimeSync(mode);
+    }
+  } else if (action === 'cancel_countdown') {
+    room.preGameCountdown = null;
+    broadcastRealtimeSync(mode);
+  } else if (action === 'play') {
+    const wasFreshStart = !room.isPlaying && room.calledBalls.length === 0;
+    const isAdminOverride = Boolean((req.body as { isAdminOverride?: boolean }).isAdminOverride);
+    if (mode === 'fast' && wasFreshStart && !isAdminOverride && countDistinctLockedPlayers(lockedMap) < 2) {
+      res.status(400).json({
+        ok: false,
+        error: 'ጨዋታው ለመጀመር ቢያንስ 2 ተጫዋቾች መግባት አለባቸው!',
+        room,
+      });
+      return;
+    }
+    room.preGameCountdown = null;
+    room.isPlaying = true;
+    room.isPaused = false;
+    deductLockedStakesOnGameStart(room, lockedMap);
+    if (room.calledBalls.length === 0) {
+      drawNextServerBallForRoom(room);
+    } else {
+      broadcastRealtimeSync(mode);
+    }
+    if (wasFreshStart) {
+      emitGameNotification({
+        game: mode,
+        title: mode === 'fast' ? `⚡ Fast Bingo (${room.stakeAmount} ETB) ተጀምሯል!` : `👑 ልዩ ቢንጎ (${room.stakeAmount} ETB) ተጀምሯል!`,
+        message: `ዙር #${room.gameMatchId} አሁን ተጀምሯል!`,
+        throttleMs: 30000,
+      });
+    }
+  } else if (action === 'pause') {
+    room.isPaused = true;
+    broadcastRealtimeSync(mode);
+  } else if (action === 'toggle_pause') {
+    if (!room.isPlaying) {
+      const wasFreshStart = room.calledBalls.length === 0;
+      const isAdminOverride = Boolean((req.body as { isAdminOverride?: boolean }).isAdminOverride);
+      if (mode === 'fast' && wasFreshStart && !isAdminOverride && countDistinctLockedPlayers(lockedMap) < 2) {
+        res.status(400).json({
+          ok: false,
+          error: 'ጨዋታው ለመጀመር ቢያንስ 2 ተጫዋቾች መግባት አለባቸው!',
+          room,
+        });
+        return;
+      }
+      room.preGameCountdown = null;
+      room.isPlaying = true;
+      room.isPaused = false;
+      deductLockedStakesOnGameStart(room, lockedMap);
+      if (room.calledBalls.length === 0) {
+        drawNextServerBallForRoom(room);
+      } else {
+        broadcastRealtimeSync(mode);
+      }
+      if (wasFreshStart) {
+        emitGameNotification({
+          game: mode,
+          title: mode === 'fast' ? `⚡ Fast Bingo (${room.stakeAmount} ETB) ተጀምሯል!` : `👑 ልዩ ቢንጎ (${room.stakeAmount} ETB) ተጀምሯል!`,
+          message: `ዙር #${room.gameMatchId} አሁን ተጀምሯል!`,
+          throttleMs: 30000,
+        });
+      }
+    } else {
+      room.isPaused = !room.isPaused;
+      broadcastRealtimeSync(mode);
+    }
+  } else if (action === 'draw_next') {
+    drawNextServerBallForRoom(room);
+  } else if (action === 'reset_round' || action === 'reset') {
+    resetServerRoomRound(room, lockedMap);
+  } else if (action === 'set_speed' && typeof callSpeedSec === 'number') {
+    const safeSpeed = Math.max(1, Math.min(15, Math.round(callSpeedSec)));
+    if (mode === 'fast' && applyAllRooms) {
+      for (const stk of FAST_STAKE_TIERS) {
+        fastRoomsByStake[stk].callSpeedSec = safeSpeed;
+      }
+    } else {
+      room.callSpeedSec = safeSpeed;
+    }
+    saveBotsToDisk();
+    broadcastRealtimeSync(mode);
+  } else if (action === 'set_jackpot' && typeof jackpotPool === 'number') {
+    room.jackpotPool = Math.max(0, Number(jackpotPool));
+    saveBotsToDisk();
+    broadcastRealtimeSync(mode);
+  } else if (action === 'update_settings') {
+    const b = req.body as {
+      countdownSeconds?: number;
+      preGameCountdown?: number | null;
+      registrationMinutes?: number;
+      activePatternCode?: string;
+    };
+    const incomingSecs =
+      typeof b.countdownSeconds === 'number'
+        ? b.countdownSeconds
+        : typeof b.preGameCountdown === 'number'
+        ? b.preGameCountdown
+        : typeof b.registrationMinutes === 'number' && b.registrationMinutes > 0
+        ? b.registrationMinutes * 60
+        : undefined;
+
+    const targetRooms =
+      mode === 'fast' && applyAllRooms
+        ? FAST_STAKE_TIERS.map((stk) => fastRoomsByStake[stk])
+        : [room];
+
+    for (const targetRoom of targetRooms) {
+      if (mode === 'regular' && typeof stakeAmount === 'number') {
+        targetRoom.stakeAmount = stakeAmount;
+      }
+      if (typeof prizeAmount === 'number') targetRoom.prizeAmount = prizeAmount;
+      if (mode === 'fast') {
+        targetRoom.activePatternId = 1;
+        targetRoom.activePatternCode = 'L';
+      } else {
+        if (typeof activePatternId === 'number') targetRoom.activePatternId = activePatternId;
+        if (typeof b.activePatternCode === 'string') {
+          targetRoom.activePatternCode = b.activePatternCode;
+        }
+      }
+      if (typeof jackpotPool === 'number') targetRoom.jackpotPool = jackpotPool;
+      if (typeof callSpeedSec === 'number') {
+        targetRoom.callSpeedSec = Math.max(1, Math.min(15, Math.round(callSpeedSec)));
+      }
+
+      if (incomingSecs !== undefined) {
+        if (incomingSecs > 0) {
+          targetRoom.preGameCountdown = Math.round(incomingSecs);
+          targetRoom.lastCountdownTickAt = Date.now();
+          targetRoom.isPlaying = false;
+          targetRoom.isPaused = false;
+          targetRoom.calledBalls = [];
+          targetRoom.activeBall = null;
+          targetRoom.winnersList = [];
+          targetRoom.bingoClaimCountdown = null;
+          targetRoom.winnerDisplayCountdown = null;
+          targetRoom.hasRunPostGameCountdown = false;
+        } else {
+          targetRoom.preGameCountdown = null;
+        }
+      }
+    }
+    saveBotsToDisk();
+    broadcastRealtimeSync(mode);
+  } else if (action === 'claim_win' && winner) {
+    // SERVER-SIDE ANTI-CHEAT BINGO VERIFICATION:
+    // Re-generate the deterministic cartela on the server and verify every claimed winning cell
+    // was actually called by the server in `room.calledBalls`!
+    const serverCard = generateCartelaById(Number(winner.cartelaId) || 1);
+    const serverCalledSet = new Set<number>([0, ...(room.calledBalls || [])]);
+    const claimedCells = Array.isArray(winner.winningCells) ? winner.winningCells : [];
+    const isAdminOverride = Boolean((req.body as { isAdminOverride?: boolean }).isAdminOverride);
+    const allClaimedCellsValid =
+      isAdminOverride ||
+      (claimedCells.length >= 4 &&
+        claimedCells.every(([r, c]) => {
+          if (r === 2 && c === 2) return true; // Center FREE
+          const num = serverCard.numbers?.[r]?.[c];
+          return typeof num === 'number' && serverCalledSet.has(num);
+        }));
+
+    if (!allClaimedCellsValid && room.calledBalls.length > 0) {
+      res.status(400).json({
+        ok: false,
+        error: 'የተጠየቀው ቢንጎ በሰርቨሩ የወጡ ቁጥሮች አልተረጋገጠም (Server Verification Failed)!',
+      });
+      return;
+    }
+
+    if (mode === 'regular' && room.bingoClaimCountdown === 0) {
+      res.status(400).json({
+        ok: false,
+        error: 'ቢንጎ የማለት ሰዓት ተጠናቋል!',
+      });
+      return;
+    }
+
+    if (mode === 'regular') {
+      // In Ezi Bingo, start a 30-second Bingo claim window when the first winner claims so other players with Bingo can also claim!
+      room.isPlaying = false;
+      room.isPaused = true;
+      room.preGameCountdown = null;
+      if (room.bingoClaimCountdown === null) {
+        room.bingoClaimCountdown = 30;
+        room.winnerDisplayCountdown = null;
+        room.lastCountdownTickAt = Date.now();
+      }
+    } else {
+      room.isPlaying = false;
+      room.isPaused = true;
+      room.preGameCountdown = null;
+      // Count down 10 seconds strictly ONCE per finished round (do not restart on 2nd claim)
+      if (room.winnerDisplayCountdown === null && !room.hasRunPostGameCountdown) {
+        room.winnerDisplayCountdown = 10;
+        room.hasRunPostGameCountdown = true;
+        room.lastCountdownTickAt = Date.now();
+      }
+    }
+    const explicitWinnerPhone = String((req.body as { winnerPhone?: string }).winnerPhone || '').trim();
+    const lockedOwner = lockedMap.get(winner.cartelaId);
+    const rawCandidatePhone =
+      explicitWinnerPhone ||
+      lockedOwner?.ownerPhone ||
+      winner.userPhone ||
+      Array.from(playersByPhone.values()).find(
+        (p) => p.name.trim().toLowerCase() === (winner.userName || '').trim().toLowerCase()
+      )?.phone ||
+      '';
+    const winnerPhone = normalizeEthiopianPhone(rawCandidatePhone) || rawCandidatePhone.trim() || '0913***371';
+    const resolvedWinnerWithPhone: ServerWinnerAnnouncement = {
+      ...winner,
+      userName: lockedOwner?.ownerName || winner.userName,
+      userPhone: winnerPhone,
+    };
+    room.lastVerifiedWinnerBanner = resolvedWinnerWithPhone;
+
+    const alreadyWon = room.winnersList.some((w) => w.cartelaId === winner.cartelaId);
+    const isFirstWinnerInRound = room.winnersList.length === 0;
+    let authoritativeHouseShare = isFirstWinnerInRound ? houseShareBirr : 0;
+    if (!alreadyWon) {
+      // Calculate total prize pool (ደራሽ) strictly from PAID cartelas (bonus cartelas are NOT counted in Birr!)
+      // Plus authoritative 5% Jackpot pool accumulation -> when Jackpot fills (>= 500 ETB), the round winner takes it and pool resets to 0!
+      const FAST_JACKPOT_TARGET = 500;
+      let totalPrizePool = 0;
+      if (mode === 'fast') {
+        const paidCartelasCount = getFastRoomPaidCartelasCount(lockedMap);
+        const paidCollectedBirr = paidCartelasCount > 0 ? paidCartelasCount * room.stakeAmount : 0;
+        const paidPrizeBirr = paidCollectedBirr > 0
+          ? Number((paidCollectedBirr * 0.8).toFixed(2))
+          : (typeof winner.prizeAmount === 'number' && winner.prizeAmount > 0
+              ? winner.prizeAmount * (room.winnersList.length || 1)
+              : room.prizeAmount);
+
+        if (isFirstWinnerInRound) {
+          authoritativeHouseShare = paidCollectedBirr > 0 ? Number((paidCollectedBirr * 0.15).toFixed(2)) : (Number(houseShareBirr) || 0);
+          const jackpotContribution = paidCollectedBirr > 0 ? Number((paidCollectedBirr * 0.05).toFixed(2)) : 0;
+          const nextJackpotPool = Number(((room.jackpotPool || 0) + jackpotContribution).toFixed(2));
+          if (nextJackpotPool >= FAST_JACKPOT_TARGET) {
+            room.jackpotWonInRound = nextJackpotPool;
+            room.jackpotPool = 0;
+          } else {
+            room.jackpotWonInRound = 0;
+            room.jackpotPool = nextJackpotPool;
+          }
+        } else {
+          authoritativeHouseShare = 0;
+        }
+
+        if (paidCollectedBirr > 0) {
+          room.prizeAmount = paidPrizeBirr;
+        }
+        totalPrizePool = Number((paidPrizeBirr + (room.jackpotWonInRound || 0)).toFixed(2));
+      } else {
+        totalPrizePool =
+          typeof room.prizeAmount === 'number' && room.prizeAmount > 0
+            ? room.prizeAmount
+            : winner.prizeAmount * (room.winnersList.length || 1);
+      }
+
+      if (mode === 'fast' && room.jackpotWonInRound > 0 && !resolvedWinnerWithPhone.patternTitle.includes('ጃክፓት')) {
+        resolvedWinnerWithPhone.patternTitle = `${resolvedWinnerWithPhone.patternTitle} + 🎰 ጃክፓት (${room.jackpotWonInRound.toFixed(0)} ETB)`;
+        room.lastVerifiedWinnerBanner = resolvedWinnerWithPhone;
+      }
+
+      const nextCount = room.winnersList.length + 1;
+      const equalShare = Number((totalPrizePool / nextCount).toFixed(2));
+      const prevShare = room.winnersList.length > 0
+        ? Number((totalPrizePool / room.winnersList.length).toFixed(2))
+        : 0;
+
+      room.winnersList = [
+        ...room.winnersList.map((w) => ({ ...w, prizeAmount: equalShare })),
+        { ...resolvedWinnerWithPhone, prizeAmount: equalShare },
+      ];
+
+      // If multiple winners, adjust previous winners' balances so everyone received equal share!
+      if (room.winnersList.length > 1 && prevShare > equalShare) {
+        const diffDeduct = Number((prevShare - equalShare).toFixed(2));
+        for (let i = 0; i < room.winnersList.length - 1; i++) {
+          const prevWin = room.winnersList[i];
+          const prevLock = lockedMap.get(prevWin.cartelaId);
+          const rawPh =
+            prevLock?.ownerPhone ||
+            Array.from(playersByPhone.values()).find(
+              (p) => p.name.trim().toLowerCase() === (prevWin.userName || '').trim().toLowerCase()
+            )?.phone ||
+            '';
+          const pPh = normalizeEthiopianPhone(rawPh) || rawPh.trim();
+          if (pPh && playersByPhone.has(pPh)) {
+            const prevPlayer = playersByPhone.get(pPh)!;
+            prevPlayer.balance = Math.max(0, Number((prevPlayer.balance - diffDeduct).toFixed(2)));
+            prevPlayer.withdrawableBalance = Math.max(
+              0,
+              Math.min(prevPlayer.balance, Number((getWithdrawableBalance(prevPlayer) - diffDeduct).toFixed(2)))
+            );
+            prevPlayer.updatedAt = new Date().toLocaleString();
+            if (pPh === globalRegisteredPhone || pPh === '0942742684') {
+              globalWalletBalance = prevPlayer.balance;
+            }
+          }
+        }
+      }
+
+      // Credit the verified winner's server-side wallet balance directly on the server
+      const explicitWinnerPhone = String((req.body as { winnerPhone?: string }).winnerPhone || '').trim();
+      const lockedOwner = lockedMap.get(winner.cartelaId);
+      const rawCandidatePhone =
+        explicitWinnerPhone ||
+        lockedOwner?.ownerPhone ||
+        Array.from(playersByPhone.values()).find(
+          (p) => p.name.trim().toLowerCase() === (winner.userName || '').trim().toLowerCase()
+        )?.phone ||
+        '';
+      const winnerPhone = normalizeEthiopianPhone(rawCandidatePhone) || rawCandidatePhone.trim();
+      if (winnerPhone) {
+        const winnerPlayer = ensurePlayerRecord(winnerPhone, winner.userName);
+        winnerPlayer.balance = Number((winnerPlayer.balance + equalShare).toFixed(2));
+        unlockAllWithdrawableAfterWin(winnerPlayer);
+        winnerPlayer.updatedAt = new Date().toLocaleString();
+        if (winnerPhone === globalRegisteredPhone || winnerPhone === '0942742684') {
+          globalWalletBalance = winnerPlayer.balance;
+        }
+        serverTransactions.unshift({
+          id: `srv-win-${room.gameMatchId}-${winner.cartelaId}-${Date.now()}`,
+          userId: winnerPlayer.id,
+          userName: winner.userName || winnerPlayer.name,
+          userPhone: winnerPhone,
+          type: 'win',
+          method: 'Wallet',
+          amount: equalShare,
+          referenceNumber: `WIN-${mode.toUpperCase()}-RND-${room.gameMatchId}-#${winner.cartelaId}`,
+          fullSmsText: `Bingo Win Prize +${equalShare.toFixed(2)} ETB (Cartela #${winner.cartelaId})`,
+          status: 'approved',
+          timestamp: new Date().toLocaleString(),
+        });
+      }
+
+      // Collect all participants and their locked cartelas for this round
+      const participantCartelasByPhone: Record<string, number[]> = {};
+      for (const item of lockedMap.values()) {
+        const ph = normalizeEthiopianPhone(item.ownerPhone || '');
+        if (ph) {
+          if (!participantCartelasByPhone[ph]) participantCartelasByPhone[ph] = [];
+          if (!participantCartelasByPhone[ph].includes(item.cartelaId)) {
+            participantCartelasByPhone[ph].push(item.cartelaId);
+          }
+        }
+      }
+      const participantPhones = Object.keys(participantCartelasByPhone);
+
+      // Record or update round in authoritative server gameHistory so history never disappears!
+      const existingHistoryIdx = room.gameHistory.findIndex(
+        (h) => h.gameMatchId === room.gameMatchId
+      );
+      if (existingHistoryIdx >= 0) {
+        room.gameHistory[existingHistoryIdx] = {
+          ...room.gameHistory[existingHistoryIdx],
+          prizeAmount: winner.prizeAmount,
+          totalBallsCalled: winner.calledBallsSnapshot?.length || room.calledBalls.length,
+          lastBall: winner.lastBall,
+          calledBallsSnapshot: winner.calledBallsSnapshot || [...room.calledBalls],
+          participantPhones,
+          participantCartelasByPhone,
+          winners: room.winnersList.map((w) => ({
+            cartelaId: w.cartelaId,
+            userName: w.userName,
+            userPhone: w.userPhone,
+            prizeAmount: w.prizeAmount,
+            winningCells: w.winningCells,
+          })),
+        };
+      } else {
+        room.gameHistory = [
+          {
+            id: `${mode}-gh-${Date.now()}`,
+            gameMatchId: room.gameMatchId,
+            timestamp: winner.timestamp || new Date().toLocaleString(),
+            stakeAmount: room.stakeAmount,
+            prizeAmount: winner.prizeAmount,
+            patternTitle: winner.patternTitle,
+            totalBallsCalled: winner.calledBallsSnapshot?.length || room.calledBalls.length,
+            lastBall: winner.lastBall,
+            calledBallsSnapshot: winner.calledBallsSnapshot || [...room.calledBalls],
+            participantPhones,
+            participantCartelasByPhone,
+            winners: room.winnersList.map((w) => ({
+              cartelaId: w.cartelaId,
+              userName: w.userName,
+              userPhone: w.userPhone,
+              prizeAmount: w.prizeAmount,
+              winningCells: w.winningCells,
+            })),
+          },
+          ...room.gameHistory,
+        ].slice(0, 50);
+      }
+    }
+    if (typeof authoritativeHouseShare === 'number' && authoritativeHouseShare > 0 && !alreadyWon && isFirstWinnerInRound) {
+      room.houseEarningsTotal = Number((room.houseEarningsTotal + authoritativeHouseShare).toFixed(2));
+    }
+    if (mode !== 'fast') {
+      if (typeof jackpotWonInRound === 'number') {
+        room.jackpotWonInRound = jackpotWonInRound;
+      }
+      if (typeof updatedJackpotPool === 'number') {
+        room.jackpotPool = updatedJackpotPool;
+      }
+    }
+    saveBotsToDisk();
+    broadcastRealtimeSync(mode);
+  } else if (action === 'block_cartela' && typeof cartelaId === 'number') {
+    if (!room.blockedCartelaIds.includes(cartelaId)) {
+      room.blockedCartelaIds = [...room.blockedCartelaIds, cartelaId];
+    }
+    saveBotsToDisk();
+    broadcastRealtimeSync(mode);
+  } else if (action === 'unblock_cartela' && typeof cartelaId === 'number') {
+    room.blockedCartelaIds = room.blockedCartelaIds.filter((id) => id !== cartelaId);
+    saveBotsToDisk();
+    broadcastRealtimeSync(mode);
+  } else if (action === 'force_balls' && Array.isArray(forcedBalls) && forcedBalls.length > 0) {
+    room.preGameCountdown = null;
+    room.isPlaying = true;
+    room.isPaused = false;
+    room.calledBalls = Array.from(new Set([...room.calledBalls, ...forcedBalls]));
+    room.activeBall = lastBall || forcedBalls[forcedBalls.length - 1];
+    room.lastBallTickAt = Date.now();
+    broadcastRealtimeSync(mode);
+  } else if (action === 'set_admin_message') {
+    const msgText = String((req.body as { adminMessage?: string }).adminMessage || '').trim();
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if ((req.body as { applyAllRooms?: boolean }).applyAllRooms) {
+      for (const stk of FAST_STAKE_TIERS) {
+        fastRoomsByStake[stk].adminRoomMessage = msgText;
+        fastRoomsByStake[stk].adminRoomMessageAt = msgText ? nowTime : '';
+      }
+      regularLiveRoomState.adminRoomMessage = msgText;
+      regularLiveRoomState.adminRoomMessageAt = msgText ? nowTime : '';
+      saveBotsToDisk();
+      broadcastRealtimeSync('both');
+    } else {
+      room.adminRoomMessage = msgText;
+      room.adminRoomMessageAt = msgText ? nowTime : '';
+      saveBotsToDisk();
+      broadcastRealtimeSync(mode);
+    }
+  } else if (action === 'set_bonus_over_20') {
+    const rawBonus = Number((req.body as { bonusCount?: number }).bonusCount);
+    const cleanBonus = Number.isFinite(rawBonus) ? Math.max(0, Math.min(30, Math.floor(rawBonus))) : 5;
+    for (const stk of FAST_STAKE_TIERS) {
+      fastRoomsByStake[stk].bonusCartelasForOver20 = cleanBonus;
+    }
+    regularLiveRoomState.bonusCartelasForOver20 = cleanBonus;
+    saveBotsToDisk();
+    broadcastRealtimeSync('both');
+  } else if (action === 'set_hero_banners') {
+    const rawBanners = (req.body as { heroBanners?: unknown }).heroBanners;
+    if (Array.isArray(rawBanners)) {
+      const sanitized = rawBanners.slice(0, 25).map((b: Record<string, unknown>, idx: number) => ({
+        id: String(b?.id || `hb-${Date.now()}-${idx}`),
+        title: String(b?.title || '').trim(),
+        subtitle: String(b?.subtitle || '').trim(),
+        badgeText: String(b?.badgeText || 'SUN GAMES').trim(),
+        accentColor: (['blue', 'emerald', 'amber', 'rose'].includes(String(b?.accentColor))
+          ? String(b?.accentColor)
+          : 'emerald') as 'blue' | 'emerald' | 'amber' | 'rose',
+        imageUrl: b?.imageUrl ? String(b.imageUrl) : undefined,
+        targetGame: (['fast', 'regular', 'keno', 'ramino', 'none'].includes(String(b?.targetGame))
+          ? String(b?.targetGame)
+          : 'fast') as 'fast' | 'regular' | 'keno' | 'ramino' | 'none',
+        ctaText: b?.ctaText ? String(b.ctaText).trim() : 'አሁን ይጫወቱ →',
+        isActive: b?.isActive !== false,
+        translations:
+          b?.translations && typeof b.translations === 'object'
+            ? (b.translations as Record<string, { title?: string; subtitle?: string; badgeText?: string; ctaText?: string }>)
+            : undefined,
+      }));
+      persistedHomeHeroAds = sanitized;
+      homeHeroAdsVersion += 1;
+      for (const stk of FAST_STAKE_TIERS) {
+        fastRoomsByStake[stk].heroBanners = [];
+      }
+      regularLiveRoomState.heroBanners = [];
+      saveBotsToDisk();
+      const adsPayload = JSON.stringify({
+        type: 'home:ads:sync',
+        homeAdsEnabled: persistedHomeAdsEnabled,
+        heroBanners: persistedHomeHeroAds,
+        ads: persistedHomeHeroAds,
+        homeHeroAdsVersion,
+      });
+      for (const wsClient of wsClients) {
+        safeWsSend(wsClient, adsPayload);
+      }
+      for (const sseRes of sseClients) {
+        safeSseWrite(sseRes, adsPayload);
+      }
+      broadcastRealtimeSync('both');
+    }
+  } else if (action === 'set_bank_accounts') {
+    const rawBanks = (req.body as { bankAccounts?: unknown }).bankAccounts;
+    if (Array.isArray(rawBanks) && rawBanks.length > 0) {
+      const sanitizedBanks = rawBanks.map((b: Record<string, unknown>, idx: number) => ({
+        id: String(b?.id || b?.shortName || `BANK-${idx}`),
+        bankName: String(b?.bankName || b?.shortName || 'Bank').trim(),
+        shortName: String(b?.shortName || b?.id || 'Bank').trim(),
+        accountNumber: String(b?.accountNumber || '').trim(),
+        accountHolder: String(b?.accountHolder || 'Ezana Gebremedhin').trim(),
+        badgeBg: String(b?.badgeBg || 'bg-emerald-600 text-white').trim(),
+        isActive: b?.isActive !== false,
+      }));
+      persistedBankAccounts = sanitizedBanks;
+      for (const stk of FAST_STAKE_TIERS) {
+        fastRoomsByStake[stk].bankAccounts = sanitizedBanks;
+      }
+      regularLiveRoomState.bankAccounts = sanitizedBanks;
+      saveBotsToDisk();
+      broadcastRealtimeSync('both');
+    }
+  }
+
+  saveBotsToDisk();
+  const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+
+  res.json({
+    ok: true,
+    room,
+    fastRoom: room,
+    fastRoomsByStake: roomsObj,
+    fastLockedCartelasByStake: lockedObj,
+    regularRoom: regularLiveRoomState,
+    players: Array.from(playersByPhone.values()),
+    transactions: serverTransactions,
+  });
+});
+
+app.get('/api/bank-accounts', (_req, res) => {
+  res.json({ ok: true, bankAccounts: persistedBankAccounts });
+});
+
+app.post('/api/bank-accounts', (req, res) => {
+  const rawBanks = req.body?.bankAccounts;
+  if (Array.isArray(rawBanks) && rawBanks.length > 0) {
+    const sanitized = rawBanks.map((b: Record<string, unknown>, idx: number) => ({
+      id: String(b?.id || b?.shortName || `BANK-${idx}`),
+      bankName: String(b?.bankName || b?.shortName || 'Bank').trim(),
+      shortName: String(b?.shortName || b?.id || 'Bank').trim(),
+      accountNumber: String(b?.accountNumber || '').trim(),
+      accountHolder: String(b?.accountHolder || 'Ezana Gebremedhin').trim(),
+      badgeBg: String(b?.badgeBg || 'bg-emerald-600 text-white').trim(),
+      isActive: b?.isActive !== false,
+    }));
+    persistedBankAccounts = sanitized;
+    for (const stk of FAST_STAKE_TIERS) {
+      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].bankAccounts = [...sanitized];
+    }
+    if (regularLiveRoomState) regularLiveRoomState.bankAccounts = [...sanitized];
+    saveBotsToDisk();
+    broadcastRealtimeSync('both');
+  }
+  res.json({ ok: true, bankAccounts: persistedBankAccounts });
+});
+
+app.post('/api/live-room/lock-cartela', (req, res) => {
+  const {
+    mode: rawMode,
+    stakeAmount,
+    cartelaId,
+    ownerPhone,
+    ownerName,
+    phone: aliasPhone,
+    name: aliasName,
+    clientId,
+    action,
+    isRegistered,
+    isBonus,
+    bonusCartelaIds,
+  } = req.body as {
+    mode?: 'fast' | 'regular';
+    stakeAmount?: number;
+    cartelaId: number;
+    ownerPhone?: string;
+    ownerName?: string;
+    phone?: string;
+    name?: string;
+    clientId?: string;
+    action: 'lock' | 'unlock' | 'register_all' | 'clear_mine';
+    isRegistered?: boolean;
+    isBonus?: boolean;
+    cartelaIds?: number[];
+    bonusCartelaIds?: number[];
+  };
+
+  const mode = rawMode === 'regular' ? 'regular' : 'fast';
+  const { room, lockedMap } = getRoomByMode(mode, stakeAmount);
+  const rawPhone = (ownerPhone || aliasPhone || '0911000001').trim();
+  const phone = normalizeEthiopianPhone(rawPhone) || rawPhone;
+  const name = (ownerName || aliasName || `Player_${phone.slice(-4)}`).trim();
+  const cidKey = (clientId || '').trim();
+
+  const isSameOwner = (existing: LockedCartelaOwner) => {
+    if (cidKey && existing.clientId) {
+      return existing.clientId === cidKey;
+    }
+    const existingPh = normalizeEthiopianPhone(existing.ownerPhone || '') || (existing.ownerPhone || '').trim();
+    return existingPh === phone;
+  };
+
+  const maybeAutoStartFastCountdown = () => {
+    // Only Fast Bingo auto-starts countdown when at least 2 DISTINCT players register!
+    // In Regular Bingo, ONLY the Admin can order the game or countdown to start!
+    if (mode !== 'fast') return;
+
+    const distinctPlayers = countDistinctLockedPlayers(lockedMap);
+    if (
+      !room.isPlaying &&
+      room.calledBalls.length === 0 &&
+      room.winnersList.length === 0 &&
+      room.preGameCountdown === null &&
+      distinctPlayers >= 2
+    ) {
+      room.preGameCountdown = 30;
+      room.lastCountdownTickAt = Date.now();
+    } else if (!room.isPlaying && distinctPlayers < 2 && room.preGameCountdown !== null) {
+      room.preGameCountdown = null;
+      room.lastCountdownTickAt = 0;
+    }
+  };
+
+  if (action === 'clear_mine') {
+    for (const [id, info] of lockedMap.entries()) {
+      if (isSameOwner(info)) {
+        lockedMap.delete(id);
+      }
+    }
+    recalculateFastRoomPot(room, lockedMap);
+    maybeAutoStartFastCountdown();
+    saveBotsToDisk();
+    broadcastRealtimeSync(mode);
+    const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+    res.json({
+      ok: true,
+      lockedCartelas: Array.from(lockedMap.values()),
+      room,
+      fastRoomsByStake: roomsObj,
+      fastLockedCartelasByStake: lockedObj,
+    });
+    return;
+  }
+
+  if ((action === 'lock' || action === 'register_all') && (room.isPlaying || room.calledBalls.length > 0 || room.winnersList.length > 0)) {
+    const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+    res.status(409).json({
+      ok: false,
+      gameAlreadyStarted: true,
+      error: 'ጨዋታው ስለተጀመረ ካርቴላ መመዝገብ አይቻልም!',
+      lockedCartelas: Array.from(lockedMap.values()),
+      room,
+      fastRoomsByStake: roomsObj,
+      fastLockedCartelasByStake: lockedObj,
+    });
+    return;
+  }
+
+  if (action === 'register_all' && Array.isArray(req.body.cartelaIds)) {
+    const isFreeGame = room.stakeAmount === 0;
+    const bonusIdSet = new Set<number>(
+      Array.isArray(bonusCartelaIds) ? bonusCartelaIds.map((x) => Number(x)) : []
+    );
+    let myOwnedCount = Array.from(lockedMap.values()).filter((info) => isSameOwner(info)).length;
+    const conflicts: number[] = [];
+    const lockedIdsNow: number[] = [];
+
+    for (const cid of req.body.cartelaIds) {
+      const numCid = Number(cid);
+      if (!Number.isFinite(numCid) || numCid < 1) continue;
+      if (room.blockedCartelaIds.includes(numCid)) {
+        conflicts.push(numCid);
+        continue;
+      }
+      const existing = lockedMap.get(numCid);
+      if (existing && !isSameOwner(existing)) {
+        conflicts.push(numCid);
+        continue;
+      }
+      if (isFreeGame && !existing && myOwnedCount >= 10) {
+        break;
+      }
+      if (!existing) myOwnedCount++;
+      lockedMap.set(numCid, {
+        cartelaId: numCid,
+        ownerPhone: phone,
+        ownerName: name,
+        clientId: cidKey || undefined,
+        isRegistered: true,
+        isBonus: bonusIdSet.has(numCid) || Boolean(existing?.isBonus),
+        lockedAt: Date.now(),
+      });
+      lockedIdsNow.push(numCid);
+    }
+    recalculateFastRoomPot(room, lockedMap);
+    if (mode !== 'regular') {
+      maybeAutoStartFastCountdown();
+    }
+    saveBotsToDisk();
+    broadcastRealtimeSync(mode);
+    const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+    res.json({
+      ok: lockedIdsNow.length > 0 || conflicts.length === 0,
+      conflicts,
+      lockedByOther: conflicts.length > 0,
+      error:
+        conflicts.length > 0
+          ? `ካርቴላ ${conflicts.map((id) => `#${id}`).join(', ')} ቀድሞ በሌላ ተጫዋች ተይዟል!`
+          : undefined,
+      lockedCartelas: Array.from(lockedMap.values()),
+      room,
+      fastRoomsByStake: roomsObj,
+      fastLockedCartelasByStake: lockedObj,
+    });
+    return;
+  }
+
+  const cid = Number(cartelaId);
+  if (!Number.isFinite(cid) || cid < 1) {
+    res.status(400).json({ ok: false, error: 'Invalid cartela ID' });
+    return;
+  }
+
+  const existing = lockedMap.get(cid);
+  if (action === 'unlock') {
+    if (!existing || isSameOwner(existing)) {
+      lockedMap.delete(cid);
+    }
+    recalculateFastRoomPot(room, lockedMap);
+    if (mode !== 'regular') {
+      maybeAutoStartFastCountdown();
+    }
+    saveBotsToDisk();
+    broadcastRealtimeSync(mode);
+    const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+    res.json({
+      ok: true,
+      lockedCartelas: Array.from(lockedMap.values()),
+      room,
+      fastRoomsByStake: roomsObj,
+      fastLockedCartelasByStake: lockedObj,
+    });
+    return;
+  }
+
+  // If another player/device already locked this cartela, reject!
+  if (existing && !isSameOwner(existing)) {
+    res.status(409).json({
+      ok: false,
+      lockedByOther: true,
+      error: `ካርቴላ #${cid} በሌላ ተጫዋች (${existing.ownerName}) ተይዟል! እባክዎ ሌላ ቁጥር ይምረጡ።`,
+      lockedBy: existing,
+      lockedCartelas: Array.from(lockedMap.values()),
+    });
+    return;
+  }
+
+  // Enforce 10-cartela limit per player in Free Game (stakeAmount === 0)
+  if (room.stakeAmount === 0 && !existing) {
+    const myOwnedCount = Array.from(lockedMap.values()).filter((info) => isSameOwner(info)).length;
+    if (myOwnedCount >= 10) {
+      res.status(400).json({
+        ok: false,
+        error: 'በነፃ ጨዋታ (Free Game) አንድ ተጫዋች እስከ 10 ካርቴላ ብቻ ነው የሚፈቀደው!',
+        lockedCartelas: Array.from(lockedMap.values()),
+      });
+      return;
+    }
+  }
+
+  lockedMap.set(cid, {
+    cartelaId: cid,
+    ownerPhone: phone,
+    ownerName: name,
+    clientId: cidKey || undefined,
+    isRegistered: Boolean(isRegistered ?? true),
+    isBonus: Boolean(isBonus ?? existing?.isBonus),
+    lockedAt: Date.now(),
+  });
+
+  recalculateFastRoomPot(room, lockedMap);
+  if (mode !== 'regular') {
+    maybeAutoStartFastCountdown();
+  }
+  saveBotsToDisk();
+  broadcastRealtimeSync(mode);
+  const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+
+  res.json({
+    ok: true,
+    lockedCartelas: Array.from(lockedMap.values()),
+    room,
+    fastRoomsByStake: roomsObj,
+    fastLockedCartelasByStake: lockedObj,
+  });
+});
+
+// Simulate another online player locking or unlocking cartelas in real time so the user can test multiplayer locking!
+app.post('/api/live-room/simulate-other-player', (req, res) => {
+  const { stakeAmount } = (req.body || {}) as { stakeAmount?: number };
+  const { room, lockedMap } = getRoomByMode('fast', stakeAmount);
+  const sampleNames = ['Yonas_Fast', 'Meron_Hailu', 'Dawit_Bingo', 'Abebe_K', 'Hanna_T'];
+  const samplePhones = ['0911223344', '0922334455', '0933445566', '0944556677', '0955667788'];
+  const idx = Math.floor(Math.random() * sampleNames.length);
+  const randomCartela = Math.floor(1 + Math.random() * 100);
+
+  const lockedEntry: LockedCartelaOwner = {
+    cartelaId: randomCartela,
+    ownerPhone: samplePhones[idx],
+    ownerName: sampleNames[idx],
+    isRegistered: true,
+    lockedAt: Date.now(),
+  };
+
+  if (!lockedMap.has(randomCartela)) {
+    lockedMap.set(randomCartela, lockedEntry);
+  }
+  if (
+    !room.isPlaying &&
+    room.calledBalls.length === 0 &&
+    room.winnersList.length === 0 &&
+    room.preGameCountdown === null &&
+    countDistinctLockedPlayers(lockedMap) >= 2
+  ) {
+    room.preGameCountdown = 30;
+    room.lastCountdownTickAt = Date.now();
+  }
+  broadcastRealtimeSync('fast');
+  const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+
+  res.json({
+    ok: true,
+    addedCartelaId: randomCartela,
+    ownerName: sampleNames[idx],
+    lockedCartela: lockedEntry,
+    lockedCartelas: Array.from(lockedMap.values()),
+    onlinePlayersCount: room.onlinePlayersCount,
+    room,
+    fastRoomsByStake: roomsObj,
+    fastLockedCartelasByStake: lockedObj,
+  });
+});
+
+// Submit Deposit / Withdraw / Transfer (Supports Pending -> Admin Approval Queue & Duplicate Rejection!)
+app.post('/api/transactions/submit', (req, res) => {
+  const {
+    userId,
+    userName,
+    userPhone,
+    type,
+    method,
+    amount,
+    referenceNumber,
+    fullSmsText,
+    recipientPhone,
+  } = req.body as Partial<ServerTransactionRecord>;
+
+  const cleanPhone = normalizeEthiopianPhone(userPhone || globalRegisteredPhone || '0942742684') || '0942742684';
+  const cleanRecipientPhone = recipientPhone ? normalizeEthiopianPhone(recipientPhone) || recipientPhone.trim() : undefined;
+  const player = ensurePlayerRecord(cleanPhone, userName || 'Ezana_Player');
+  const parsedFromSms = fullSmsText ? parseEthiopianPaymentSms(fullSmsText) : null;
+  const cleanedAmountInput =
+    typeof amount === 'number'
+      ? amount
+      : typeof amount === 'string'
+      ? parseFloat(String(amount).replace(/,/g, '').trim())
+      : NaN;
+  const amt = Number(
+    (Number.isFinite(cleanedAmountInput) && cleanedAmountInput > 0 ? cleanedAmountInput : null) ??
+      parsedFromSms?.amount ??
+      0
+  );
+
+  if (!Number.isFinite(amt) || amt <= 0) {
+    res.status(400).json({ ok: false, error: 'ትክክለኛ የብር መጠን ያስገቡ።' });
+    return;
+  }
+
+  // Automatically determine whether this is a deposit (ገቢ), withdraw (ወጪ), or transfer
+  const resolvedType: 'deposit' | 'withdraw' | 'transfer' =
+    type === 'transfer'
+      ? 'transfer'
+      : type === 'withdraw' || parsedFromSms?.detectedType === 'withdraw'
+      ? 'withdraw'
+      : 'deposit';
+
+  if (resolvedType === 'transfer') {
+    if (!cleanRecipientPhone || cleanRecipientPhone.length < 9) {
+      res.status(400).json({ ok: false, error: 'እባክዎ ትክክለኛ የተቀባይ ስልክ ቁጥር ያስገቡ።' });
+      return;
+    }
+    if (cleanRecipientPhone === cleanPhone) {
+      res.status(400).json({ ok: false, error: 'ወደ ራስዎ ስልክ ቁጥር ማስተላለፍ አይችሉም።' });
+      return;
+    }
+    if (player.balance < amt) {
+      res.status(400).json({ ok: false, error: 'በቂ ቀሪ ሂሳብ የለዎትም!' });
+      return;
+    }
+  }
+
+  const rawRefCandidate =
+    (referenceNumber && !referenceNumber.startsWith('REF-') ? referenceNumber : null) ||
+    parsedFromSms?.referenceNumber ||
+    referenceNumber ||
+    (resolvedType === 'transfer'
+      ? `TR-${Date.now().toString().slice(-6)}`
+      : `REF-${Date.now().toString().slice(-6)}`);
+
+  const resolvedRef =
+    resolvedType === 'deposit'
+      ? normalizeTransactionReference(rawRefCandidate) || rawRefCandidate
+      : rawRefCandidate;
+
+  // STRICT DUPLICATE PROTECTION (የተደገመ ደረሰኝ ወይም Transaction ID እንዳይቀበል!)
+  const isCashDeposit = method === 'Cash' || String(resolvedRef).startsWith('CASH-');
+  const normRef = normalizeTransactionReference(resolvedRef);
+  const normSms = (fullSmsText || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const extractedRefFromSms =
+    parsedFromSms?.referenceNumber ||
+    (fullSmsText
+      ? normalizeTransactionReference(
+          (fullSmsText.match(/\b(FT\w{6,14}|TB\w{6,14}|BOA\w{6,14}|MP\w{6,14}|CBE\w{6,14})\b/i)?.[1]) || ''
+        )
+      : '');
+  const effectiveRef =
+    normRef && !normRef.startsWith('REF') && !normRef.startsWith('CASH')
+      ? normRef
+      : extractedRefFromSms;
+
+  if (resolvedType === 'deposit' && !isCashDeposit) {
+    // 1. Check if an approved or pending transaction ALREADY exists with this reference or matching SMS text:
+    const duplicateTx = serverTransactions.find((t) => {
+      if (t.type !== 'deposit' || t.status === 'rejected' || t.method === 'Cash') return false;
+      const existingRefNorm = normalizeTransactionReference(t.referenceNumber);
+      if (
+        effectiveRef &&
+        effectiveRef.length >= 4 &&
+        (existingRefNorm === effectiveRef || (t.fullSmsText && t.fullSmsText.includes(effectiveRef)))
+      ) {
+        return true;
+      }
+      if (
+        normSms.length >= 25 &&
+        t.fullSmsText &&
+        t.fullSmsText.trim().replace(/\s+/g, ' ').toLowerCase() === normSms
+      ) {
+        return true;
+      }
+      return false;
+    });
+
+    if (duplicateTx) {
+      // If it was already approved (e.g. by Webhook SMS!), DO NOT double-credit and DO NOT error out!
+      // Return ok: true, alreadyCredited: true so app displays success without duplicating balance!
+      if (duplicateTx.status === 'approved') {
+        res.json({
+          ok: true,
+          transaction: duplicateTx,
+          alreadyCredited: true,
+          message: 'ይህ ክፍያ በባንክ SMS በራሱ ቀድሞ ገቢ ተደርጓል!',
+          balance: player.balance,
+          accountToken: createSignedPlayerToken(player),
+          transactions: serverTransactions,
+        });
+        return;
+      }
+      res.status(409).json({
+        ok: false,
+        duplicate: true,
+        error: `❌ ይህ የግብይት ቁጥር (${duplicateTx.referenceNumber}) ከዚህ በፊት ጥቅም ላይ ውሏል! የተደገመ ደረሰኝ ተቀባይነት የለውም።`,
+        transactions: serverTransactions,
+      });
+      return;
+    }
+  } else if (resolvedType === 'withdraw') {
+    const availWithdrawable = getAvailableWithdrawableAfterPending(player);
+    if (amt > availWithdrawable) {
+      res.status(400).json({
+        ok: false,
+        error: `❌ ወጪ ሊደረግ የሚችል ቀሪ ሂሳብ በቂ አይደለም! (ወጪ ሊደረግ የሚችል: ${availWithdrawable.toFixed(2)} ETB — ገቢ ያደረጉት ብር ጨዋታ አሸንፈው ብቻ ወጪ ይደረጋል)`,
+      });
+      return;
+    }
+    // Prevent duplicate rapid withdrawal click within 60 seconds
+    const recentDupWithdraw = serverTransactions.find(
+      (t) =>
+        t.type === 'withdraw' &&
+        t.userPhone === cleanPhone &&
+        t.amount === amt &&
+        t.status === 'pending' &&
+        Date.now() - Number(t.id.replace(/\D/g, '').slice(0, 13) || 0) < 60000
+    );
+    if (recentDupWithdraw) {
+      res.status(409).json({
+        ok: false,
+        duplicate: true,
+        error: `⚠️ የ ${amt} ETB የወጪ ጥያቄ ቀድሞ ተልኳል (በመጠባበቅ ላይ ነው)! እባክዎ በድጋሚ አይላኩ።`,
+        transactions: serverTransactions,
+      });
+      return;
+    }
+  }
+
+  const normRefForVerify = effectiveRef || normRef;
+  const matchingVerifiedReceipt =
+    resolvedType === 'deposit' && !isCashDeposit
+      ? verifiedBankSmsReceipts.find((r) => {
+          if (r.status === 'duplicate') return false;
+          const rRef = normalizeTransactionReference(r.referenceNumber);
+          if (normRefForVerify && normRefForVerify.length >= 5 && !normRefForVerify.startsWith('REF') && rRef === normRefForVerify) {
+            return true;
+          }
+          if (
+            r.status === 'ready_for_claim' &&
+            r.senderPhone &&
+            normalizeEthiopianPhone(r.senderPhone) === cleanPhone &&
+            Math.abs(r.amount - amt) < 0.01
+          ) {
+            return true;
+          }
+          return false;
+        })
+      : null;
+
+  // CRITICAL FIX: If matchingVerifiedReceipt was ALREADY auto-approved (credited by Webhook!):
+  if (
+    matchingVerifiedReceipt &&
+    (matchingVerifiedReceipt.status === 'auto_approved' || Boolean(matchingVerifiedReceipt.matchedTxId))
+  ) {
+    const existingTx = serverTransactions.find(
+      (t) =>
+        t.id === matchingVerifiedReceipt.matchedTxId ||
+        (normRefForVerify && normalizeTransactionReference(t.referenceNumber) === normRefForVerify)
+    );
+    res.json({
+      ok: true,
+      transaction:
+        existingTx || {
+          id: `matched-${matchingVerifiedReceipt.id}`,
+          userId: player.id,
+          userName: player.name,
+          userPhone: cleanPhone,
+          type: 'deposit',
+          method: matchingVerifiedReceipt.bank,
+          amount: matchingVerifiedReceipt.amount,
+          referenceNumber: matchingVerifiedReceipt.referenceNumber,
+          status: 'approved',
+          timestamp: new Date().toLocaleString(),
+        },
+      alreadyCredited: true,
+      webhookVerified: true,
+      message: 'ይህ ክፍያ ቀድሞ ተረጋግጦ ገቢ ተደርጓል!',
+      balance: player.balance,
+      accountToken: createSignedPlayerToken(player),
+      transactions: serverTransactions,
+    });
+    return;
+  }
+
+  // Strict Webhook Deposit Policy:
+  // Deposits ONLY auto-approve when SMS Webhook is enabled (ON) AND verified by an incoming Bank SMS Webhook receipt!
+  // Otherwise (including when Webhook is turned OFF by admin), deposits remain 'pending' for Manual Admin Approval!
+  const isWebhookVerifiedDeposit = Boolean(
+    adminPinConfig.smsWebhookEnabled !== false &&
+      resolvedType === 'deposit' &&
+      matchingVerifiedReceipt &&
+      matchingVerifiedReceipt.status === 'ready_for_claim'
+  );
+  const effectiveDepositAmount = isWebhookVerifiedDeposit && matchingVerifiedReceipt
+    ? matchingVerifiedReceipt.amount
+    : amt;
+
+  const isPending =
+    resolvedType === 'deposit'
+      ? !isWebhookVerifiedDeposit
+      : resolvedType === 'withdraw'
+      ? adminPinConfig.requireDepositApproval
+      : false;
+
+  let recipientRecord: ServerPlayerRecord | null = null;
+  if (resolvedType === 'transfer' && cleanRecipientPhone) {
+    recipientRecord = ensurePlayerRecord(cleanRecipientPhone, `Player_${cleanRecipientPhone.slice(-4)}`);
+  }
+
+  const newTx: ServerTransactionRecord = {
+    id: makeServerTxId('srv-tx'),
+    userId: userId || player.id,
+    userName: userName || player.name,
+    userPhone: cleanPhone,
+    chatId: player.chatId,
+    type: resolvedType,
+    method:
+      resolvedType === 'transfer'
+        ? 'Wallet'
+        : isWebhookVerifiedDeposit && matchingVerifiedReceipt
+        ? matchingVerifiedReceipt.bank
+        : method || parsedFromSms?.detectedBank || 'CBE',
+    amount: resolvedType === 'deposit' ? effectiveDepositAmount : amt,
+    referenceNumber:
+      isWebhookVerifiedDeposit && matchingVerifiedReceipt
+        ? matchingVerifiedReceipt.referenceNumber
+        : resolvedRef,
+    fullSmsText:
+      isWebhookVerifiedDeposit && matchingVerifiedReceipt
+        ? matchingVerifiedReceipt.rawSms
+        : fullSmsText ||
+          (resolvedType === 'transfer' && cleanRecipientPhone
+            ? `Transfer ${amt.toFixed(2)} ETB from ${cleanPhone} (${player.name}) to ${cleanRecipientPhone} (${recipientRecord?.name || cleanRecipientPhone})`
+            : undefined),
+    recipientPhone: cleanRecipientPhone,
+    status: isPending ? 'pending' : 'approved',
+    timestamp: new Date().toLocaleString(),
+  };
+
+  if (isWebhookVerifiedDeposit && matchingVerifiedReceipt) {
+    matchingVerifiedReceipt.status = 'auto_approved';
+    matchingVerifiedReceipt.matchedUserPhone = cleanPhone;
+    matchingVerifiedReceipt.matchedTxId = newTx.id;
+  }
+
+  pushServerTransaction(newTx);
+
+  // If webhook-verified deposit, instant-mode withdraw, or transfer -> update wallet immediately
+  if (!isPending) {
+    if (resolvedType === 'deposit') {
+      const bonusPct = getActiveDepositBonusPct();
+      const bonusAmt = bonusPct > 0 ? Number(((effectiveDepositAmount * bonusPct) / 100).toFixed(2)) : 0;
+      player.balance = Number((player.balance + effectiveDepositAmount + bonusAmt).toFixed(2));
+      if (bonusAmt > 0) {
+        player.bonusBalance = Number(((player.bonusBalance || 0) + bonusAmt).toFixed(2));
+        player.nonWithdrawableBonus = Number(
+          (getNonWithdrawableBonus(player) + bonusAmt).toFixed(2)
+        );
+      }
+      player.updatedAt = new Date().toLocaleString();
+
+      receivedWebhookSmsLogs.unshift({
+        id: `sms-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        timestamp: new Date().toLocaleString(),
+        sender: newTx.method,
+        rawText: newTx.fullSmsText || newTx.referenceNumber || '',
+        parsedAmount: effectiveDepositAmount,
+        parsedRef: newTx.referenceNumber || null,
+        detectedBank: newTx.method,
+        detectedType: 'deposit',
+        statusText: `✅ በ Webhook ደረሰኝ ተረጋግጦ ገቢ ሆኗል (Claimed & Verified for ${cleanPhone})`,
+        matchedPlayerPhone: cleanPhone,
+      });
+      if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+
+      const targetChatId =
+        player.chatId ||
+        Array.from(registeredChatPhones.entries()).find(([, ph]) => normalizeEthiopianPhone(ph) === cleanPhone)?.[0];
+      if (targetChatId && activeBots.size > 0) {
+        const firstToken = Array.from(activeBots.keys())[0];
+        const botInfo = Array.from(activeBots.values())[0];
+        sendTelegramMessage(
+          firstToken,
+          Number(targetChatId),
+          `✅ *የገቢ ክፍያዎ ተረጋግጦ ጸድቋል!*\n💳 ባንክ፦ *${newTx.method}*\n💰 የተጨመረ ብር፦ *+${effectiveDepositAmount.toFixed(2)} ETB*${bonusAmt > 0 ? ` (+${bonusAmt.toFixed(2)} ETB ቦነስ)` : ''}\n🔖 Ref No፦ \`${newTx.referenceNumber}\`\n💵 አዲስ ቀሪ ሂሳብ፦ *${player.balance.toFixed(2)} ETB*`,
+          buildSubMenuInlineKeyboard(botInfo?.appUrl || SHARED_APP_URL, cleanPhone)
+        ).catch(() => {});
+      }
+    } else if (resolvedType === 'withdraw' || resolvedType === 'transfer') {
+      player.balance = Math.max(0, Number((player.balance - amt).toFixed(2)));
+      player.withdrawableBalance = Math.max(
+        0,
+        Number((getWithdrawableBalance(player) - amt).toFixed(2))
+      );
+      clampBalancesAfterDebit(player);
+      player.updatedAt = new Date().toLocaleString();
+      if (resolvedType === 'transfer' && recipientRecord && cleanRecipientPhone) {
+        recipientRecord.balance = Number((recipientRecord.balance + amt).toFixed(2));
+        recipientRecord.updatedAt = new Date().toLocaleString();
+
+        // Notify recipient on Telegram if a bot is active and recipient has a chatId
+        const recipientChatId =
+          recipientRecord.chatId ||
+          Array.from(registeredChatPhones.entries()).find(
+            ([, ph]) => normalizeEthiopianPhone(ph) === cleanRecipientPhone
+          )?.[0];
+        const firstActiveBot = Array.from(activeBots.entries())[0];
+        if (recipientChatId && firstActiveBot) {
+          const [botToken, botInfo] = firstActiveBot;
+          const notifyText =
+            `🎁 *የዋሌት ብር ደርሶዎታል (Transfer Received)!*\n` +
+            `` +
+            `👤 ከ፦ *${player.name}* (\`${cleanPhone}\`)\n` +
+            `💰 መጠን፦ *+${amt.toFixed(2)} ETB*\n` +
+            `🔖 Ref፦ \`${resolvedRef}\`\n` +
+            `💵 አዲስ ቀሪ ሂሳብዎ፦ *${recipientRecord.balance.toFixed(2)} ETB*`;
+          sendTelegramMessage(
+            botToken,
+            recipientChatId,
+            notifyText,
+            buildSubMenuInlineKeyboard(botInfo.appUrl, cleanRecipientPhone)
+          ).catch(() => {});
+        }
+      }
+    }
+    if (
+      cleanPhone === globalRegisteredPhone ||
+      cleanPhone === '0942742684' ||
+      playersByPhone.size === 1
+    ) {
+      globalWalletBalance = player.balance;
+    }
+  }
+
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+
+  res.json({
+    ok: true,
+    transaction: newTx,
+    isPending,
+    webhookVerified: isWebhookVerifiedDeposit,
+    balance: player.balance,
+    withdrawableBalance: getWithdrawableBalance(player),
+    availableWithdrawable: getAvailableWithdrawableAfterPending(player),
+    accountToken: createSignedPlayerToken(player),
+    recipientBalance: recipientRecord?.balance,
+    recipientName: recipientRecord?.name,
+    recipientPhone: cleanRecipientPhone,
+    transactions: serverTransactions,
+    players: Array.from(playersByPhone.values()),
+  });
+});
+
+// Admin Direct Cash Deposit Endpoint (በቀጥታ በጥሬ ገንዘብ / ካሽ ገቢ ማድረግ)
+app.post('/api/admin/cash-deposit', (req, res) => {
+  const { phone, name, amount, note } = req.body as {
+    phone?: string;
+    name?: string;
+    amount?: number | string;
+    note?: string;
+  };
+  const cleanPhone = normalizeEthiopianPhone(String(phone || '')) || String(phone || '').trim();
+  const amt = typeof amount === 'number' ? amount : parseFloat(String(amount || '0'));
+  if (!cleanPhone || !Number.isFinite(amt) || amt <= 0) {
+    res.status(400).json({ ok: false, error: 'እባክዎ ትክክለኛ ስልክ ቁጥር እና የብር መጠን ያስገቡ።' });
+    return;
+  }
+  const player = ensurePlayerRecord(cleanPhone, name || `Player_${cleanPhone.slice(-4)}`);
+  player.balance = Number((player.balance + amt).toFixed(2));
+  player.updatedAt = new Date().toLocaleString();
+  if (cleanPhone === globalRegisteredPhone || cleanPhone === '0942742684') {
+    globalWalletBalance = player.balance;
+  }
+
+  const newTx: ServerTransactionRecord = {
+    id: `cash-tx-${Date.now()}`,
+    userId: player.id,
+    userName: player.name,
+    userPhone: cleanPhone,
+    chatId: player.chatId,
+    type: 'deposit',
+    method: 'Cash',
+    amount: amt,
+    referenceNumber: `CASH-${Date.now().toString().slice(-6)}`,
+    fullSmsText: note || `በካሽ የተከፈለ (Cash Deposit by Admin: ${amt} ETB)`,
+    status: 'approved',
+    timestamp: new Date().toLocaleString(),
+  };
+  serverTransactions.unshift(newTx);
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+
+  // Send telegram notification if user is linked to a telegram chat
+  if (player.chatId) {
+    const firstBot = Array.from(activeBots.entries())[0];
+    if (firstBot) {
+      const [botToken, botInfo] = firstBot;
+      const msg =
+        `💵 *በካሽ ገቢ ተደርጎልዎታል (Cash Deposit Received)!*\n` +
+        `` +
+        `👤 ደንበኛ፦ *${player.name}* (\`${cleanPhone}\`)\n` +
+        `💰 የተጨመረ መጠን፦ *+${amt.toFixed(2)} ETB*\n` +
+        `🔖 Ref፦ \`${newTx.referenceNumber}\`\n` +
+        `💵 አዲስ ቀሪ ሂሳብ፦ *${player.balance.toFixed(2)} ETB*`;
+      sendTelegramMessage(botToken, player.chatId, msg, buildSubMenuInlineKeyboard(botInfo.appUrl, cleanPhone)).catch(() => {});
+    }
+  }
+
+  res.json({
+    ok: true,
+    player,
+    transaction: newTx,
+    players: Array.from(playersByPhone.values()),
+    transactions: serverTransactions,
+  });
+});
+
+// =========================================================================
+// AUTOMATED BANK & TELEBIRR SMS WEBHOOK SYSTEM (0% COMMISSION AUTO-VERIFY)
+// =========================================================================
+
+function processIncomingBankSms(
+  rawSms: string,
+  rawSender = '127'
+): {
+  success: boolean;
+  statusText: string;
+  parsed: ReturnType<typeof parseEthiopianPaymentSms>;
+  matchedTx?: ServerTransactionRecord;
+  creditedPlayer?: ServerPlayerRecord;
+} {
+  const text = (rawSms || '').trim();
+  const sender = (rawSender || '').trim();
+  const parsed = parseEthiopianPaymentSms(text);
+  const detectedBank =
+    parsed.detectedBank ||
+    (/telebirr|127/i.test(sender)
+      ? 'Telebirr'
+      : /cbe|commercial/i.test(sender)
+      ? 'CBE'
+      : /abyssinia|boa/i.test(sender)
+      ? 'Abyssinia'
+      : /mpesa/i.test(sender)
+      ? 'M-Pesa'
+      : 'Telebirr');
+
+  const amt = parsed.amount;
+  const rawRef = parsed.referenceNumber || '';
+  const normRef = normalizeTransactionReference(rawRef);
+
+  // Extract any sender/customer phone number mentioned in the SMS (e.g. "from 0942742684", "payer 0911...", "ከ 0912...")
+  const phoneMatch = text.match(/(?:from|payer|ከ|sender|account|ሂሳብ)?\s*(\+?251[79]\d{8}|0[79]\d{8})\b/i);
+  const detectedSenderPhone = phoneMatch ? normalizeEthiopianPhone(phoneMatch[1]) : undefined;
+
+  const logId = `sms-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+  if (!amt || amt <= 0 || !normRef) {
+    const statusText = !amt ? '⚠️ የብር መጠን አልተገኘም (Amount Missing)' : '⚠️ የግብይት ቁጥር አልተገኘም (Ref Missing)';
+    receivedWebhookSmsLogs.unshift({
+      id: logId,
+      timestamp: new Date().toLocaleString(),
+      sender,
+      rawText: text,
+      parsedAmount: amt || null,
+      parsedRef: normRef || null,
+      detectedBank,
+      detectedType: parsed.detectedType,
+      statusText,
+      matchedPlayerPhone: detectedSenderPhone,
+    });
+    if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+    saveBotsToDisk();
+    return { success: false, statusText, parsed };
+  }
+
+  // Respect Admin Webhook ON/OFF toggle: when OFF, log incoming SMS but do NOT auto-approve so Admin approves manually!
+  if (adminPinConfig.smsWebhookEnabled === false) {
+    const statusText = `⏸️ Webhook ጠፍቷል (OFF) — በአድሚን እጅ ማጽደቅ ይጠበቃል (Manual Approval Mode)`;
+    receivedWebhookSmsLogs.unshift({
+      id: logId,
+      timestamp: new Date().toLocaleString(),
+      sender,
+      rawText: text,
+      parsedAmount: amt,
+      parsedRef: normRef,
+      detectedBank,
+      detectedType: parsed.detectedType,
+      statusText,
+      matchedPlayerPhone: detectedSenderPhone,
+    });
+    if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+    return { success: false, statusText, parsed };
+  }
+
+  // 0. Filter Out Debit / Withdrawal SMS (ወጪ የተደረገ ብር ወደ ተጫዋች እንዳይገባ መለየት)
+  if (parsed.detectedType === 'withdraw') {
+    const statusText = `ℹ️ የወጪ SMS (Withdrawal/Debit Detected) - ወጪ ስለሆነ በገቢ አይመዘገብም`;
+    receivedWebhookSmsLogs.unshift({
+      id: logId,
+      timestamp: new Date().toLocaleString(),
+      sender,
+      rawText: text,
+      parsedAmount: amt,
+      parsedRef: normRef,
+      detectedBank,
+      detectedType: parsed.detectedType,
+      statusText,
+      matchedPlayerPhone: detectedSenderPhone,
+    });
+    if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+    saveBotsToDisk();
+    return { success: false, statusText, parsed };
+  }
+
+  // 1. Check if already processed / approved in transactions (Duplicate Protection)
+  const normSms = text.trim().replace(/\s+/g, ' ').toLowerCase();
+  const existingApproved =
+    serverTransactions.find((t) => {
+      if (t.type !== 'deposit' || t.status !== 'approved') return false;
+      const tRef = normalizeTransactionReference(t.referenceNumber);
+      if (normRef && (tRef === normRef || (t.fullSmsText && t.fullSmsText.includes(normRef)))) {
+        return true;
+      }
+      if (
+        normSms.length >= 25 &&
+        t.fullSmsText &&
+        t.fullSmsText.trim().replace(/\s+/g, ' ').toLowerCase() === normSms
+      ) {
+        return true;
+      }
+      return false;
+    }) ||
+    (verifiedBankSmsReceipts.some(
+      (r) =>
+        r.status === 'auto_approved' &&
+        normRef &&
+        normalizeTransactionReference(r.referenceNumber) === normRef
+    )
+      ? ({ id: 'receipt-already-processed', userPhone: '', referenceNumber: normRef } as ServerTransactionRecord)
+      : undefined);
+
+  if (existingApproved) {
+    const statusText = `⚠️ የተደገመ ደረሰኝ (Duplicate Ref: ${normRef}) - ቀድሞ ጸድቋል`;
+    receivedWebhookSmsLogs.unshift({
+      id: logId,
+      timestamp: new Date().toLocaleString(),
+      sender,
+      rawText: text,
+      parsedAmount: amt,
+      parsedRef: normRef,
+      detectedBank,
+      detectedType: parsed.detectedType,
+      statusText,
+      matchedPlayerPhone: existingApproved.userPhone,
+    });
+    if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+    saveBotsToDisk();
+    return { success: false, statusText, parsed, matchedTx: existingApproved };
+  }
+
+  // 2. Check if a player already submitted a 'pending' deposit with this Ref No or matching phone + amount
+  const pendingTx = serverTransactions.find((t) => {
+    if (t.type !== 'deposit' || t.status !== 'pending') return false;
+    const tRef = normalizeTransactionReference(t.referenceNumber);
+    if (normRef && (tRef === normRef || (t.fullSmsText && t.fullSmsText.includes(normRef)))) return true;
+    if (
+      normSms.length >= 25 &&
+      t.fullSmsText &&
+      t.fullSmsText.trim().replace(/\s+/g, ' ').toLowerCase() === normSms
+    ) {
+      return true;
+    }
+    if (detectedSenderPhone && t.userPhone === detectedSenderPhone && Math.abs(t.amount - amt) < 0.01) {
+      return true;
+    }
+    return false;
+  });
+
+  if (pendingTx) {
+    pendingTx.status = 'approved';
+    pendingTx.method = detectedBank;
+    pendingTx.amount = amt;
+    pendingTx.referenceNumber = normRef || pendingTx.referenceNumber;
+    pendingTx.fullSmsText = text;
+
+    const player = ensurePlayerRecord(pendingTx.userPhone, pendingTx.userName, pendingTx.chatId);
+    const bonusPct = getActiveDepositBonusPct();
+    const bonusAmt = bonusPct > 0 ? Number(((amt * bonusPct) / 100).toFixed(2)) : 0;
+    player.balance = Number((player.balance + amt + bonusAmt).toFixed(2));
+    if (bonusAmt > 0) {
+      player.bonusBalance = Number(((player.bonusBalance || 0) + bonusAmt).toFixed(2));
+      player.nonWithdrawableBonus = Number(
+        (getNonWithdrawableBonus(player) + bonusAmt).toFixed(2)
+      );
+    }
+    if (
+      player.phone === globalRegisteredPhone ||
+      player.phone === '0942742684' ||
+      playersByPhone.size === 1
+    ) {
+      globalWalletBalance = player.balance;
+    }
+
+    // Add to verified receipts pool
+    verifiedBankSmsReceipts.unshift({
+      id: logId,
+      bank: detectedBank,
+      amount: amt,
+      referenceNumber: normRef,
+      senderPhone: detectedSenderPhone || pendingTx.userPhone,
+      rawSms: text,
+      receivedAt: Date.now(),
+      matchedTxId: pendingTx.id,
+      matchedUserPhone: pendingTx.userPhone,
+      status: 'auto_approved',
+    });
+    if (verifiedBankSmsReceipts.length > 100) verifiedBankSmsReceipts.pop();
+
+    const statusText = `✅ ወዲያውኑ ጸድቋል (Matched & Auto-Approved for ${pendingTx.userPhone})`;
+    receivedWebhookSmsLogs.unshift({
+      id: logId,
+      timestamp: new Date().toLocaleString(),
+      sender,
+      rawText: text,
+      parsedAmount: amt,
+      parsedRef: normRef,
+      detectedBank,
+      detectedType: parsed.detectedType,
+      statusText,
+      matchedPlayerPhone: pendingTx.userPhone,
+    });
+    if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+
+    // Send Telegram Notification
+    const targetChatId =
+      pendingTx.chatId ||
+      player.chatId ||
+      Array.from(registeredChatPhones.entries()).find(([, ph]) => ph === pendingTx.userPhone)?.[0];
+    if (targetChatId && activeBots.size > 0) {
+      const firstToken = Array.from(activeBots.keys())[0];
+      const botInfo = Array.from(activeBots.values())[0];
+      const replyText =
+        `✅ *የገቢ ክፍያዎ በባንክ SMS በራሱ ተረጋግጦ ጸድቋል (Auto-Approved)!*\n` +
+        `` +
+        `💳 ባንክ፦ *${detectedBank}*\n` +
+        `💰 የተጨመረ ብር፦ *+${amt.toFixed(2)} ETB*${bonusAmt > 0 ? ` (+${bonusAmt.toFixed(2)} ETB ቦነስ)` : ''}\n` +
+        `🔖 Ref No፦ \`${normRef}\`\n` +
+        `💵 አዲስ ቀሪ ሂሳብዎ፦ *${player.balance.toFixed(2)} ETB*`;
+      sendTelegramMessage(
+        firstToken,
+        Number(targetChatId),
+        replyText,
+        buildSubMenuInlineKeyboard(botInfo?.appUrl || SHARED_APP_URL, pendingTx.userPhone)
+      ).catch(() => {});
+    }
+
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+    return { success: true, statusText, parsed, matchedTx: pendingTx, creditedPlayer: player };
+  }
+
+  // 3. What if no pending transaction was submitted yet?
+  // Automatically identify the player via:
+  // A. Full phone number (e.g. 0942742684)
+  // B. Masked Telebirr phone format (e.g. 2519****2684 -> suffix 2684)
+  // C. Payer full name (e.g. "ከ Ezana Gebremedhin(...)")
+  // D. Admin / default single player fallback
+  const maskedPhoneMatch = text.match(/(?:\+?251|0)[79]\*{2,6}(\d{3,4})\b/i);
+  const maskedSuffix = maskedPhoneMatch ? maskedPhoneMatch[1] : undefined;
+
+  const payerNameMatch =
+    text.match(/ከ\s+([a-zA-Z\s]{3,30})\s*\(/i) ||
+    text.match(/(?:from|payer)\s+([a-zA-Z\s]{3,30})/i);
+  const detectedPayerName = payerNameMatch ? payerNameMatch[1].trim() : undefined;
+
+  // Only match directly by player if the bank SMS explicitly names/contains a non-merchant registered player phone, masked suffix, or unique player name.
+  // Never fall back to crediting an unrelated default phone; instead store as 'ready_for_claim' for the real player who submits the Ref No!
+  let matchedPlayer: ServerPlayerRecord | undefined;
+  if (detectedSenderPhone && detectedSenderPhone !== '0942742684' && playersByPhone.has(detectedSenderPhone)) {
+    matchedPlayer = playersByPhone.get(detectedSenderPhone);
+  }
+  if (!matchedPlayer && maskedSuffix && !'0942742684'.endsWith(maskedSuffix)) {
+    const suffixMatches = Array.from(playersByPhone.values()).filter((p) => p.phone.endsWith(maskedSuffix));
+    if (suffixMatches.length === 1) {
+      matchedPlayer = suffixMatches[0];
+    }
+  }
+  if (!matchedPlayer && detectedPayerName && detectedPayerName.length >= 4) {
+    const normTarget = detectedPayerName.toLowerCase();
+    const nameMatches = Array.from(playersByPhone.values()).filter((p) => {
+      const pn = (p.name || '').trim().toLowerCase();
+      return pn.length >= 4 && !pn.startsWith('player_') && (normTarget.includes(pn) || pn.includes(normTarget));
+    });
+    if (nameMatches.length === 1) {
+      matchedPlayer = nameMatches[0];
+    }
+  }
+
+  if (matchedPlayer) {
+    const player = matchedPlayer;
+    const bonusPct = getActiveDepositBonusPct();
+    const bonusAmt = bonusPct > 0 ? Number(((amt * bonusPct) / 100).toFixed(2)) : 0;
+    player.balance = Number((player.balance + amt + bonusAmt).toFixed(2));
+    if (bonusAmt > 0) {
+      player.bonusBalance = Number(((player.bonusBalance || 0) + bonusAmt).toFixed(2));
+      player.nonWithdrawableBonus = Number(
+        (getNonWithdrawableBonus(player) + bonusAmt).toFixed(2)
+      );
+    }
+    if (
+      player.phone === globalRegisteredPhone ||
+      player.phone === '0942742684' ||
+      playersByPhone.size === 1
+    ) {
+      globalWalletBalance = player.balance;
+    }
+
+    const autoTx: ServerTransactionRecord = {
+      id: `webhook-tx-${Date.now()}`,
+      userId: player.id,
+      userName: player.name,
+      userPhone: player.phone,
+      chatId: player.chatId,
+      type: 'deposit',
+      method: detectedBank,
+      amount: amt,
+      referenceNumber: normRef,
+      fullSmsText: text,
+      status: 'approved',
+      timestamp: new Date().toLocaleString(),
+    };
+    serverTransactions.unshift(autoTx);
+
+    verifiedBankSmsReceipts.unshift({
+      id: logId,
+      bank: detectedBank,
+      amount: amt,
+      referenceNumber: normRef,
+      senderPhone: player.phone,
+      rawSms: text,
+      receivedAt: Date.now(),
+      matchedTxId: autoTx.id,
+      matchedUserPhone: player.phone,
+      status: 'auto_approved',
+    });
+    if (verifiedBankSmsReceipts.length > 100) verifiedBankSmsReceipts.pop();
+
+    const statusText = `✅ በስልክ/ስም (${player.phone} - ${player.name}) ተለይቶ ወዲያውኑ ገቢ ሆኗል (+${amt.toFixed(2)} ETB)`;
+    receivedWebhookSmsLogs.unshift({
+      id: logId,
+      timestamp: new Date().toLocaleString(),
+      sender,
+      rawText: text,
+      parsedAmount: amt,
+      parsedRef: normRef,
+      detectedBank,
+      detectedType: parsed.detectedType,
+      statusText,
+      matchedPlayerPhone: player.phone,
+    });
+    if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+
+    if (player.chatId && activeBots.size > 0) {
+      const firstToken = Array.from(activeBots.keys())[0];
+      const botInfo = Array.from(activeBots.values())[0];
+      const replyText =
+        `✅ *የገቢ ክፍያዎ በባንክ SMS በራሱ ተረጋግጦ ጸድቋል (Auto-Approved)!*\n` +
+        `` +
+        `💳 ባንክ፦ *${detectedBank}*\n` +
+        `💰 የተጨመረ ብር፦ *+${amt.toFixed(2)} ETB*${bonusAmt > 0 ? ` (+${bonusAmt.toFixed(2)} ETB ቦነስ)` : ''}\n` +
+        `🔖 Ref No፦ \`${normRef}\`\n` +
+        `💵 አዲስ ቀሪ ሂሳብዎ፦ *${player.balance.toFixed(2)} ETB*`;
+      sendTelegramMessage(
+        firstToken,
+        Number(player.chatId),
+        replyText,
+        buildSubMenuInlineKeyboard(botInfo?.appUrl || SHARED_APP_URL, player.phone)
+      ).catch(() => {});
+    }
+
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+    return { success: true, statusText, parsed, matchedTx: autoTx, creditedPlayer: player };
+  }
+
+  // 4. If player not yet submitted and phone not detected in SMS, store in verified receipts pool!
+  verifiedBankSmsReceipts.unshift({
+    id: logId,
+    bank: detectedBank,
+    amount: amt,
+    referenceNumber: normRef,
+    senderPhone: detectedSenderPhone,
+    rawSms: text,
+    receivedAt: Date.now(),
+    status: 'ready_for_claim',
+  });
+  if (verifiedBankSmsReceipts.length > 100) verifiedBankSmsReceipts.pop();
+
+  const statusText = `📥 ተመዝግቧል (Pre-Verified & Ready for Claim) Ref: ${normRef}`;
+  receivedWebhookSmsLogs.unshift({
+    id: logId,
+    timestamp: new Date().toLocaleString(),
+    sender,
+    rawText: text,
+    parsedAmount: amt,
+    parsedRef: normRef,
+    detectedBank,
+    detectedType: parsed.detectedType,
+    statusText,
+    matchedPlayerPhone: detectedSenderPhone,
+  });
+  if (receivedWebhookSmsLogs.length > 100) receivedWebhookSmsLogs.pop();
+
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+  return { success: true, statusText, parsed };
+}
+
+// 1. Webhook Receiver for Android SMS Forwarder Apps & Gateways (JSON, Form-Urlencoded, Plain Text, or Query Params)
+const handleIncomingSmsWebhook = (req: express.Request, res: express.Response) => {
+  const querySecret = typeof req.query.secret === 'string' ? req.query.secret : '';
+  const headerSecret =
+    req.headers['x-webhook-secret'] ||
+    req.headers['x-api-key'] ||
+    (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '');
+  const rawBodyObj =
+    req.body && typeof req.body === 'object' ? (req.body as Record<string, unknown>) : {};
+  const nestedData =
+    (rawBodyObj.payload && typeof rawBodyObj.payload === 'object'
+      ? (rawBodyObj.payload as Record<string, unknown>)
+      : rawBodyObj.data && typeof rawBodyObj.data === 'object'
+      ? (rawBodyObj.data as Record<string, unknown>)
+      : {}) as Record<string, unknown>;
+  const bodySecret = typeof rawBodyObj.secret === 'string' ? rawBodyObj.secret : '';
+  const providedSecret = String(headerSecret || querySecret || bodySecret || '').trim();
+
+  const configuredSecret = adminPinConfig.smsWebhookSecret?.trim();
+  if (configuredSecret && providedSecret && providedSecret !== configuredSecret) {
+    res.status(401).json({ ok: false, error: 'Unauthorized: Invalid SMS Webhook Secret' });
+    return;
+  }
+
+  const smsText = String(
+    rawBodyObj.message ||
+      rawBodyObj.text ||
+      rawBodyObj.body ||
+      rawBodyObj.sms ||
+      rawBodyObj.content ||
+      rawBodyObj.msg ||
+      rawBodyObj.sms_body ||
+      rawBodyObj.Message ||
+      rawBodyObj.Text ||
+      nestedData.message ||
+      nestedData.text ||
+      nestedData.body ||
+      nestedData.sms ||
+      (typeof req.body === 'string' ? req.body : '') ||
+      req.query.message ||
+      req.query.text ||
+      req.query.sms ||
+      req.query.body ||
+      ''
+  ).trim();
+  const sender = String(
+    rawBodyObj.sender ||
+      rawBodyObj.from ||
+      rawBodyObj.phone ||
+      rawBodyObj.address ||
+      rawBodyObj.Sender ||
+      nestedData.sender ||
+      nestedData.from ||
+      req.query.from ||
+      req.query.sender ||
+      '127'
+  ).trim();
+
+  if (!smsText) {
+    res.status(400).json({ ok: false, error: 'Missing SMS text in payload' });
+    return;
+  }
+
+  const result = processIncomingBankSms(smsText, sender);
+  res.json({
+    ok: true,
+    ...result,
+    webhookStatus: 'processed',
+  });
+};
+
+app.post('/api/webhook/sms', handleIncomingSmsWebhook);
+app.get('/api/webhook/sms', handleIncomingSmsWebhook);
+app.post('/api/transactions/sms-webhook', handleIncomingSmsWebhook);
+app.get('/api/transactions/sms-webhook', handleIncomingSmsWebhook);
+
+// 2. Query Webhook Status, Secret, and Recent Logs for Admin Panel
+app.get('/api/webhook/sms/logs', (req, res) => {
+  const host = req.get('host') || 'sun-bingo-faap.onrender.com';
+  const proto = req.protocol === 'https' || host.includes('run.app') || host.includes('render.com') ? 'https' : 'http';
+  res.json({
+    ok: true,
+    webhookUrl: `${proto}://${host}/api/webhook/sms`,
+    secret: adminPinConfig.smsWebhookSecret || 'ezi_sms_secret_2026',
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+    requireDepositApproval: adminPinConfig.requireDepositApproval,
+    logs: receivedWebhookSmsLogs,
+    verifiedReceipts: verifiedBankSmsReceipts,
+  });
+});
+
+// 3. Test Endpoint: Paste a sample SMS from CBE / Telebirr to test auto-approval
+app.post('/api/webhook/sms/test', (req, res) => {
+  const { smsText, sender } = req.body as { smsText?: string; sender?: string };
+  if (!smsText || !smsText.trim()) {
+    res.status(400).json({ ok: false, error: 'እባክዎ የሙከራ SMS ያስገቡ።' });
+    return;
+  }
+  const result = processIncomingBankSms(smsText.trim(), sender || '127');
+  res.json({
+    ok: true,
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+    result,
+    logs: receivedWebhookSmsLogs,
+    verifiedReceipts: verifiedBankSmsReceipts,
+  });
+});
+
+// 4. Update Webhook Secret and/or ON/OFF Toggle
+app.post('/api/webhook/sms/config', (req, res) => {
+  const { secret, enabled } = req.body as { secret?: string; enabled?: boolean };
+  let changed = false;
+  if (secret && secret.trim().length >= 4) {
+    adminPinConfig.smsWebhookSecret = secret.trim();
+    changed = true;
+  }
+  if (typeof enabled === 'boolean') {
+    adminPinConfig.smsWebhookEnabled = enabled;
+    changed = true;
+  }
+  if (changed) {
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+  }
+  res.json({
+    ok: true,
+    secret: adminPinConfig.smsWebhookSecret,
+    smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+  });
+});
+
+// Fetch latest transactions queue for Admin & Wallet sync
+app.get('/api/transactions', (_req, res) => {
+  res.json({
+    ok: true,
+    transactions: serverTransactions,
+    pendingCount: serverTransactions.filter((t) => t.status === 'pending').length,
+    players: Array.from(playersByPhone.values()),
+  });
+});
+
+// Admin Approve or Reject Transaction (Credits/Debits Player & Sends Live Telegram Notification!)
+app.post('/api/transactions/approve', async (req, res) => {
+  const { txId, status, referenceNumber, userPhone } = req.body as {
+    txId: string;
+    status: 'approved' | 'rejected';
+    referenceNumber?: string;
+    amount?: number;
+    userPhone?: string;
+  };
+  const normSearchRef = referenceNumber ? normalizeTransactionReference(referenceNumber) : '';
+  const normSearchPhone = userPhone ? normalizeEthiopianPhone(userPhone) : '';
+  const tx =
+    serverTransactions.find((t) => t.id === txId) ||
+    (normSearchRef
+      ? serverTransactions.find(
+          (t) =>
+            normalizeTransactionReference(t.referenceNumber) === normSearchRef &&
+            (!normSearchPhone || normalizeEthiopianPhone(t.userPhone) === normSearchPhone)
+        )
+      : undefined);
+  if (!tx) {
+    res.status(404).json({ ok: false, error: 'Transaction not found' });
+    return;
+  }
+
+  const previousStatus = tx.status;
+
+  // Guard against approving a duplicate deposit reference number
+  if (previousStatus !== 'approved' && status === 'approved' && tx.type === 'deposit') {
+    const normRef = normalizeTransactionReference(tx.referenceNumber);
+    const isSyntheticTxRef =
+      !normRef ||
+      normRef.length < 5 ||
+      normRef.startsWith('REF') ||
+      normRef.startsWith('PHOTO') ||
+      normRef.startsWith('CASH');
+    const alreadyApprovedDup = !isSyntheticTxRef
+      ? serverTransactions.find(
+          (other) =>
+            other.id !== tx.id &&
+            other.type === 'deposit' &&
+            other.status === 'approved' &&
+            normalizeTransactionReference(other.referenceNumber) === normRef
+        )
+      : undefined;
+    if (alreadyApprovedDup) {
+      tx.status = 'rejected';
+      saveBotsToDisk();
+      broadcastRealtimeSync();
+      res.status(409).json({
+        ok: false,
+        duplicate: true,
+        error: `❌ ይህ የግብይት ቁጥር (${tx.referenceNumber}) ቀድሞ በሌላ ጥያቄ ጸድቋል! በድጋሚ ማጽደቅ አይቻልም።`,
+        transactions: serverTransactions,
+        players: Array.from(playersByPhone.values()),
+      });
+      return;
+    }
+  }
+
+  tx.status = status;
+
+  const player = ensurePlayerRecord(tx.userPhone, tx.userName, tx.chatId);
+  const runningBotToken =
+    Array.from(activeBots.keys()).find((k) => activeBots.get(k)?.isRunning) ||
+    Array.from(activeBots.keys())[0];
+
+  if (previousStatus !== 'approved' && status === 'approved') {
+    let bonusAmt = 0;
+    if (tx.type === 'deposit') {
+      const bonusPct = getActiveDepositBonusPct();
+      bonusAmt = bonusPct > 0 ? Number(((tx.amount * bonusPct) / 100).toFixed(2)) : 0;
+      player.balance = Number((player.balance + tx.amount + bonusAmt).toFixed(2));
+      if (bonusAmt > 0) {
+        player.bonusBalance = Number(((player.bonusBalance || 0) + bonusAmt).toFixed(2));
+        player.nonWithdrawableBonus = Number(
+          (getNonWithdrawableBonus(player) + bonusAmt).toFixed(2)
+        );
+      }
+    } else if (tx.type === 'withdraw') {
+      player.balance = Math.max(0, Number((player.balance - tx.amount).toFixed(2)));
+      player.withdrawableBalance = Math.max(
+        0,
+        Number((getWithdrawableBalance(player) - tx.amount).toFixed(2))
+      );
+      clampBalancesAfterDebit(player);
+    }
+    player.updatedAt = new Date().toLocaleString();
+    if (
+      player.phone === globalRegisteredPhone ||
+      player.phone === '0942742684' ||
+      playersByPhone.size === 1
+    ) {
+      globalWalletBalance = player.balance;
+    }
+
+    // Notify the player on Telegram if a bot is active and we have their chatId!
+    const normTxPhone = normalizeEthiopianPhone(tx.userPhone);
+    const targetChatId =
+      tx.chatId ||
+      player.chatId ||
+      Array.from(registeredChatPhones.entries()).find(
+        ([, ph]) => normalizeEthiopianPhone(ph) === normTxPhone
+      )?.[0];
+
+    if (targetChatId && runningBotToken) {
+      const msgText =
+        tx.type === 'deposit'
+          ? `✅ *የገቢ ጥያቄዎ ጸድቋል (Approved)!*\n` +
+            `` +
+            `💳 መንገድ፦ *${tx.method}*\n` +
+            `💰 የተጨመረ ብር፦ *+${tx.amount.toFixed(2)} ETB*${bonusAmt > 0 ? ` (+${bonusAmt.toFixed(2)} ETB ቦነስ)` : ''}\n` +
+            `🔖 Ref No፦ \`${tx.referenceNumber}\`\n` +
+            `🏦 አዲስ ቀሪ ሂሳብ፦ *${player.balance.toFixed(2)} ETB*`
+          : `✅ *የወጪ ጥያቄዎ (${tx.amount.toFixed(2)} ETB) ጸድቆ ወደ ሂሳብዎ ተልኳል!*`;
+      sendTelegramMessage(runningBotToken, Number(targetChatId), msgText).catch(() => {});
+    }
+  } else if (previousStatus !== 'rejected' && status === 'rejected') {
+    const normTxPhone = normalizeEthiopianPhone(tx.userPhone);
+    const targetChatId =
+      tx.chatId ||
+      player.chatId ||
+      Array.from(registeredChatPhones.entries()).find(
+        ([, ph]) => normalizeEthiopianPhone(ph) === normTxPhone
+      )?.[0];
+    if (targetChatId && runningBotToken) {
+      const msgText =
+        tx.type === 'deposit'
+          ? `❌ *የገቢ ጥያቄዎ (${tx.amount.toFixed(2)} ETB • Ref: \`${tx.referenceNumber}\`) ውድቅ ተደርጓል (Rejected)!*\nእባክዎ ትክክለኛ የክፍያ ደረሰኝ ያረጋግጡ ወይም Support ያነጋግሩ።`
+          : `❌ *የወጪ ጥያቄዎ (${tx.amount.toFixed(2)} ETB) ውድቅ ተደርጓል (Rejected)!*`;
+      sendTelegramMessage(runningBotToken, Number(targetChatId), msgText).catch(() => {});
+    }
+  }
+
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+
+  res.json({
+    ok: true,
+    transaction: tx,
+    player,
+    globalWalletBalance,
+    transactions: serverTransactions,
+    players: Array.from(playersByPhone.values()),
+  });
+});
+
+// Server-Verified Admin Login & PIN / Approval Toggle
+const handleAdminPinVerification = (req: express.Request, res: express.Response) => {
+  const { username, password, pin, mode } = req.body as {
+    username?: string;
+    password?: string;
+    pin?: string;
+    mode?: 'pin' | 'password';
+  };
+  const p = (password || pin || '').trim();
+  const resolvedMode = mode === 'pin' ? 'pin' : 'password';
+
+  if (resolvedMode === 'pin') {
+    if (isValidAdminSecretOnly(p, 'pin')) {
+      res.json({
+        ok: true,
+        requireDepositApproval: adminPinConfig.requireDepositApproval,
+        hasCustomSecurity: Boolean(adminPinConfig.hasCustomSecurity),
+      });
+      return;
+    }
+  } else {
+    const u = (username || '').trim().toLowerCase();
+    if (isValidAdminUsername(u) && isValidAdminSecretOnly(p, 'password')) {
+      res.json({
+        ok: true,
+        requireDepositApproval: adminPinConfig.requireDepositApproval,
+        hasCustomSecurity: Boolean(adminPinConfig.hasCustomSecurity),
+      });
+      return;
+    }
+  }
+
+  res.status(401).json({
+    ok: false,
+    error: 'የተሳሳተ መለያ ስም፣ የይለፍ ቃል ወይም PIN ቁጥር!',
+  });
+};
+
+app.post('/api/admin/login', handleAdminPinVerification);
+app.post('/api/admin/verify-pin', handleAdminPinVerification);
+
+const handleAdminConfigUpdate = (req: express.Request, res: express.Response) => {
+  const {
+    currentCredential,
+    newUsername,
+    newPassword,
+    newPin,
+    requireDepositApproval,
+    smsWebhookEnabled,
+    welcomeBonusAmount,
+    referralBonusAmount,
+    depositBonusEnabled,
+    depositBonusPercent,
+    minDepositAmount,
+    minWithdrawAmount,
+    autoNotifyGames,
+  } = req.body as {
+    currentCredential?: string;
+    newUsername?: string;
+    newPassword?: string;
+    newPin?: string;
+    requireDepositApproval?: boolean;
+    smsWebhookEnabled?: boolean;
+    welcomeBonusAmount?: number;
+    referralBonusAmount?: number;
+    depositBonusEnabled?: boolean;
+    depositBonusPercent?: number;
+    minDepositAmount?: number;
+    minWithdrawAmount?: number;
+    autoNotifyGames?: Partial<{ fast: boolean; regular: boolean; keno: boolean; ramino: boolean }>;
+  };
+
+  const wantsSecurityChange = Boolean(
+    (newUsername && newUsername.trim()) ||
+      (newPassword && newPassword.trim()) ||
+      (newPin && newPin.trim())
+  );
+
+  if (wantsSecurityChange) {
+    const cur = (currentCredential || '').trim();
+    if (!cur || !isValidAdminSecretOnly(cur, 'any')) {
+      res.status(401).json({
+        ok: false,
+        error: '❌ የአሁኑ የይለፍ ቃል ወይም PIN ትክክል አይደለም!',
+      });
+      return;
+    }
+    if (newUsername && newUsername.trim()) {
+      if (newUsername.trim().length < 3) {
+        res.status(400).json({ ok: false, error: '❌ መለያ ስም (Username) ቢያንስ 3 ፊደላት መሆን አለበት።' });
+        return;
+      }
+      adminPinConfig.username = newUsername.trim();
+      adminPinConfig.hasCustomUsername = true;
+    }
+    if (newPassword && newPassword.trim()) {
+      if (newPassword.trim().length < 4) {
+        res.status(400).json({ ok: false, error: '❌ የይለፍ ቃል (Password) ቢያንስ 4 ቁምፊ መሆን አለበት።' });
+        return;
+      }
+      adminPinConfig.passwordScryptHash = hashAdminSecret(newPassword.trim());
+      adminPinConfig.passwordHash = '';
+      adminPinConfig.hasCustomSecurity = true;
+    }
+    if (newPin && newPin.trim()) {
+      if (newPin.trim().length < 4) {
+        res.status(400).json({ ok: false, error: '❌ ሚስጥር PIN ቢያንስ 4 አሃዝ መሆን አለበት።' });
+        return;
+      }
+      adminPinConfig.pinScryptHash = hashAdminSecret(newPin.trim());
+      adminPinConfig.pinCode = '';
+      adminPinConfig.hasCustomSecurity = true;
+    }
+  }
+  if (typeof requireDepositApproval === 'boolean') {
+    adminPinConfig.requireDepositApproval = requireDepositApproval;
+  }
+  if (typeof smsWebhookEnabled === 'boolean') {
+    adminPinConfig.smsWebhookEnabled = smsWebhookEnabled;
+  }
+  if (typeof welcomeBonusAmount === 'number' && Number.isFinite(welcomeBonusAmount)) {
+    adminPinConfig.welcomeBonusAmount = Math.max(0, welcomeBonusAmount);
+  }
+  if (typeof referralBonusAmount === 'number' && Number.isFinite(referralBonusAmount)) {
+    adminPinConfig.referralBonusAmount = Math.max(0, referralBonusAmount);
+  }
+  if (typeof depositBonusEnabled === 'boolean') {
+    adminPinConfig.depositBonusEnabled = depositBonusEnabled;
+  }
+  if (typeof depositBonusPercent === 'number' && Number.isFinite(depositBonusPercent)) {
+    adminPinConfig.depositBonusPercent = Math.max(0, Math.min(100, depositBonusPercent));
+  }
+  if (typeof minDepositAmount === 'number' && Number.isFinite(minDepositAmount)) {
+    adminPinConfig.minDepositAmount = Math.max(1, minDepositAmount);
+  }
+  if (typeof minWithdrawAmount === 'number' && Number.isFinite(minWithdrawAmount)) {
+    adminPinConfig.minWithdrawAmount = Math.max(1, minWithdrawAmount);
+  }
+  if (autoNotifyGames && typeof autoNotifyGames === 'object') {
+    adminPinConfig.autoNotifyGames = {
+      fast: typeof autoNotifyGames.fast === 'boolean' ? autoNotifyGames.fast : adminPinConfig.autoNotifyGames.fast,
+      regular: typeof autoNotifyGames.regular === 'boolean' ? autoNotifyGames.regular : adminPinConfig.autoNotifyGames.regular,
+      keno: typeof autoNotifyGames.keno === 'boolean' ? autoNotifyGames.keno : adminPinConfig.autoNotifyGames.keno,
+      ramino: typeof autoNotifyGames.ramino === 'boolean' ? autoNotifyGames.ramino : adminPinConfig.autoNotifyGames.ramino,
+    };
+  }
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+  res.json({
+    ok: true,
+    adminPinConfig: {
+      username: adminPinConfig.username,
+      hasCustomSecurity: Boolean(adminPinConfig.hasCustomSecurity),
+      requireDepositApproval: adminPinConfig.requireDepositApproval,
+      smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+      welcomeBonusAmount: adminPinConfig.welcomeBonusAmount,
+      referralBonusAmount: adminPinConfig.referralBonusAmount,
+      depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
+      depositBonusPercent: adminPinConfig.depositBonusPercent,
+      minDepositAmount: adminPinConfig.minDepositAmount,
+      minWithdrawAmount: adminPinConfig.minWithdrawAmount,
+      autoNotifyGames: adminPinConfig.autoNotifyGames,
+    },
+  });
+};
+
+app.post('/api/admin/update-security', handleAdminConfigUpdate);
+app.post('/api/admin/update-pin', handleAdminConfigUpdate);
+app.post('/api/admin/settings', handleAdminConfigUpdate);
+app.get('/api/admin/settings', (req, res) => {
+  res.json({
+    ok: true,
+    config: {
+      username: adminPinConfig.username,
+      hasCustomSecurity: Boolean(adminPinConfig.hasCustomSecurity),
+      requireDepositApproval: adminPinConfig.requireDepositApproval,
+      smsWebhookEnabled: adminPinConfig.smsWebhookEnabled !== false,
+      welcomeBonusAmount: adminPinConfig.welcomeBonusAmount,
+      referralBonusAmount: adminPinConfig.referralBonusAmount,
+      depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
+      depositBonusPercent: adminPinConfig.depositBonusPercent,
+      minDepositAmount: adminPinConfig.minDepositAmount,
+      minWithdrawAmount: adminPinConfig.minWithdrawAmount,
+      autoNotifyGames: adminPinConfig.autoNotifyGames,
+    },
+  });
+});
+
+// Full State Backup & Restore for Zero-Loss Deployments (Players, Wallets, Txs, Banks, Ads, Visibility, Bot)
+function isAuthorizedBackupPin(pinValue: unknown): boolean {
+  const cleanPin = String(pinValue || '').trim();
+  return isValidAdminSecretOnly(cleanPin, 'any');
+}
+
+app.get('/api/admin/state-backup', (req, res) => {
+  const pin = req.headers['x-admin-pin'] || req.query.pin;
+  if (!isAuthorizedBackupPin(pin)) {
+    res.status(401).json({ ok: false, error: 'Unauthorized PIN' });
+    return;
+  }
+  const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+  const activeTokenList = Array.from(activeBots.entries()).map(([token, info]) => ({
+    token,
+    botUsername: info.botUsername,
+    botFirstName: info.botFirstName,
+    appUrl: info.appUrl,
+    offset: info.offset,
+  }));
+  res.json({
+    ok: true,
+    exportedAt: new Date().toISOString(),
+    backup: {
+      players: Array.from(playersByPhone.values()),
+      transactions: serverTransactions,
+      registeredPhones: Array.from(registeredChatPhones.entries()),
+      bonusClaimed: Array.from(chatWelcomeBonusClaimed.values()),
+      persistedBankAccounts,
+      homeAdsEnabled: persistedHomeAdsEnabled,
+      homeHeroAds: persistedHomeHeroAds,
+      gameVisibility: persistedGameVisibility,
+      adminPinConfig,
+      fastGameHistory: fastRoomsByStake[10]?.gameHistory || [],
+      regularGameHistory: regularLiveRoomState?.gameHistory || [],
+      fastRoomsByStake: roomsObj,
+      fastLockedCartelasByStake: lockedObj,
+      regularRoomState: regularLiveRoomState,
+      globalWalletBalance,
+      globalBonusBalance,
+      tokens: activeTokenList.length > 0 ? activeTokenList : persistedBotTokensCache,
+    },
+  });
+});
+
+app.post('/api/admin/state-restore', (req, res) => {
+  const pin = req.headers['x-admin-pin'] || req.query.pin || req.body?.pin;
+  if (!isAuthorizedBackupPin(pin)) {
+    res.status(401).json({ ok: false, error: 'Unauthorized PIN' });
+    return;
+  }
+  const b = (req.body?.backup || req.body || {}) as Partial<PersistedBotData>;
+
+  if (Array.isArray(b.players)) {
+    for (const p of b.players) {
+      if (!p?.phone) continue;
+      const cleanPh = normalizeEthiopianPhone(p.phone) || p.phone;
+      const existing = playersByPhone.get(cleanPh);
+      if (!existing) {
+        playersByPhone.set(cleanPh, {
+          ...p,
+          phone: cleanPh,
+          balance: Number(p.balance || 0),
+          withdrawableBalance: typeof p.withdrawableBalance === 'number' ? p.withdrawableBalance : 0,
+          bonusBalance: Number(p.bonusBalance ?? 0),
+          nonWithdrawableBonus:
+            typeof p.nonWithdrawableBonus === 'number'
+              ? p.nonWithdrawableBonus
+              : Math.min(Number(p.balance || 0), Number(p.bonusBalance ?? 0)),
+          referralEarnings: Number(p.referralEarnings || 0),
+          referredCount: Number(p.referredCount || 0),
+          isBlocked: Boolean(p.isBlocked),
+          updatedAt: p.updatedAt || new Date().toLocaleString(),
+        });
+      } else {
+        // Preserve non-placeholder names, higher/valid balances, and chat links
+        if (p.name && (!existing.name || existing.name.startsWith('Player_'))) existing.name = p.name;
+        if (typeof p.balance === 'number' && Number.isFinite(p.balance)) existing.balance = p.balance;
+        if (typeof p.withdrawableBalance === 'number') existing.withdrawableBalance = p.withdrawableBalance;
+        if (typeof p.bonusBalance === 'number') existing.bonusBalance = p.bonusBalance;
+        if (typeof p.nonWithdrawableBonus === 'number') existing.nonWithdrawableBonus = p.nonWithdrawableBonus;
+        if (p.passwordHash && p.passwordHash !== '****') existing.passwordHash = p.passwordHash;
+        if (p.chatId && !existing.chatId) existing.chatId = p.chatId;
+        existing.isBlocked = Boolean(p.isBlocked);
+        existing.referredCount = Math.max(existing.referredCount || 0, p.referredCount || 0);
+        existing.referralEarnings = Math.max(existing.referralEarnings || 0, p.referralEarnings || 0);
+      }
+    }
+  }
+
+  if (Array.isArray(b.transactions)) {
+    const existingIds = new Set(serverTransactions.map((t) => t.id));
+    const mergedTxs = [...serverTransactions];
+    for (const tx of b.transactions) {
+      if (tx?.id && !existingIds.has(tx.id)) {
+        existingIds.add(tx.id);
+        mergedTxs.push(tx);
+      }
+    }
+    serverTransactions = mergedTxs.slice(0, 600);
+  }
+
+  if (Array.isArray(b.registeredPhones)) {
+    for (const [cid, ph] of b.registeredPhones) {
+      if (cid && ph) {
+        registeredChatPhones.set(Number(cid), String(ph));
+        ensurePlayerRecord(String(ph), undefined, Number(cid));
+      }
+    }
+  }
+
+  if (Array.isArray(b.bonusClaimed)) {
+    for (const cid of b.bonusClaimed) {
+      chatWelcomeBonusClaimed.add(Number(cid));
+    }
+  }
+
+  if (Array.isArray(b.persistedBankAccounts) && b.persistedBankAccounts.length > 0) {
+    persistedBankAccounts = b.persistedBankAccounts.map((bk) => ({
+      ...bk,
+      isActive: bk.isActive !== false,
+    }));
+    for (const stk of FAST_STAKE_TIERS) {
+      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].bankAccounts = [...persistedBankAccounts];
+    }
+    if (regularLiveRoomState) regularLiveRoomState.bankAccounts = [...persistedBankAccounts];
+  }
+
+  if (typeof b.homeAdsEnabled === 'boolean') {
+    persistedHomeAdsEnabled = b.homeAdsEnabled;
+  }
+
+  if (Array.isArray(b.homeHeroAds)) {
+    persistedHomeHeroAds = b.homeHeroAds.slice(0, 25);
+    homeHeroAdsVersion += 1;
+    for (const stk of FAST_STAKE_TIERS) {
+      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [];
+    }
+    if (regularLiveRoomState) regularLiveRoomState.heroBanners = [];
+  }
+
+  if (b.gameVisibility && typeof b.gameVisibility === 'object') {
+    const gv = b.gameVisibility as Record<string, { visible: boolean; comingSoon?: boolean }>;
+    persistedGameVisibility = {
+      fast: gv.fast ?? persistedGameVisibility.fast,
+      regular: gv.regular ?? persistedGameVisibility.regular,
+      keno: gv.keno ?? persistedGameVisibility.keno,
+      ramino: gv.ramino ?? persistedGameVisibility.ramino,
+    };
+  }
+
+  if (b.adminPinConfig && typeof b.adminPinConfig === 'object') {
+    adminPinConfig = {
+      ...adminPinConfig,
+      ...b.adminPinConfig,
+      autoNotifyGames: {
+        ...adminPinConfig.autoNotifyGames,
+        ...(b.adminPinConfig.autoNotifyGames || {}),
+        keno: b.adminPinConfig.autoNotifyGames?.keno === true,
+      },
+    };
+  }
+
+  if (Array.isArray(b.fastGameHistory) && fastRoomsByStake[10]) {
+    fastRoomsByStake[10].gameHistory = b.fastGameHistory.slice(0, 100);
+  }
+  if (Array.isArray(b.regularGameHistory) && regularLiveRoomState) {
+    regularLiveRoomState.gameHistory = b.regularGameHistory.slice(0, 100);
+  }
+  if (typeof b.globalWalletBalance === 'number' && Number.isFinite(b.globalWalletBalance)) {
+    globalWalletBalance = b.globalWalletBalance;
+  }
+  if (typeof b.globalBonusBalance === 'number' && Number.isFinite(b.globalBonusBalance)) {
+    globalBonusBalance = b.globalBonusBalance;
+  }
+
+  saveBotsToDisk();
+  broadcastRealtimeSync('both');
+
+  res.json({
+    ok: true,
+    restoredPlayers: playersByPhone.size,
+    restoredTransactions: serverTransactions.length,
+    restoredBankAccounts: persistedBankAccounts.length,
+    restoredHomeAds: persistedHomeHeroAds.length,
+    gameVisibility: persistedGameVisibility,
+  });
+});
+
+// Admin Broadcast Message / Image+Text Post to In-App Banner/Toast AND Telegram Users or Channels
+app.post('/api/admin/broadcast', async (req, res) => {
+  const { targetType, specificUser, channelId, message, title, imageUrl, postMode } = req.body as {
+    targetType?: 'all' | 'specific' | 'channel';
+    specificUser?: string;
+    channelId?: string;
+    message?: string;
+    title?: string;
+    imageUrl?: string;
+    postMode?: 'both' | 'telegram_only';
+  };
+  const cleanMsg = (message || '').trim();
+  const cleanTitle = (title || '').trim();
+  const cleanImage = (imageUrl || '').trim();
+  const effectiveTitle = cleanTitle || '☀️ Sun Games';
+
+  if (!cleanMsg && !cleanImage) {
+    res.status(400).json({ ok: false, error: 'እባክዎ የሚላከውን መልዕክት ወይም ምስል ያስገቡ።' });
+    return;
+  }
+
+  const firstActiveBot = Array.from(activeBots.keys())[0];
+  const targetChats = new Set<number | string>();
+
+  if (targetType === 'channel') {
+    const ch = (channelId || specificUser || '').trim();
+    if (!ch) {
+      res.status(400).json({ ok: false, error: 'እባክዎ የ Telegram Channel / Group ID ወይም @username ያስገቡ!' });
+      return;
+    }
+    targetChats.add(/^-?\d+$/.test(ch) ? Number(ch) : ch);
+  } else if (targetType === 'specific' && specificUser && specificUser.trim()) {
+    const rawQ = specificUser.trim();
+    const q = rawQ.toLowerCase();
+    for (const [cid, ph] of registeredChatPhones.entries()) {
+      if (String(cid) === q || ph.toLowerCase().includes(q)) {
+        targetChats.add(cid);
+      }
+    }
+    for (const p of playersByPhone.values()) {
+      if (
+        p.chatId &&
+        (p.phone.toLowerCase().includes(q) ||
+          p.name.toLowerCase().includes(q) ||
+          String(p.chatId) === q)
+      ) {
+        targetChats.add(p.chatId);
+      }
+    }
+    if (targetChats.size === 0 && (rawQ.startsWith('@') || /^-?\d{5,}$/.test(rawQ))) {
+      targetChats.add(/^-?\d+$/.test(rawQ) ? Number(rawQ) : rawQ);
+    }
+  } else {
+    for (const cid of registeredChatPhones.keys()) {
+      targetChats.add(cid);
+    }
+    for (const p of playersByPhone.values()) {
+      if (p.chatId) targetChats.add(p.chatId);
+    }
+  }
+
+  const formattedCaption = cleanTitle && cleanMsg
+    ? `*${escapeTelegramMarkdown(cleanTitle)}*\n\n${cleanMsg}`
+    : cleanMsg
+    ? cleanMsg
+    : cleanTitle
+    ? `*${escapeTelegramMarkdown(cleanTitle)}*`
+    : '';
+
+  let sentCount = 0;
+  let lastTelegramErr = '';
+  if (firstActiveBot && targetChats.size > 0) {
+    for (const cid of targetChats) {
+      try {
+        if (cleanImage) {
+          const r = await sendTelegramPhoto(
+            firstActiveBot,
+            cid,
+            cleanImage,
+            formattedCaption,
+            undefined,
+            true
+          );
+          if (r.ok) sentCount++;
+          else if (r.error) lastTelegramErr = r.error;
+        } else if (typeof cid === 'number' && cid > 0) {
+          await sendTelegramMessage(
+            firstActiveBot,
+            cid,
+            formattedCaption,
+            undefined,
+            undefined,
+            true
+          );
+          sentCount++;
+        } else {
+          const appUrl = activeBots.get(firstActiveBot)?.appUrl || SHARED_APP_URL;
+          const r = await fetch(`https://api.telegram.org/bot${firstActiveBot}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: cid,
+              text: formattedCaption.replace(/[*_`\[\]]/g, ''),
+              reply_markup: {
+                inline_keyboard: [[{ text: '🎮 Sun Games ክፈት / Play Now', url: buildWebAppUrl(appUrl, 'hub') }]],
+              },
+            }),
+          });
+          const d = (await r.json().catch(() => null)) as any;
+          if (d?.ok) sentCount++;
+          else if (d?.description) lastTelegramErr = d.description;
+        }
+      } catch {
+        // ignore individual chat errors
+      }
+    }
+  }
+
+  if (postMode !== 'telegram_only') {
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (cleanMsg) {
+      for (const stk of FAST_STAKE_TIERS) {
+        fastRoomsByStake[stk].adminRoomMessage = cleanMsg;
+        fastRoomsByStake[stk].adminRoomMessageAt = nowTime;
+      }
+      regularLiveRoomState.adminRoomMessage = cleanMsg;
+      regularLiveRoomState.adminRoomMessageAt = nowTime;
+      saveBotsToDisk();
+      broadcastRealtimeSync('both');
+    }
+    emitGameNotification({
+      game: 'admin',
+      title: effectiveTitle,
+      message: cleanMsg || (cleanImage ? '🖼️ አዲስ ማስታወቂያ / ፖስት' : ''),
+      imageUrl: cleanImage || undefined,
+      sendTelegram: false,
+    });
+  }
+
+  if (postMode === 'telegram_only' && !firstActiveBot) {
+    res.status(400).json({ ok: false, error: 'መጀመሪያ Telegram Bot Token በ Settings ውስጥ ያገናኙ!' });
+    return;
+  }
+
+  res.json({
+    ok: true,
+    sentCount,
+    totalTargets: targetChats.size,
+    adminRoomMessage: cleanMsg,
+    message:
+      sentCount > 0
+        ? postMode === 'telegram_only'
+          ? `✅ ${cleanImage ? 'ምስል + ጽሑፍ ፖስቱ' : 'መልዕክቱ'} ለ ${sentCount} Telegram መድረሻ ተልኳል!`
+          : `✅ ${cleanImage ? 'ምስል + ጽሑፍ ፖስቱ' : 'መልዕክቱ'} በአፑ ላይ ወጥቷል እንዲሁም ለ ${sentCount} የቴሌግራም ተጠቃሚ/ቻናል ተልኳል!`
+        : postMode === 'telegram_only'
+        ? `⚠️ የተላከ Telegram መድረሻ አልተገኘም${lastTelegramErr ? ` (${lastTelegramErr})` : ' — ቦቱ ለተጠቃሚ/ቻናል መዳረሻ እንዳለው ያረጋግጡ'}!`
+        : `✅ መልዕክቱ በመተግበሪያው ውስጥ ለሁሉም ተጫዋቾች ወጥቷል!`,
+  });
+});
+
+// Safe proxy route to stream a Telegram Bot photo file_id to the in-app banner / Admin receipt viewer without exposing the bot token
+app.get('/api/tg-file/:fileId', async (req, res) => {
+  try {
+    const fileId = String(req.params.fileId || '').trim();
+    const candidateTokens = [
+      ...Array.from(activeBots.keys()).filter((k) => activeBots.get(k)?.isRunning),
+      ...Array.from(activeBots.keys()).filter((k) => !activeBots.get(k)?.isRunning),
+      ...persistedBotTokensCache.map((t) => t.token),
+    ].filter((tok, idx, arr) => Boolean(tok) && arr.indexOf(tok) === idx);
+
+    if (!fileId || candidateTokens.length === 0) {
+      res.status(404).end();
+      return;
+    }
+
+    for (const botTok of candidateTokens) {
+      const metaRes = await fetch(
+        `https://api.telegram.org/bot${botTok}/getFile?file_id=${encodeURIComponent(fileId)}`
+      ).catch(() => null);
+      if (!metaRes) continue;
+      const metaData = (await metaRes.json().catch(() => null)) as any;
+      const filePath = metaData?.result?.file_path;
+      if (!metaData?.ok || !filePath) continue;
+
+      const fileRes = await fetch(`https://api.telegram.org/file/bot${botTok}/${filePath}`).catch(() => null);
+      if (!fileRes || !fileRes.ok) continue;
+      const contentType = fileRes.headers.get('content-type') || 'image/jpeg';
+      const arrBuf = await fileRes.arrayBuffer();
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.send(Buffer.from(arrBuf));
+      return;
+    }
+    res.status(404).end();
+  } catch {
+    res.status(500).end();
+  }
+});
+
+// API Route to connect & activate a Telegram Bot with the exact layout from IMG_3500.jpeg
+app.post('/api/telegram/connect', async (req, res) => {
+  try {
+    const { token, appUrl } = req.body as { token?: string; appUrl?: string };
+    const cleanToken = (token || '').trim();
+    if (!cleanToken || !cleanToken.includes(':')) {
+      res.status(400).json({ ok: false, error: 'ትክክለኛ የቴሌግራም Bot Token ያስገቡ።' });
+      return;
+    }
+
+    const targetUrl = sanitizeTelegramAppUrl(appUrl || lastKnownLiveHost || SHARED_APP_URL);
+
+    // 1. Verify bot via getMe
+    const meRes = await fetch(`https://api.telegram.org/bot${cleanToken}/getMe`);
+    const meData = await meRes.json();
+    if (!meData || !meData.ok) {
+      res.status(400).json({
+        ok: false,
+        error: meData?.description || 'Bot Token ትክክል አይደለም።',
+      });
+      return;
+    }
+
+    const botUsername = meData.result.username;
+    const botFirstName = meData.result.first_name;
+
+    // 2. Delete any old webhook so getUpdates polling works cleanly
+    await fetch(`https://api.telegram.org/bot${cleanToken}/deleteWebhook?drop_pending_updates=false`);
+
+    // 3. Set the bottom-left blue pill Menu Button to "☰ Menu" (commands) matching IMG_3522.jpeg!
+    await fetch(`https://api.telegram.org/bot${cleanToken}/setChatMenuButton`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        menu_button: {
+          type: 'commands',
+        },
+      }),
+    });
+
+    // 4. Register Bot Commands in Telegram (including /start)
+    await fetch(`https://api.telegram.org/bot${cleanToken}/setMyCommands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commands: [
+          { command: 'start', description: '🚀 Start / ጀምር' },
+          { command: 'play', description: '🎮 Play SUN GAMES' },
+          { command: 'deposit', description: 'Deposit 💵' },
+          { command: 'withdraw', description: 'Withdraw 💸' },
+          { command: 'balance', description: 'Check Balance 💰' },
+          { command: 'transfer', description: 'Transfer 🔄' },
+          { command: 'support', description: 'Support 📞' },
+        ],
+      }),
+    });
+
+    // 5. Disconnect any different previously active bot so replacing a bot never keeps the old one alive
+    for (const [oldTok, oldBot] of Array.from(activeBots.entries())) {
+      if (oldTok !== cleanToken) {
+        oldBot.isRunning = false;
+        activeBots.delete(oldTok);
+        try {
+          await fetch(`https://api.telegram.org/bot${oldTok}/deleteWebhook`);
+        } catch {}
+      }
+    }
+    persistedBotTokensCache = persistedBotTokensCache.filter((b) => b.token === cleanToken);
+
+    // 6. Start or update SINGLE background polling loop
+    const existing = activeBots.get(cleanToken);
+    if (existing) {
+      existing.botUsername = botUsername;
+      existing.botFirstName = botFirstName;
+      existing.appUrl = targetUrl;
+      existing.lastError = undefined;
+      if (!existing.isRunning) {
+        existing.isRunning = true;
+        pollBotUpdates(cleanToken);
+      }
+    } else {
+      activeBots.set(cleanToken, {
+        botUsername,
+        botFirstName,
+        appUrl: targetUrl,
+        offset: 0,
+        isRunning: true,
+      });
+      pollBotUpdates(cleanToken);
+    }
+
+    isExplicitBotDisconnect = false;
+    saveBotsToDisk();
+
+    res.json({
+      ok: true,
+      botUsername,
+      botFirstName,
+      message: `🎉 ቦትዎ (@${botUsername}) ልክ በላኩት ምስል (IMG_3502 & IMG_3500) ላይ እንዳለው የስልክ ማጋሪያ (📱 Share Phone Number + 💰 15 birr welcome bonus!) እና የቻት ውስጥ Inline ቁልፎች ጋር ተዘጋጅቷል! አሁን በቴሌግራም @${botUsername} ላይ /start ይበሉት!`,
+    });
+  } catch (err) {
+    console.error('Telegram connect error:', err);
+    res.status(500).json({ ok: false, error: 'ከቴሌግራም ሰርቨር ጋር መገናኘት አልተቻለም።' });
+  }
+});
+
+// API Route to disconnect and stop Telegram Bots
+app.post('/api/telegram/disconnect', async (req, res) => {
+  try {
+    const { token } = (req.body || {}) as { token?: string };
+    const cleanToken = (token || '').trim();
+
+    if (cleanToken && activeBots.has(cleanToken)) {
+      const bot = activeBots.get(cleanToken);
+      if (bot) {
+        bot.isRunning = false;
+        activeBots.delete(cleanToken);
+      }
+      const cacheIdx = persistedBotTokensCache.findIndex((b) => b.token === cleanToken);
+      if (cacheIdx !== -1) persistedBotTokensCache.splice(cacheIdx, 1);
+      try {
+        await fetch(`https://api.telegram.org/bot${cleanToken}/deleteWebhook`);
+      } catch {}
+    } else {
+      // Disconnect and stop ALL bots
+      for (const [tok, bot] of activeBots.entries()) {
+        bot.isRunning = false;
+        try {
+          await fetch(`https://api.telegram.org/bot${tok}/deleteWebhook`);
+        } catch {}
+      }
+      activeBots.clear();
+      persistedBotTokensCache = [];
+      isExplicitBotDisconnect = true;
+    }
+
+    saveBotsToDisk();
+    broadcastRealtimeSync();
+
+    res.json({
+      ok: true,
+      message: '✅ የቴሌግራም ቦት ግንኙነት በተሳካ ሁኔታ ተቋርጧል (Telegram Bot Disconnected)!',
+      activeCount: activeBots.size,
+      bots: Array.from(activeBots.values()).map((b) => b.botUsername),
+    });
+  } catch (err) {
+    console.error('Telegram disconnect error:', err);
+    res.status(500).json({ ok: false, error: 'ቦቱን ማቋረጥ አልተቻለም።' });
+  }
+});
+
+// Keep-Alive & Render Wake-Up Ping endpoint (ለፍጥነት እና ለመቀስቀስ)
+app.get(['/api/ping', '/api/keep-alive', '/api/health'], (_req, res) => {
+  res.json({
+    ok: true,
+    status: 'awake',
+    message: '⚡ Sun Bingo Server is Awake & Fast!',
+    timestamp: Date.now(),
+    uptime: Math.floor(process.uptime()),
+    onlinePlayers: fastRoomsByStake[10]?.onlinePlayersCount || 1,
+    activeRooms: 4,
+  });
+});
+
+// ============================================================================
+// SERVER-AUTHORITATIVE FAST KENO LIVE ENGINE (100% SYNCHRONIZED ACROSS DEVICES)
+// ============================================================================
+type KenoLivePhase = 'betting' | 'drawing' | 'cooldown';
+
+interface ServerKenoTicket {
+  id: string;
+  handle: string;
+  playerId: string;
+  numbers: number[];
+  bet: number;
+  status: 'Waiting' | 'Lost' | 'Won';
+  wonAmount?: number;
+  timestamp: number;
+}
+
+interface ServerKenoResultRound {
+  id: string;
+  time: string;
+  balls: number[];
+}
+
+const KENO_SERVER_PAYMENT_MATRIX: (number | null)[][] = [
+  [null, null, null, null, null, null, 1, 1, 2, 2],
+  [3.5, 1, null, null, null, null, null, null, null, null],
+  [null, 10, 2, 1.5, 1, null, null, null, null, null],
+  [null, null, 50, 10, 3, 2, 2, null, null, null],
+  [null, null, null, 80, 30, 15, 4, 5, 2, null],
+  [null, null, null, null, 150, 60, 20, 15, 10, 5],
+  [null, null, null, null, null, 500, 80, 50, 25, 30],
+  [null, null, null, null, null, null, 1000, 200, 125, 100],
+  [null, null, null, null, null, null, null, 2000, 1000, 300],
+  [null, null, null, null, null, null, null, null, 5000, 2000],
+  [null, null, null, null, null, null, null, null, null, 10000],
+];
+
+function calculateServerKenoMultiplier(spots: number, hits: number): number {
+  if (spots < 1 || spots > 10 || hits < 0 || hits > spots) return 0;
+  return KENO_SERVER_PAYMENT_MATRIX[hits]?.[spots - 1] ?? 0;
+}
+
+function generateServerKenoDraw(): number[] {
+  const pool = Array.from({ length: 80 }, (_, i) => i + 1);
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(0, i + 1);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, 20);
+}
+
+function makeKenoRoundHash(roundNumber: number, balls: number[]): string {
+  return crypto
+    .createHash('sha512')
+    .update(`SUN_KENO_${roundNumber}_${balls.join(',')}_${Date.now()}`)
+    .digest('hex')
+    .toUpperCase();
+}
+
+const kenoAdminConfig = {
+  isPaused: false,
+  defaultCountdownSec: 60,
+  speed: 'normal' as 'normal' | 'fast' | 'turbo',
+  resetToken: 0,
+  totalBetsCount: 0,
+  totalWagered: 0,
+  totalPaidOut: 0,
+};
+
+const initialKenoBallFreq: Record<number, number> = {};
+for (let i = 1; i <= 80; i++) initialKenoBallFreq[i] = 24;
+
+const kenoLiveState = {
+  roundNumber: 127161520,
+  phase: 'betting' as KenoLivePhase,
+  countdownSeconds: 60,
+  cooldownSeconds: 0,
+  drawnBalls: [] as number[],
+  currentRevealedIndex: -1,
+  roundHash: crypto.createHash('sha512').update('SUN_KENO_INIT_127161520').digest('hex').toUpperCase(),
+  liveTickets: [] as ServerKenoTicket[],
+  recentResults: [] as ServerKenoResultRound[],
+  ballFrequency: initialKenoBallFreq,
+  lastStepAt: Date.now(),
+};
+
+function serializeKenoLiveState() {
+  return {
+    roundNumber: kenoLiveState.roundNumber,
+    phase: kenoLiveState.phase,
+    countdownSeconds: kenoLiveState.countdownSeconds,
+    cooldownSeconds: kenoLiveState.cooldownSeconds,
+    drawnBalls: kenoLiveState.drawnBalls,
+    currentRevealedIndex: kenoLiveState.currentRevealedIndex,
+    roundHash: kenoLiveState.roundHash,
+    liveTickets: kenoLiveState.liveTickets,
+    recentResults: kenoLiveState.recentResults,
+    ballFrequency: kenoLiveState.ballFrequency,
+    isPaused: kenoAdminConfig.isPaused,
+    speed: kenoAdminConfig.speed,
+    defaultCountdownSec: kenoAdminConfig.defaultCountdownSec,
+    resetToken: kenoAdminConfig.resetToken,
+    serverTimestamp: Date.now(),
+  };
+}
+
+function broadcastKenoLiveState() {
+  if (wsClients.size === 0) return;
+  const payload = JSON.stringify({
+    type: 'keno:state:sync',
+    state: serializeKenoLiveState(),
+  });
+  for (const client of wsClients) {
+    safeWsSend(client, payload);
+  }
+}
+
+function startKenoServerLoop() {
+  setInterval(() => {
+    if (!persistedGameVisibility.keno?.visible || kenoAdminConfig.isPaused) {
+      kenoLiveState.lastStepAt = Date.now();
+      return;
+    }
+    const now = Date.now();
+    const stepMs =
+      kenoLiveState.phase === 'drawing'
+        ? kenoAdminConfig.speed === 'turbo'
+          ? 300
+          : kenoAdminConfig.speed === 'fast'
+          ? 550
+          : 1000
+        : 1000;
+
+    if (now - kenoLiveState.lastStepAt < stepMs - 40) return;
+    kenoLiveState.lastStepAt = now;
+
+    if (kenoLiveState.phase === 'betting') {
+      if (kenoLiveState.countdownSeconds > 1) {
+        kenoLiveState.countdownSeconds -= 1;
+        broadcastKenoLiveState();
+      } else {
+        const balls = generateServerKenoDraw();
+        kenoLiveState.phase = 'drawing';
+        kenoLiveState.countdownSeconds = 0;
+        kenoLiveState.drawnBalls = balls;
+        kenoLiveState.currentRevealedIndex = -1;
+        kenoLiveState.roundHash = makeKenoRoundHash(kenoLiveState.roundNumber, balls);
+        broadcastKenoLiveState();
+      }
+      return;
+    }
+
+    if (kenoLiveState.phase === 'drawing') {
+      if (kenoLiveState.currentRevealedIndex < 19) {
+        kenoLiveState.currentRevealedIndex += 1;
+        broadcastKenoLiveState();
+      } else {
+        kenoLiveState.currentRevealedIndex = 20;
+        kenoLiveState.phase = 'cooldown';
+        kenoLiveState.cooldownSeconds = 5;
+        const drawn20 = kenoLiveState.drawnBalls;
+        const superBall = drawn20[19];
+
+        kenoLiveState.recentResults = [
+          {
+            id: String(kenoLiveState.roundNumber),
+            time: new Date().toLocaleTimeString('en-GB'),
+            balls: [...drawn20],
+          },
+          ...kenoLiveState.recentResults,
+        ].slice(0, 25);
+
+        for (const b of drawn20) {
+          kenoLiveState.ballFrequency[b] = (kenoLiveState.ballFrequency[b] || 24) + 1;
+        }
+
+        kenoLiveState.liveTickets = kenoLiveState.liveTickets.map((tk) => {
+          const hits = tk.numbers.filter((n) => drawn20.includes(n)).length;
+          const baseMult = calculateServerKenoMultiplier(tk.numbers.length, hits);
+          const superMult = tk.numbers.includes(superBall) && baseMult > 0 ? 2.0 : 1.0;
+          const payout = Math.round(tk.bet * baseMult * superMult);
+          return {
+            ...tk,
+            status: payout > 0 ? 'Won' : 'Lost',
+            wonAmount: payout > 0 ? payout : undefined,
+          };
+        });
+
+        broadcastKenoLiveState();
+      }
+      return;
+    }
+
+    if (kenoLiveState.phase === 'cooldown') {
+      if (kenoLiveState.cooldownSeconds > 1) {
+        kenoLiveState.cooldownSeconds -= 1;
+        broadcastKenoLiveState();
+      } else {
+        kenoLiveState.roundNumber += 1;
+        kenoLiveState.phase = 'betting';
+        kenoLiveState.countdownSeconds = kenoAdminConfig.defaultCountdownSec;
+        kenoLiveState.cooldownSeconds = 0;
+        kenoLiveState.drawnBalls = [];
+        kenoLiveState.currentRevealedIndex = -1;
+        kenoLiveState.liveTickets = [];
+        kenoLiveState.roundHash = crypto
+          .createHash('sha512')
+          .update(`SUN_KENO_${kenoLiveState.roundNumber}_${Date.now()}`)
+          .digest('hex')
+          .toUpperCase();
+        broadcastKenoLiveState();
+      }
+    }
+  }, 250);
+}
+
+// ============================================================================
+// SERVER-AUTHORITATIVE CONKER RAMINO MULTIPLAYER ENGINE (HUMAN-ONLY PRIVATE ROOMS)
+// ============================================================================
+type RaminoSuitSymbol = '♠' | '♣' | '♦' | '♥' | '🃏';
+interface RaminoCard {
+  id: string;
+  rank: string;
+  suit: RaminoSuitSymbol;
+  suitName: 'spades' | 'clubs' | 'diamonds' | 'hearts' | 'joker';
+  color: 'black' | 'red' | 'gold';
+  value: number;
+  points: number;
+  isJoker: boolean;
+  isPrintedJoker?: boolean;
+  laidOffById?: string;
+  lockedInDiscard?: boolean;
+}
+interface RaminoMeldGroup {
+  id: string;
+  cards: RaminoCard[];
+  type: 'run' | 'set';
+  suit?: RaminoSuitSymbol;
+  rank?: string;
+  ownerId: string;
+  ownerColor: string;
+  meldTurnSeq: number;
+}
+interface RaminoClosedSetBadge {
+  id: string;
+  rank: string;
+  ownerId: string;
+  ownerColor: string;
+  laidOffCards?: RaminoCard[];
+}
+interface RaminoPrivatePlayerInfo {
+  id: string;
+  name: string;
+  phone?: string;
+  avatarLetter: string;
+  avatarColor: string;
+  isHost: boolean;
+  joinedAt: number;
+}
+interface RaminoPrivateRoomRecord {
+  code: string;
+  hostId: string;
+  hostName: string;
+  maxPlayers: 2 | 3 | 4 | 5;
+  stake: number;
+  players: RaminoPrivatePlayerInfo[];
+  status: 'waiting' | 'started';
+  voiceAccessKey?: string;
+  createdAt: number;
+}
+interface RaminoPublicRoomRecord {
+  id: string;
+  name: string;
+  creatorId: string;
+  creatorPhone?: string;
+  creator: string;
+  avatarLetter: string;
+  avatarColor: string;
+  stake: number;
+  max: 2 | 3 | 4 | 5;
+  current: number;
+  duration: number;
+  timeRemaining: number;
+  isDemo?: boolean;
+  players: RaminoPrivatePlayerInfo[];
+  createdAt: number;
+}
+interface RaminoTablePlayer {
+  id: string;
+  name: string;
+  phone?: string;
+  avatarLetter: string;
+  avatarColor: string;
+  isHost: boolean;
+  isBot: boolean;
+  joinedAt: number;
+  hand: RaminoCard[];
+  hasMelded: boolean;
+  winStreak: number;
+  isDealer: boolean;
+  isSuspended?: boolean;
+}
+interface RaminoPostDayCutEntry {
+  id: string;
+  name: string;
+  avatarLetter: string;
+  avatarColor: string;
+  card: RaminoCard;
+  rankOrder: number;
+  pickedSeat: number | null;
+}
+
+interface RaminoTableSession {
+  roomCode: string;
+  isPrivate: boolean;
+  voiceAccessKey?: string;
+  hostId: string;
+  hostName: string;
+  maxPlayers: 2 | 3 | 4 | 5;
+  stake: number;
+  phase: 'waiting' | 'ceremony' | 'postday_pick' | 'game' | 'finished';
+  roundIndex: number;
+  currentRoundKey?: string;
+  privateRoundCount: number;
+  reshuffleCount: number;
+  players: RaminoTablePlayer[];
+  cutParticipants: { id: string; name: string; card: RaminoCard; isWinner: boolean }[];
+  ceremonyRevealedCount: number;
+  ceremonyDealerId: string;
+  ceremonyDealerName: string;
+  deck: RaminoCard[];
+  bottomCard: RaminoCard;
+  discardPile: RaminoCard[];
+  tableMelds: RaminoMeldGroup[];
+  closedSetBadges: RaminoClosedSetBadge[];
+  meldTurnCounter: number;
+  currentTurnIdx: number;
+  hasDrawn: boolean;
+  drawnFromDiscardCardId: string | null;
+  hasDiscarded: boolean;
+  turnSeconds: number;
+  winnerCelebration: {
+    roundKey: string;
+    show: boolean;
+    titleKey:
+      | 'dopey_joker'
+      | 'dopey'
+      | 'joker_finish'
+      | 'streak_joker'
+      | 'streak'
+      | 'normal'
+      | 'bottom_dopey_joker'
+      | 'bottom_dopey'
+      | 'bottom_normal'
+      | 'timeout_win';
+    winnerId: string;
+    winnerName: string;
+    winnerPhone?: string;
+    dopeyMultiplier: number;
+    streakMultiplier: number;
+    totalMultiplier?: number;
+    loserExtraPenalty?: number;
+    streakCount: number;
+    pot: number;
+    rakeAmount: number;
+    winAmount: number;
+    bottomCardStr?: string;
+    winnerCards?: RaminoCard[];
+    winnerGroups?: { label: 'tris' | 'catris' | 'pair' | 'meld' | 'layoff'; cards: RaminoCard[] }[];
+    winnerClosingCard?: RaminoCard | null;
+  } | null;
+  nextRoundReadyIds?: string[];
+  postDayRequest: {
+    requestedById: string;
+    requestedByName: string;
+    source: 'waiting' | 'winner' | 'header';
+    acceptedPlayerIds: string[];
+    allAccepted: boolean;
+  } | null;
+  postDaySeatPick?: {
+    source: 'waiting' | 'winner' | 'header';
+    revealedCount: number;
+    entries: RaminoPostDayCutEntry[];
+    currentPickerIdx: number;
+    chosenSeats: (string | null)[];
+    prevDealerId: string;
+    activeTurnPlayerId: string | null;
+    completed: boolean;
+  } | null;
+  lastEvent: {
+    id: number;
+    type: string;
+    actorId?: string;
+    actorName?: string;
+    detail?: string;
+  } | null;
+  ceremonyTimer?: NodeJS.Timeout | null;
+}
+
+const RAMINO_SEAT_AVATAR_COLORS = [
+  'bg-amber-400',
+  'bg-sky-500',
+  'bg-rose-500',
+  'bg-emerald-500',
+  'bg-purple-500',
+];
+const RAMINO_SUITS: { symbol: RaminoSuitSymbol; name: 'spades' | 'clubs' | 'diamonds' | 'hearts'; color: 'black' | 'red' }[] = [
+  { symbol: '♠', name: 'spades', color: 'black' },
+  { symbol: '♥', name: 'hearts', color: 'red' },
+  { symbol: '♣', name: 'clubs', color: 'black' },
+  { symbol: '♦', name: 'diamonds', color: 'red' },
+];
+const RAMINO_RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+const RAMINO_RANK_VALUES: Record<string, number> = {
+  '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
+  J: 10, Q: 10, K: 10, A: 11, JOKER: 0,
+};
+const RAMINO_CUT_RANK_ORDER: Record<string, number> = {
+  '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
+  J: 11, Q: 12, K: 13, A: 14,
+};
+const RAMINO_SEAT_DURATION_MAP: Record<2 | 3 | 4 | 5, number> = {
+  2: 60,
+  3: 180,
+  4: 240,
+  5: 300,
+};
+
+function buildServerRaminoDeck(deckCount: 1 | 2): RaminoCard[] {
+  const cards: RaminoCard[] = [];
+  let seq = 0;
+  for (let d = 0; d < deckCount; d++) {
+    for (const s of RAMINO_SUITS) {
+      for (const r of RAMINO_RANKS) {
+        seq++;
+        cards.push({
+          id: `card_${d}_${r}_${s.name}_${seq}`,
+          rank: r,
+          suit: s.symbol,
+          suitName: s.name,
+          color: s.color,
+          value: RAMINO_RANK_VALUES[r] || 10,
+          points: RAMINO_RANK_VALUES[r] || 10,
+          isJoker: false,
+        });
+      }
+    }
+    for (let j = 0; j < 2; j++) {
+      seq++;
+      cards.push({
+        id: `card_${d}_joker_${j}_${seq}`,
+        rank: 'JOKER',
+        suit: '🃏',
+        suitName: 'joker',
+        color: 'gold',
+        value: 0,
+        points: 0,
+        isJoker: true,
+        isPrintedJoker: true,
+      });
+    }
+  }
+  for (let i = cards.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(0, i + 1);
+    [cards[i], cards[j]] = [cards[j], cards[i]];
+  }
+  return cards;
+}
+
+function srvIsValidSet(cards: RaminoCard[]): boolean {
+  if (cards.length < 3 || cards.length > 4) return false;
+  const jokers = cards.filter((c) => c.isJoker || c.rank === 'JOKER');
+  if (jokers.length > 1) return false;
+  const nonJokers = cards.filter((c) => !c.isJoker && c.rank !== 'JOKER');
+  if (nonJokers.length < 2) return false;
+  const targetRank = nonJokers[0].rank;
+  if (!nonJokers.every((c) => c.rank === targetRank)) return false;
+  return new Set(nonJokers.map((c) => c.suit)).size === nonJokers.length;
+}
+
+function srvIsAllFourSuitsClosedSet(cards: RaminoCard[]): boolean {
+  if (cards.length !== 4) return false;
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  if (nonJokers.length !== 4) return false;
+  const rank = nonJokers[0].rank;
+  if (!nonJokers.every((c) => c.rank === rank)) return false;
+  return new Set(nonJokers.map((c) => c.suit)).size === 4;
+}
+
+function srvIsValidRun(cards: RaminoCard[]): boolean {
+  if (cards.length < 3) return false;
+  const jokers = cards.filter((c) => c.isJoker || c.rank === 'JOKER');
+  if (jokers.length > 1) return false;
+  const nonJokers = cards.filter((c) => !c.isJoker && c.rank !== 'JOKER');
+  if (nonJokers.length < 2) return false;
+  const suit = nonJokers[0].suit;
+  if (!nonJokers.every((c) => c.suit === suit)) return false;
+
+  const testSequence = (ranksList: string[]) => {
+    const jokersAvailable = jokers.length;
+    const indices = nonJokers
+      .map((c) => ranksList.indexOf(c.rank))
+      .filter((idx) => idx !== -1)
+      .sort((a, b) => a - b);
+    if (indices.length !== nonJokers.length) return false;
+    for (let i = 0; i < indices.length - 1; i++) {
+      if (indices[i] === indices[i + 1]) return false;
+    }
+    let gaps = 0;
+    for (let i = 0; i < indices.length - 1; i++) {
+      gaps += indices[i + 1] - indices[i] - 1;
+    }
+    return jokersAvailable >= gaps;
+  };
+  return (
+    testSequence(['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']) ||
+    testSequence(['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'])
+  );
+}
+
+function srvGetGroupPoints(cards: RaminoCard[]): number {
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  const isAceLowRun =
+    srvIsValidRun(cards) &&
+    nonJokers.some((c) => c.rank === 'A') &&
+    nonJokers.some((c) => c.rank === '2' || c.rank === '3');
+  return cards.reduce((sum, c) => {
+    if (c.isJoker) {
+      if (nonJokers.length > 0 && srvIsValidSet(cards)) {
+        return sum + (RAMINO_RANK_VALUES[nonJokers[0].rank] || 10);
+      }
+      return sum + 10;
+    }
+    if (c.rank === 'A') return sum + (isAceLowRun ? 1 : 11);
+    return sum + (RAMINO_RANK_VALUES[c.rank] || 10);
+  }, 0);
+}
+
+function srvPartitionValidMelds(cards: RaminoCard[]) {
+  const n = cards.length;
+  if (n < 3) return { melds: [] as { type: 'set' | 'run'; cards: RaminoCard[]; points: number }[], remaining: [...cards], totalPoints: 0 };
+
+  interface Cand { mask: number; count: number; type: 'set' | 'run'; cards: RaminoCard[]; points: number }
+  const candidatesByMask = new Map<number, Cand>();
+  const addCandidate = (type: 'set' | 'run', grpCards: RaminoCard[], indices: number[]) => {
+    let mask = 0;
+    for (const idx of indices) mask |= 1 << idx;
+    const pts = srvGetGroupPoints(grpCards);
+    const ex = candidatesByMask.get(mask);
+    if (!ex || pts > ex.points) {
+      candidatesByMask.set(mask, { mask, count: indices.length, type, cards: grpCards, points: pts });
+    }
+  };
+  const jokerIndices: number[] = [];
+  const naturalIndices: number[] = [];
+  cards.forEach((c, idx) => (c.isJoker ? jokerIndices.push(idx) : naturalIndices.push(idx)));
+  const jokerCombos = (cnt: number): number[][] => {
+    if (cnt === 0) return [[]];
+    if (jokerIndices.length < cnt) return [];
+    if (cnt === 1) return jokerIndices.map((j) => [j]);
+    const res: number[][] = [];
+    for (let a = 0; a < jokerIndices.length; a++) {
+      for (let b = a + 1; b < jokerIndices.length; b++) res.push([jokerIndices[a], jokerIndices[b]]);
+    }
+    return res;
+  };
+  const byRankIdx: Record<string, number[]> = {};
+  for (const idx of naturalIndices) {
+    const r = cards[idx].rank;
+    if (!byRankIdx[r]) byRankIdx[r] = [];
+    byRankIdx[r].push(idx);
+  }
+  for (const rankIdxs of Object.values(byRankIdx)) {
+    const m = rankIdxs.length;
+    for (let sub = 1; sub < (1 << m); sub++) {
+      const chosen: number[] = [];
+      const seenSuits = new Set<string>();
+      let ok = true;
+      for (let b = 0; b < m; b++) {
+        if (sub & (1 << b)) {
+          const ci = rankIdxs[b];
+          const s = cards[ci].suit;
+          if (seenSuits.has(s)) { ok = false; break; }
+          seenSuits.add(s);
+          chosen.push(ci);
+        }
+      }
+      if (!ok || chosen.length > 4) continue;
+      if (chosen.length >= 3) addCandidate('set', chosen.map((i) => cards[i]), chosen);
+      for (let jk = 1; jk <= Math.min(1, jokerIndices.length); jk++) {
+        if (chosen.length + jk >= 3 && chosen.length + jk <= 4 && chosen.length >= 2) {
+          for (const jks of jokerCombos(jk)) {
+            const all = [...chosen, ...jks];
+            addCandidate('set', all.map((i) => cards[i]), all);
+          }
+        }
+      }
+    }
+  }
+  const runOrders = [
+    ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'],
+    ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'],
+  ];
+  for (const s of RAMINO_SUITS) {
+    const suitNatural = naturalIndices.filter((idx) => cards[idx].suit === s.symbol);
+    if (suitNatural.length === 0) continue;
+    for (const order of runOrders) {
+      const byPos = new Map<number, number[]>();
+      for (const idx of suitNatural) {
+        const pos = order.indexOf(cards[idx].rank);
+        if (pos !== -1) {
+          const list = byPos.get(pos) || [];
+          list.push(idx);
+          byPos.set(pos, list);
+        }
+      }
+      for (let start = 0; start < order.length; start++) {
+        for (let len = 3; len <= Math.min(13, order.length - start); len++) {
+          let natLists: number[][] = [[]];
+          let missing = 0;
+          for (let p = start; p < start + len; p++) {
+            const foundList = byPos.get(p);
+            if (foundList && foundList.length > 0) {
+              const nextLists: number[][] = [];
+              for (const base of natLists) {
+                for (const optIdx of foundList) nextLists.push([...base, optIdx]);
+              }
+              natLists = nextLists.slice(0, 8);
+            } else {
+              missing++;
+            }
+          }
+          if (missing <= Math.min(1, jokerIndices.length)) {
+            for (const natChosen of natLists) {
+              if (natChosen.length < 2) continue;
+              for (const jks of jokerCombos(missing)) {
+                const all = [...natChosen, ...jks];
+                const orderedRun = srvNormalizeRunCardsOrder(
+                  all.map((i) => cards[i]),
+                  false
+                );
+                addCandidate('run', orderedRun, all);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const candidates = Array.from(candidatesByMask.values()).sort((a, b) =>
+    b.count !== a.count ? b.count - a.count : b.points - a.points
+  );
+  let bestUsed = 0;
+  let bestPoints = 0;
+  let bestChoice: Cand[] = [];
+  let steps = 0;
+  const curChoice: Cand[] = [];
+  const search = (startIdx: number, usedMask: number, usedCount: number, curPts: number) => {
+    if (steps > 25000) return;
+    steps++;
+    if (usedCount > bestUsed || (usedCount === bestUsed && curPts > bestPoints)) {
+      bestUsed = usedCount;
+      bestPoints = curPts;
+      bestChoice = [...curChoice];
+    }
+    if (usedCount === n || usedCount + (n - usedCount) < bestUsed) return;
+    for (let i = startIdx; i < candidates.length; i++) {
+      const c = candidates[i];
+      if ((usedMask & c.mask) !== 0) continue;
+      let avail = 0;
+      for (let b = 0; b < n; b++) if ((usedMask & (1 << b)) === 0) avail++;
+      if (usedCount + avail < bestUsed) break;
+      curChoice.push(c);
+      search(i + 1, usedMask | c.mask, usedCount + c.count, curPts + c.points);
+      curChoice.pop();
+    }
+  };
+  search(0, 0, 0, 0);
+  let finalMask = 0;
+  bestChoice.forEach((m) => (finalMask |= m.mask));
+  const melds = bestChoice.map((m) => ({ type: m.type, cards: m.cards, points: m.points }));
+  const remaining = cards.filter((_, idx) => (finalMask & (1 << idx)) === 0);
+  return { melds, remaining, totalPoints: melds.reduce((s, m) => s + m.points, 0) };
+}
+
+function srvCanFormFivePairs(rem10: RaminoCard[], allowSameRankPairs = false): boolean {
+  if (rem10.length !== 10) return false;
+  const counts: Record<string, number> = {};
+  let jokers = 0;
+  for (const c of rem10) {
+    if (c.isJoker || c.rank === 'JOKER') jokers++;
+    else {
+      const key = allowSameRankPairs ? c.rank : `${c.rank}|${c.suit}`;
+      counts[key] = (counts[key] || 0) + 1;
+    }
+  }
+  let odds = 0;
+  for (const cnt of Object.values(counts)) if (cnt % 2 === 1) odds++;
+  return jokers >= odds && (jokers - odds) % 2 === 0;
+}
+
+function srvIsExact13CardDopey(cards13: RaminoCard[], _allowSameRankPairs = false): boolean {
+  if (cards13.length !== 13) return false;
+  for (let i = 0; i < 11; i++) {
+    for (let j = i + 1; j < 12; j++) {
+      for (let k = j + 1; k < 13; k++) {
+        const triple = [cards13[i], cards13[j], cards13[k]];
+        const natCount = triple.filter((c) => !c.isJoker && c.rank !== 'JOKER').length;
+        // Strictly 5 identical pairs + 1 Tris (Set only, min 2 naturals, never a Run)
+        if (natCount < 2 || !srvIsValidSet(triple)) continue;
+        const rem10: RaminoCard[] = [];
+        for (let m = 0; m < 13; m++) if (m !== i && m !== j && m !== k) rem10.push(cards13[m]);
+        if (srvCanFormFivePairs(rem10, false)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function srvCheckDopey(hand: RaminoCard[], closingCard?: RaminoCard | null, allowSameRankPairs = false) {
+  if (closingCard) {
+    if (hand.length !== 13 || !srvIsExact13CardDopey(hand, allowSameRankPairs)) {
+      return { isDopey: false, isJokerFinished: false };
+    }
+    return { isDopey: true, isJokerFinished: Boolean(closingCard.isJoker || closingCard.rank === 'JOKER') };
+  }
+  if (hand.length !== 13 && hand.length !== 14) return { isDopey: false, isJokerFinished: false };
+  if (hand.length === 13) return { isDopey: srvIsExact13CardDopey(hand, allowSameRankPairs), isJokerFinished: false };
+  const jokerDropCloses = hand.some(
+    (c, dropIdx) =>
+      (c.isJoker || c.rank === 'JOKER') &&
+      srvIsExact13CardDopey(hand.filter((__, idx) => idx !== dropIdx), allowSameRankPairs)
+  );
+  if (jokerDropCloses) return { isDopey: true, isJokerFinished: true };
+  const anyDropCloses = hand.some((_, dropIdx) =>
+    srvIsExact13CardDopey(hand.filter((__, idx) => idx !== dropIdx), allowSameRankPairs)
+  );
+  return { isDopey: anyDropCloses, isJokerFinished: false };
+}
+
+function srvDoesCardMatchTableMelds(card: RaminoCard, melds: RaminoMeldGroup[]): boolean {
+  if (card.isJoker) return false;
+  for (const m of melds) {
+    if (m.type === 'set') {
+      const nonJokers = m.cards.filter((c) => !c.isJoker);
+      const targetRank = m.rank || nonJokers[0]?.rank;
+      if (card.rank === targetRank && !nonJokers.some((c) => c.suit === card.suit) && m.cards.length < 4) return true;
+    } else if (m.type === 'run' && m.suit === card.suit) {
+      if (srvIsValidRun([...m.cards, card])) return true;
+    }
+  }
+  return false;
+}
+
+function srvGetRunOrderForMeld(cards: RaminoCard[]): string[] {
+  const aceLowOrder = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  const aceHighOrder = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  const hasA = nonJokers.some((c) => c.rank === 'A');
+  const hasHighRoyals = nonJokers.some((c) => ['K', 'Q', 'J', '10'].includes(c.rank));
+  const prefersAceLow =
+    !hasHighRoyals &&
+    (hasA || nonJokers.some((c) => c.rank === '2' || c.rank === '3')) &&
+    Boolean(srvGetOrderedRunSequence(cards, aceLowOrder));
+  if (
+    prefersAceLow ||
+    (!srvGetOrderedRunSequence(cards, aceHighOrder) && Boolean(srvGetOrderedRunSequence(cards, aceLowOrder)))
+  ) {
+    return aceLowOrder;
+  }
+  return aceHighOrder;
+}
+
+function srvGetOrderedRunSequence(cards: RaminoCard[], order: string[]): RaminoCard[] | null {
+  const nonJokers = cards.filter((c) => !c.isJoker);
+  const jokers = cards.filter((c) => c.isJoker);
+  if (nonJokers.length === 0) return null;
+  const sortedNaturals = [...nonJokers].sort((a, b) => order.indexOf(a.rank) - order.indexOf(b.rank));
+  for (let i = 0; i < sortedNaturals.length; i++) {
+    const idx = order.indexOf(sortedNaturals[i].rank);
+    if (idx === -1) return null;
+    if (i > 0 && idx === order.indexOf(sortedNaturals[i - 1].rank)) return null;
+  }
+  let gaps = 0;
+  for (let i = 1; i < sortedNaturals.length; i++) {
+    gaps += order.indexOf(sortedNaturals[i].rank) - order.indexOf(sortedNaturals[i - 1].rank) - 1;
+  }
+  if (jokers.length < gaps) return null;
+  const arranged: RaminoCard[] = [sortedNaturals[0]];
+  let jCursor = 0;
+  for (let i = 1; i < sortedNaturals.length; i++) {
+    const gapCount = order.indexOf(sortedNaturals[i].rank) - order.indexOf(sortedNaturals[i - 1].rank) - 1;
+    for (let g = 0; g < gapCount && jCursor < jokers.length; g++) arranged.push(jokers[jCursor++]);
+    arranged.push(sortedNaturals[i]);
+  }
+  let highIdx = order.indexOf(sortedNaturals[sortedNaturals.length - 1].rank);
+  let lowIdx = order.indexOf(sortedNaturals[0].rank);
+  while (jCursor < jokers.length) {
+    if (highIdx < order.length - 1) { arranged.push(jokers[jCursor++]); highIdx++; }
+    else if (lowIdx > 0) { arranged.unshift(jokers[jCursor++]); lowIdx--; }
+    else break;
+  }
+  return arranged;
+}
+
+function srvNormalizeRunCardsOrder(cards: RaminoCard[], preserveDescending = true): RaminoCard[] {
+  const order = srvGetRunOrderForMeld(cards);
+  const arranged = srvGetOrderedRunSequence(cards, order);
+  if (!arranged) return cards;
+  if (preserveDescending) {
+    const origNatIndices = cards.filter((c) => !c.isJoker).map((c) => order.indexOf(c.rank));
+    const isDescNaturals =
+      origNatIndices.length >= 2 &&
+      origNatIndices.every((v, i) => i === 0 || origNatIndices[i - 1] > v);
+    if (isDescNaturals) return [...arranged].reverse();
+  }
+  return arranged;
+}
+
+function srvIsDescendingRunCards(cards: RaminoCard[], order: string[]): boolean {
+  const natIndices = cards.filter((c) => !c.isJoker).map((c) => order.indexOf(c.rank));
+  return natIndices.length >= 2 && natIndices[0] > natIndices[1];
+}
+
+function srvGetTableMeldJokerInfo(meld: RaminoMeldGroup, cardIdx: number): { rank: string; suit: RaminoSuitSymbol | null } | null {
+  if (meld.type === 'set') {
+    const nonJokers = meld.cards.filter((c) => !c.isJoker);
+    const rank = meld.rank || nonJokers[0]?.rank;
+    if (!rank) return null;
+    const usedSuits = new Set(nonJokers.map((c) => c.suit));
+    const missingSuit = RAMINO_SUITS.find((s) => !usedSuits.has(s.symbol))?.symbol || null;
+    return { rank, suit: missingSuit };
+  }
+  const order = srvGetRunOrderForMeld(meld.cards);
+  const isDesc = srvIsDescendingRunCards(meld.cards, order);
+  const seq = isDesc ? [...meld.cards].reverse() : meld.cards;
+  const targetIdx = isDesc ? meld.cards.length - 1 - cardIdx : cardIdx;
+  const firstNatPos = seq.findIndex((c) => !c.isJoker);
+  if (firstNatPos === -1) return null;
+  const firstNatOrderIdx = order.indexOf(seq[firstNatPos].rank);
+  if (firstNatOrderIdx === -1) return null;
+  const targetRank = order[firstNatOrderIdx - firstNatPos + targetIdx];
+  const suit = meld.suit || seq[firstNatPos].suit;
+  return targetRank ? { rank: targetRank, suit } : null;
+}
+
+function srvInsertCardIntoRunMeld(cards: RaminoCard[], newCard: RaminoCard, clickedIdx: number): RaminoCard[] | null {
+  if (cards.length >= 13) return null;
+  const order = srvGetRunOrderForMeld(cards);
+  const isDesc = srvIsDescendingRunCards(cards, order);
+  const ascCards = isDesc ? [...cards].reverse() : cards;
+  const ascClickedIdx = isDesc ? cards.length - 1 - clickedIdx : clickedIdx;
+  if (newCard.isJoker || newCard.rank === 'JOKER') {
+    if (cards.some((c) => c.isJoker || c.rank === 'JOKER')) return null;
+    const firstNatPos = ascCards.findIndex((c) => !c.isJoker);
+    if (firstNatPos === -1) return null;
+    const firstNatOrderIdx = order.indexOf(ascCards[firstNatPos].rank);
+    if (firstNatOrderIdx === -1) return isDesc ? [...ascCards, newCard].reverse() : [...ascCards, newCard];
+    const startOrderIdx = firstNatOrderIdx - firstNatPos;
+    const endOrderIdx = startOrderIdx + ascCards.length - 1;
+    const canPrepend = startOrderIdx > 0;
+    const canAppend = endOrderIdx < order.length - 1;
+    if (!canPrepend && !canAppend) return null;
+    const nextAsc =
+      ascClickedIdx === 0 && canPrepend
+        ? [newCard, ...ascCards]
+        : canAppend
+        ? [...ascCards, newCard]
+        : [newCard, ...ascCards];
+    return isDesc ? nextAsc.reverse() : nextAsc;
+  }
+  const candidate = [...ascCards, newCard];
+  if (!srvIsValidRun(candidate)) return null;
+  const candOrder = srvGetRunOrderForMeld(candidate);
+  const nonJokers = candidate.filter((c) => !c.isJoker).sort((a, b) => candOrder.indexOf(a.rank) - candOrder.indexOf(b.rank));
+  const jokers = candidate.filter((c) => c.isJoker);
+  if (nonJokers.length === 0) return candidate;
+  const arranged: RaminoCard[] = [nonJokers[0]];
+  let jokerCursor = 0;
+  for (let i = 1; i < nonJokers.length; i++) {
+    const gap = candOrder.indexOf(nonJokers[i].rank) - candOrder.indexOf(nonJokers[i - 1].rank) - 1;
+    for (let g = 0; g < gap && jokerCursor < jokers.length; g++) arranged.push(jokers[jokerCursor++]);
+    arranged.push(nonJokers[i]);
+  }
+  let highIdx = candOrder.indexOf(nonJokers[nonJokers.length - 1].rank);
+  let lowIdx = candOrder.indexOf(nonJokers[0].rank);
+  while (jokerCursor < jokers.length) {
+    if (ascClickedIdx === 0 && lowIdx > 0) { arranged.unshift(jokers[jokerCursor++]); lowIdx--; }
+    else if (highIdx < candOrder.length - 1) { arranged.push(jokers[jokerCursor++]); highIdx++; }
+    else if (lowIdx > 0) { arranged.unshift(jokers[jokerCursor++]); lowIdx--; }
+    else break;
+  }
+  return isDesc ? arranged.reverse() : arranged;
+}
+
+function srvPartitionCollapsedFourSuitSets(melds: RaminoMeldGroup[], currentSeq: number) {
+  const badgesToAdd: RaminoClosedSetBadge[] = [];
+  const remainingMelds: RaminoMeldGroup[] = [];
+  for (const m of melds) {
+    if (m.type === 'set' && srvIsAllFourSuitsClosedSet(m.cards) && m.meldTurnSeq < currentSeq) {
+      const laidOffCards = m.cards.filter((c) => Boolean(c.laidOffById));
+      badgesToAdd.push({
+        id: `closed_${m.id}`,
+        rank: m.rank || m.cards[0].rank,
+        ownerId: m.ownerId,
+        ownerColor: m.ownerColor,
+        ...(laidOffCards.length > 0 ? { laidOffCards } : {}),
+      });
+    } else {
+      remainingMelds.push(m);
+    }
+  }
+  return { remainingMelds, badgesToAdd };
+}
+
+function srvIsLockedDiscardJoker(c: RaminoCard | undefined | null): boolean {
+  return Boolean(c && (c.isJoker || c.rank === 'JOKER' || c.lockedInDiscard));
+}
+
+function srvCanReshuffleDiscard(discardPile: RaminoCard[]): boolean {
+  return (
+    discardPile.length > 1 &&
+    discardPile.slice(0, -1).some((c) => !srvIsLockedDiscardJoker(c))
+  );
+}
+
+function srvReshuffleDiscardIntoDeck(session: RaminoTableSession): boolean {
+  if (!srvCanReshuffleDiscard(session.discardPile)) return false;
+  const top = session.discardPile[session.discardPile.length - 1];
+  const under = session.discardPile.slice(0, -1);
+  const lockedJokers = under.filter((c) => srvIsLockedDiscardJoker(c));
+  const pool = under.filter((c) => !srvIsLockedDiscardJoker(c));
+  if (pool.length === 0) return false;
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(0, i + 1);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  session.deck = pool;
+  session.discardPile = [...lockedJokers, top];
+  session.reshuffleCount += 1;
+  return true;
+}
+
+function srvBuildDopeyShowcaseGroups(
+  cards13: RaminoCard[]
+): { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[] {
+  if (cards13.length !== 13) {
+    return cards13.length > 0 ? [{ label: 'meld', cards: [...cards13] }] : [];
+  }
+  for (let i = 0; i < 11; i++) {
+    for (let j = i + 1; j < 12; j++) {
+      for (let k = j + 1; k < 13; k++) {
+        const triple = [cards13[i], cards13[j], cards13[k]];
+        const natCount = triple.filter((c) => !c.isJoker && c.rank !== 'JOKER').length;
+        if (natCount < 2 || !srvIsValidSet(triple)) continue;
+        const rem10: RaminoCard[] = [];
+        for (let m = 0; m < 13; m++) {
+          if (m !== i && m !== j && m !== k) rem10.push(cards13[m]);
+        }
+        if (!srvCanFormFivePairs(rem10, false)) continue;
+
+        const pairs: { label: 'tris' | 'catris' | 'pair' | 'meld'; cards: RaminoCard[] }[] = [
+          { label: 'tris', cards: triple },
+        ];
+        const naturalsByKey = new Map<string, RaminoCard[]>();
+        const jokers: RaminoCard[] = [];
+        for (const c of rem10) {
+          if (c.isJoker || c.rank === 'JOKER') {
+            jokers.push(c);
+          } else {
+            const key = `${c.rank}|${c.suit}`;
+            const list = naturalsByKey.get(key) || [];
+            list.push(c);
+            naturalsByKey.set(key, list);
+          }
+        }
+        const singles: RaminoCard[] = [];
+        for (const list of naturalsByKey.values()) {
+          while (list.length >= 2) {
+            pairs.push({ label: 'pair', cards: [list.shift()!, list.shift()!] });
+          }
+          if (list.length === 1) singles.push(list[0]);
+        }
+        for (const s of singles) {
+          if (jokers.length > 0) pairs.push({ label: 'pair', cards: [s, jokers.shift()!] });
+        }
+        while (jokers.length >= 2) {
+          pairs.push({ label: 'pair', cards: [jokers.shift()!, jokers.shift()!] });
+        }
+        return pairs;
+      }
+    }
+  }
+  return [{ label: 'meld', cards: [...cards13] }];
+}
+
+function srvExtractWinnerShowcaseGroups(
+  session: RaminoTableSession,
+  winner: RaminoTablePlayer,
+  titleKey: string,
+  closingCard?: RaminoCard | null
+): {
+  winnerCards: RaminoCard[];
+  winnerGroups: { label: 'tris' | 'catris' | 'pair' | 'meld' | 'layoff'; cards: RaminoCard[] }[];
+  winnerClosingCard: RaminoCard | null;
+} {
+  if (
+    titleKey === 'dopey' ||
+    titleKey === 'dopey_joker' ||
+    titleKey === 'bottom_dopey' ||
+    titleKey === 'bottom_dopey_joker'
+  ) {
+    let cards13 = [...winner.hand];
+    if ((titleKey === 'bottom_dopey' || titleKey === 'bottom_dopey_joker') && closingCard) {
+      const isClosingJoker = Boolean(closingCard.isJoker || closingCard.rank === 'JOKER');
+      if (winner.hand.length === 12) {
+        cards13 = [...winner.hand, closingCard];
+      } else if (
+        winner.hand.length === 13 &&
+        !(isClosingJoker && srvIsExact13CardDopey(winner.hand, false))
+      ) {
+        const dropIdx = winner.hand.findIndex((_, idx) =>
+          srvIsExact13CardDopey([...winner.hand.filter((__, i) => i !== idx), closingCard], false)
+        );
+        if (dropIdx !== -1) {
+          cards13 = [...winner.hand.filter((__, i) => i !== dropIdx), closingCard];
+        }
+      }
+    } else if (cards13.length === 14) {
+      const dropIdx = cards13.findIndex((_, idx) =>
+        srvIsExact13CardDopey(cards13.filter((__, i) => i !== idx), false)
+      );
+      if (dropIdx !== -1) cards13 = cards13.filter((__, i) => i !== dropIdx);
+    }
+    const groups = srvBuildDopeyShowcaseGroups(cards13);
+    return {
+      winnerCards: cards13,
+      winnerGroups: groups,
+      winnerClosingCard: closingCard || null,
+    };
+  }
+
+  if (titleKey === 'bottom_normal' && closingCard) {
+    const handOnlyPart = winner.hand.length >= 3 ? srvPartitionValidMelds(winner.hand) : null;
+    let meldPool =
+      handOnlyPart && handOnlyPart.remaining.length === 0 && handOnlyPart.melds.length > 0
+        ? [...winner.hand]
+        : [...winner.hand, closingCard];
+    const directPart = srvPartitionValidMelds(meldPool);
+    if (directPart.remaining.length > 0 && winner.hand.length >= 12) {
+      const foundDrop = winner.hand.findIndex((_, dropIdx) => {
+        const sub = [...winner.hand.filter((__, i) => i !== dropIdx), closingCard];
+        const p = srvPartitionValidMelds(sub);
+        return p.remaining.length === 0 && p.melds.length > 0 && p.totalPoints >= 41;
+      });
+      if (foundDrop !== -1) {
+        meldPool = [...winner.hand.filter((__, i) => i !== foundDrop), closingCard];
+      }
+    }
+    const part = srvPartitionValidMelds(meldPool);
+    const groups: { label: 'tris' | 'catris' | 'pair' | 'meld' | 'layoff'; cards: RaminoCard[] }[] =
+      part.melds.length > 0
+        ? [
+            ...part.melds.map((m) => ({
+              label: (m.type === 'run' ? 'catris' : 'tris') as 'tris' | 'catris',
+              cards: m.type === 'run' ? srvNormalizeRunCardsOrder(m.cards, false) : m.cards,
+            })),
+            ...(part.remaining.length > 0 ? [{ label: 'layoff' as const, cards: part.remaining }] : []),
+          ]
+        : meldPool.length > 0
+        ? [{ label: 'layoff', cards: meldPool }]
+        : [];
+    return {
+      winnerCards: meldPool,
+      winnerGroups: groups,
+      winnerClosingCard: closingCard,
+    };
+  }
+
+  // Normal / Joker Finish / Streak finish: gather winner's melds, collapsed 4-suit sets & laid-off cards on table
+  const groups: { label: 'tris' | 'catris' | 'pair' | 'meld' | 'layoff'; cards: RaminoCard[] }[] = [];
+  const laidOffByWinner: RaminoCard[] = [];
+  for (const b of session.closedSetBadges) {
+    if (b.ownerId === winner.id) {
+      groups.push({
+        label: 'tris',
+        cards: RAMINO_SUITS.map((s, idx) => ({
+          id: `closed_vis_${b.id}_${idx}`,
+          rank: b.rank,
+          suit: s.symbol,
+          suitName: s.name,
+          color: s.color,
+          value: 0,
+          points: 0,
+          isJoker: false,
+        })),
+      });
+    } else if (Array.isArray(b.laidOffCards)) {
+      for (const lc of b.laidOffCards) {
+        if (lc.laidOffById === winner.id) laidOffByWinner.push(lc);
+      }
+    }
+  }
+  for (const m of session.tableMelds) {
+    if (m.ownerId === winner.id) {
+      groups.push({
+        label: m.type === 'run' ? 'catris' : 'tris',
+        cards: [...m.cards],
+      });
+    } else {
+      for (const c of m.cards) {
+        if (c.laidOffById === winner.id) laidOffByWinner.push(c);
+      }
+    }
+  }
+  if (laidOffByWinner.length > 0) {
+    groups.push({
+      label: 'layoff',
+      cards: laidOffByWinner,
+    });
+  }
+  const collectedCards = groups.flatMap((g) => g.cards);
+  if (groups.length === 0 && winner.hand.length > 0) {
+    groups.push({ label: 'meld', cards: [...winner.hand] });
+    collectedCards.push(...winner.hand);
+  }
+  return {
+    winnerCards: collectedCards,
+    winnerGroups: groups,
+    winnerClosingCard: closingCard || null,
+  };
+}
+
+const raminoPrivateRooms = new Map<string, RaminoPrivateRoomRecord>();
+const raminoPublicRooms = new Map<string, RaminoPublicRoomRecord>();
+const raminoTables = new Map<string, RaminoTableSession>();
+const raminoTableSockets = new Map<WebSocket, { roomCode: string; playerId: string }>();
+let raminoEventSeq = 1;
+
+function serializePublicRoomsList() {
+  return Array.from(raminoPublicRooms.values()).map((r) => ({
+    id: r.id,
+    name: r.name,
+    creatorId: r.creatorId,
+    creator: r.creator,
+    avatarLetter: r.avatarLetter,
+    avatarColor: r.avatarColor,
+    stake: r.stake,
+    max: r.max,
+    current: r.players.length || r.current,
+    duration: r.duration,
+    timeRemaining: r.timeRemaining,
+    players: r.players,
+    isDemo: Boolean(r.isDemo),
+  }));
+}
+
+function broadcastRaminoLobbySync() {
+  if (wsClients.size === 0) return;
+  const payload = JSON.stringify({
+    type: 'ramino:lobby:sync',
+    rooms: serializePublicRoomsList(),
+    timestamp: Date.now(),
+  });
+  for (const client of wsClients) {
+    safeWsSend(client, payload);
+  }
+}
+
+function broadcastPrivateRoomSnapshot(room: RaminoPrivateRoomRecord) {
+  if (wsClients.size === 0) return;
+  const { voiceAccessKey: _hiddenVoiceKey, ...publicRoomSnap } = room;
+  void _hiddenVoiceKey;
+  const payload = JSON.stringify({
+    type: 'ramino:private-room:sync',
+    room: publicRoomSnap,
+  });
+  for (const client of wsClients) {
+    safeWsSend(client, payload);
+  }
+}
+
+function emitPrivateRaminoRoomNotification(
+  session: RaminoTableSession,
+  title: string,
+  message: string,
+  throttleMs = 15000
+) {
+  const cfg = adminPinConfig.autoNotifyGames || { fast: true, regular: true, keno: true, ramino: true };
+  if (cfg.ramino === false) return;
+
+  const throttleKey = `ramino_priv_${session.roomCode}`;
+  const prevTs = lastGameNotifySentAt.get(throttleKey) || 0;
+  if (Date.now() - prevTs < throttleMs) return;
+  lastGameNotifySentAt.set(throttleKey, Date.now());
+
+  const privRoom = raminoPrivateRooms.get(session.roomCode);
+  const memberIds = new Set<string>();
+  const memberPhones = new Set<string>();
+  for (const p of session.players) {
+    if (p.id) memberIds.add(p.id);
+    const norm = normalizeEthiopianPhone(p.phone || '');
+    if (norm) memberPhones.add(norm);
+  }
+  if (privRoom) {
+    for (const p of privRoom.players) {
+      if (p.id) memberIds.add(p.id);
+      const norm = normalizeEthiopianPhone(p.phone || '');
+      if (norm) memberPhones.add(norm);
+    }
+  }
+
+  const eventObj = {
+    id: `gntf-priv-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    game: 'ramino' as const,
+    title,
+    message,
+    roomCode: session.roomCode,
+    isPrivate: true,
+    timestamp: Date.now(),
+  };
+
+  const payload = JSON.stringify({
+    type: 'game:notify',
+    notification: eventObj,
+  });
+
+  // Deliver ONLY to sockets belonging to players in this private room
+  for (const [sock, meta] of raminoTableSockets.entries()) {
+    if (
+      (meta.roomCode === session.roomCode || memberIds.has(meta.playerId)) &&
+      sock.readyState === WebSocket.OPEN
+    ) {
+      try {
+        sock.send(payload);
+      } catch {}
+    }
+  }
+
+  // Deliver Telegram notification ONLY to registered Telegram accounts of players in this private room
+  const firstActiveBot = Array.from(activeBots.keys())[0];
+  if (firstActiveBot && memberPhones.size > 0) {
+    const targetChatIds = new Set<number>();
+    for (const ph of memberPhones) {
+      const pRec = playersByPhone.get(ph);
+      if (pRec?.chatId) targetChatIds.add(pRec.chatId);
+    }
+    for (const [cid, regPh] of registeredChatPhones.entries()) {
+      const normReg = normalizeEthiopianPhone(regPh || '');
+      if (normReg && memberPhones.has(normReg)) {
+        targetChatIds.add(cid);
+      }
+    }
+    if (targetChatIds.size > 0) {
+      const tgText = `🔒 *${escapeTelegramMarkdown(title)}*\n${message}`;
+      for (const cid of targetChatIds) {
+        sendTelegramMessage(firstActiveBot, cid, tgText, undefined, undefined, true).catch(() => {});
+      }
+    }
+  }
+}
+
+function createOrSyncRaminoTableFromPrivateRoom(room: RaminoPrivateRoomRecord): RaminoTableSession {
+  let session = raminoTables.get(room.code);
+  const makePlayer = (p: RaminoPrivatePlayerInfo, idx: number): RaminoTablePlayer => ({
+    id: p.id,
+    name: p.name,
+    phone: p.phone,
+    avatarLetter: p.avatarLetter || p.name[0]?.toUpperCase() || 'P',
+    avatarColor: p.avatarColor || RAMINO_SEAT_AVATAR_COLORS[idx % RAMINO_SEAT_AVATAR_COLORS.length],
+    isHost: p.isHost,
+    isBot: false,
+    joinedAt: p.joinedAt,
+    hand: [],
+    hasMelded: false,
+    winStreak: 0,
+    isDealer: false,
+    isSuspended: false,
+  });
+
+  if (!session) {
+    session = {
+      roomCode: room.code,
+      isPrivate: true,
+      voiceAccessKey: room.voiceAccessKey || crypto.randomBytes(24).toString('hex'),
+      hostId: room.hostId,
+      hostName: room.hostName,
+      maxPlayers: room.maxPlayers,
+      stake: room.stake,
+      phase: 'waiting',
+      roundIndex: 0,
+      privateRoundCount: 1,
+      reshuffleCount: 0,
+      players: room.players.map((p, idx) => makePlayer(p, idx)),
+      cutParticipants: [],
+      ceremonyRevealedCount: 0,
+      ceremonyDealerId: room.hostId,
+      ceremonyDealerName: room.hostName,
+      deck: [],
+      bottomCard: {
+        id: 'placeholder_10c',
+        rank: '10',
+        suit: '♣',
+        suitName: 'clubs',
+        color: 'black',
+        value: 10,
+        points: 10,
+        isJoker: false,
+      },
+      discardPile: [],
+      tableMelds: [],
+      closedSetBadges: [],
+      meldTurnCounter: 0,
+      currentTurnIdx: 0,
+      hasDrawn: false,
+      drawnFromDiscardCardId: null,
+      hasDiscarded: false,
+      turnSeconds: 120,
+      winnerCelebration: null,
+      postDayRequest: null,
+      postDaySeatPick: null,
+      lastEvent: null,
+    };
+    raminoTables.set(room.code, session);
+  } else {
+    session.maxPlayers = room.maxPlayers;
+    session.stake = room.stake;
+    session.hostId = room.hostId;
+    session.hostName = room.hostName;
+    if (session.phase === 'waiting') {
+      const existingById = new Map(session.players.map((p) => [p.id, p]));
+      session.players = room.players.map((p, idx) => existingById.get(p.id) || makePlayer(p, idx));
+    }
+  }
+  return session;
+}
+
+function serializeRaminoTableForPlayer(session: RaminoTableSession, playerId: string) {
+  const meIdx = session.players.findIndex((p) => p.id === playerId);
+  const opponents: {
+    id: string;
+    name: string;
+    avatarLetter: string;
+    avatarColor: string;
+    cardCount: number;
+    isDealer: boolean;
+    hasMelded: boolean;
+    isHost: boolean;
+    isBot: boolean;
+    isSuspended: boolean;
+  }[] = [];
+
+  if (meIdx !== -1) {
+    for (let offset = 1; offset < session.players.length; offset++) {
+      const seat = session.players[(meIdx + offset) % session.players.length];
+      opponents.push({
+        id: seat.id,
+        name: seat.name,
+        avatarLetter: seat.avatarLetter,
+        avatarColor: seat.avatarColor,
+        cardCount: seat.hand.length,
+        isDealer: seat.isDealer,
+        hasMelded: seat.hasMelded,
+        isHost: seat.isHost,
+        isBot: seat.isBot,
+        isSuspended: Boolean(seat.isSuspended),
+      });
+    }
+  } else {
+    for (const seat of session.players) {
+      opponents.push({
+        id: seat.id,
+        name: seat.name,
+        avatarLetter: seat.avatarLetter,
+        avatarColor: seat.avatarColor,
+        cardCount: seat.hand.length,
+        isDealer: seat.isDealer,
+        hasMelded: seat.hasMelded,
+        isHost: seat.isHost,
+        isBot: seat.isBot,
+        isSuspended: Boolean(seat.isSuspended),
+      });
+    }
+  }
+
+  let currentTurnForClient = -1;
+  if (session.phase === 'game' && session.players[session.currentTurnIdx]) {
+    const activeId = session.players[session.currentTurnIdx].id;
+    if (activeId === playerId) {
+      currentTurnForClient = 0;
+    } else {
+      const oppPos = opponents.findIndex((o) => o.id === activeId);
+      currentTurnForClient = oppPos !== -1 ? oppPos + 1 : 1;
+    }
+  }
+
+  const me = meIdx !== -1 ? session.players[meIdx] : null;
+  const drawnCard =
+    session.drawnFromDiscardCardId && me
+      ? me.hand.find((c) => c.id === session.drawnFromDiscardCardId) || null
+      : null;
+
+  return {
+    roomCode: session.roomCode,
+    isPrivate: session.isPrivate,
+    voiceAccessKey: session.isPrivate && me ? session.voiceAccessKey : undefined,
+    hostId: session.hostId,
+    hostName: session.hostName,
+    maxPlayers: session.maxPlayers,
+    seatCount: Math.max(session.players.length, 2) as 2 | 3 | 4 | 5,
+    stake: session.stake,
+    phase: session.phase,
+    roundIndex: session.roundIndex,
+    currentRoundKey: session.currentRoundKey,
+    privateRoundCount: session.privateRoundCount,
+    reshuffleCount: session.reshuffleCount,
+    myPlayerId: playerId,
+    myIsHost: Boolean(me?.isHost || playerId === session.hostId),
+    myHand: me ? me.hand : [],
+    myHasMelded: Boolean(me?.hasMelded),
+    myWinStreak: me?.winStreak ?? 0,
+    myIsDealer: Boolean(me?.isDealer),
+    myIsSuspended: Boolean(me?.isSuspended),
+    opponents,
+    playersSummary: session.players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      avatarLetter: p.avatarLetter,
+      avatarColor: p.avatarColor,
+      isHost: p.isHost,
+      joinedAt: p.joinedAt,
+    })),
+    cutParticipants: session.cutParticipants.map((cp) => ({
+      ...cp,
+      isSelf: cp.id === playerId,
+    })),
+    ceremonyRevealedCount: session.ceremonyRevealedCount,
+    ceremonyDealer: session.ceremonyDealerName,
+    ceremonyDealerId: session.ceremonyDealerId,
+    deckCount: session.deck.length,
+    bottomCard: session.bottomCard,
+    discardPile: session.discardPile,
+    tableMelds: session.tableMelds,
+    closedSetBadges: session.closedSetBadges,
+    currentTurn: currentTurnForClient,
+    activePlayerId: session.players[session.currentTurnIdx]?.id || '',
+    activePlayerName: session.players[session.currentTurnIdx]?.name || '',
+    turnSeconds: session.turnSeconds,
+    hasDrawn: currentTurnForClient === 0 ? session.hasDrawn : false,
+    drawnFromDiscardCard: drawnCard,
+    hasDiscarded: session.hasDiscarded,
+    winnerCelebration: session.winnerCelebration,
+    postDayRequest: session.postDayRequest
+      ? {
+          requestedBy: session.postDayRequest.requestedByName,
+          requestedById: session.postDayRequest.requestedById,
+          source: session.postDayRequest.source,
+          acceptedIds: session.postDayRequest.acceptedPlayerIds,
+          acceptedNames: session.players
+            .filter((p) => session.postDayRequest!.acceptedPlayerIds.includes(p.id))
+            .map((p) => p.name),
+          needsMyAccept: !session.postDayRequest.acceptedPlayerIds.includes(playerId),
+          allAccepted: session.postDayRequest.allAccepted,
+        }
+      : null,
+    postDaySeatPick: session.postDaySeatPick
+      ? {
+          source: session.postDaySeatPick.source,
+          revealedCount: session.postDaySeatPick.revealedCount,
+          currentPickerIdx: session.postDaySeatPick.currentPickerIdx,
+          currentPickerId:
+            session.postDaySeatPick.entries[session.postDaySeatPick.currentPickerIdx]?.id || null,
+          currentPickerName:
+            session.postDaySeatPick.entries[session.postDaySeatPick.currentPickerIdx]?.name || null,
+          isMyPickTurn:
+            session.postDaySeatPick.revealedCount >= session.postDaySeatPick.entries.length &&
+            !session.postDaySeatPick.completed &&
+            session.postDaySeatPick.entries[session.postDaySeatPick.currentPickerIdx]?.id === playerId,
+          entries: session.postDaySeatPick.entries.map((e) => ({
+            ...e,
+            isSelf: e.id === playerId,
+          })),
+          chosenSeats: session.postDaySeatPick.chosenSeats.map((pid) => {
+            if (!pid) return null;
+            const pl = session.players.find((x) => x.id === pid);
+            return pl
+              ? {
+                  id: pl.id,
+                  name: pl.name,
+                  avatarLetter: pl.avatarLetter,
+                  avatarColor: pl.avatarColor,
+                  isSelf: pl.id === playerId,
+                }
+              : null;
+          }),
+          completed: session.postDaySeatPick.completed,
+        }
+      : null,
+    nextRoundReadyIds: session.nextRoundReadyIds || [],
+    nextRoundReadyNames: session.players
+      .filter((p) => (session.nextRoundReadyIds || []).includes(p.id))
+      .map((p) => p.name),
+    lastEvent: session.lastEvent,
+    serverTimestamp: Date.now(),
+  };
+}
+
+function broadcastRaminoTableClosed(roomCode: string, reason: string, message: string) {
+  const payload = JSON.stringify({
+    type: 'ramino:table:closed',
+    roomCode,
+    reason,
+    message,
+  });
+  for (const [sock, meta] of raminoTableSockets.entries()) {
+    if (meta.roomCode === roomCode && sock.readyState === WebSocket.OPEN) {
+      try {
+        sock.send(payload);
+      } catch {}
+    }
+  }
+}
+
+function broadcastRaminoTableState(session: RaminoTableSession) {
+  for (const [sock, meta] of raminoTableSockets.entries()) {
+    if (meta.roomCode === session.roomCode && sock.readyState === WebSocket.OPEN) {
+      try {
+        sock.send(
+          JSON.stringify({
+            type: 'ramino:table:sync',
+            table: serializeRaminoTableForPlayer(session, meta.playerId),
+          })
+        );
+      } catch {}
+    }
+  }
+}
+
+function dealServerRaminoRound(session: RaminoTableSession, dealerId: string) {
+  if (session.ceremonyTimer) {
+    clearTimeout(session.ceremonyTimer);
+    session.ceremonyTimer = null;
+  }
+  const deckCount: 1 | 2 = 2;
+  const shuffled = buildServerRaminoDeck(deckCount);
+  let offset = 0;
+
+  const dealerIdx = session.players.findIndex((p) => p.id === dealerId);
+  const validDealerIdx = dealerIdx !== -1 ? dealerIdx : 0;
+
+  // Dealer receives 14 cards and starts the round by discarding 1 card; all others receive 13 cards
+  for (let idx = 0; idx < session.players.length; idx++) {
+    const p = session.players[idx];
+    const isDealerSeat = idx === validDealerIdx;
+    const dealCount = isDealerSeat ? 14 : 13;
+    p.hand = shuffled.slice(offset, offset + dealCount);
+    offset += dealCount;
+    p.hasMelded = false;
+    p.isDealer = isDealerSeat;
+    p.isSuspended = false;
+  }
+
+  session.bottomCard = shuffled[offset];
+  offset += 1;
+  session.discardPile = [];
+  session.deck = shuffled.slice(offset);
+  session.tableMelds = [];
+  session.closedSetBadges = [];
+  session.meldTurnCounter = 0;
+  session.hasDrawn = true;
+  session.drawnFromDiscardCardId = null;
+  session.hasDiscarded = false;
+  session.turnSeconds = 120;
+  session.winnerCelebration = null;
+  session.nextRoundReadyIds = [];
+  session.postDayRequest = null;
+  session.postDaySeatPick = null;
+  session.roundIndex += 1;
+  session.currentRoundKey = `${session.roomCode}_r${session.roundIndex}_${Date.now()}_${crypto.randomInt(1000, 9999)}`;
+
+  session.ceremonyDealerId = session.players[validDealerIdx].id;
+  session.ceremonyDealerName = session.players[validDealerIdx].name;
+  session.currentTurnIdx = validDealerIdx;
+  session.phase = 'game';
+  session.lastEvent = {
+    id: ++raminoEventSeq,
+    type: 'round_started',
+    actorId: session.ceremonyDealerId,
+    actorName: session.ceremonyDealerName,
+  };
+  broadcastRaminoTableState(session);
+}
+
+function startServerRaminoCeremony(session: RaminoTableSession) {
+  if (session.players.length < 2) return;
+  if (session.ceremonyTimer) {
+    clearTimeout(session.ceremonyTimer);
+    session.ceremonyTimer = null;
+  }
+  const cutDeck = buildServerRaminoDeck(1).filter((c) => !c.isJoker);
+  const usedRanks = new Set<string>();
+  const pickCut = () => {
+    for (const c of cutDeck) {
+      if (!usedRanks.has(c.rank)) {
+        usedRanks.add(c.rank);
+        return c;
+      }
+    }
+    return cutDeck[0];
+  };
+
+  const parts = session.players.map((p) => ({
+    id: p.id,
+    name: p.name,
+    card: pickCut(),
+  }));
+
+  let maxVal = -1;
+  let winnerId = parts[0].id;
+  for (const pt of parts) {
+    const val = RAMINO_CUT_RANK_ORDER[pt.card.rank] || 0;
+    if (val > maxVal) {
+      maxVal = val;
+      winnerId = pt.id;
+    }
+  }
+  const winnerObj = parts.find((p) => p.id === winnerId) || parts[0];
+
+  session.phase = 'ceremony';
+  session.privateRoundCount = 1;
+  session.reshuffleCount = 0;
+  session.ceremonyDealerId = winnerObj.id;
+  session.ceremonyDealerName = winnerObj.name;
+  session.cutParticipants = parts.map((p) => ({ ...p, isWinner: p.id === winnerId }));
+  session.ceremonyRevealedCount = 0;
+  session.lastEvent = { id: ++raminoEventSeq, type: 'ceremony_started' };
+
+  const privRoom = raminoPrivateRooms.get(session.roomCode);
+  if (privRoom) {
+    privRoom.status = 'started';
+    broadcastPrivateRoomSnapshot(privRoom);
+  }
+  broadcastRaminoTableState(session);
+  if (session.isPrivate || privRoom) {
+    emitPrivateRaminoRoomNotification(
+      session,
+      `🔒 የግል ራሚኖ ክፍል ${session.roomCode} (${session.stake} ETB) ተጀምሯል!`,
+      `የእርስዎ የግል ራሚኖ ክፍል ${session.roomCode} (${session.players.length} ተጫዋቾች) አሁን ጨዋታ ጀምሯል!`
+    );
+  } else {
+    emitGameNotification({
+      game: 'ramino',
+      title: `♠️ ራሚኖ (${session.stake} ETB) ጨዋታ ተጀምሯል!`,
+      message: `የራሚኖ ክፍል ${session.roomCode} (${session.players.length} ተጫዋቾች) አሁን ጨዋታ ጀምሯል!`,
+      throttleMs: 30000,
+    });
+  }
+
+  const count = parts.length;
+  const stepReveal = (revealed: number) => {
+    const cur = raminoTables.get(session.roomCode);
+    if (!cur || cur.phase !== 'ceremony') return;
+    cur.ceremonyRevealedCount = revealed;
+    broadcastRaminoTableState(cur);
+    if (revealed < count) {
+      cur.ceremonyTimer = setTimeout(() => stepReveal(revealed + 1), 700);
+    } else {
+      cur.ceremonyTimer = setTimeout(() => {
+        const ready = raminoTables.get(session.roomCode);
+        if (ready && ready.phase === 'ceremony') {
+          dealServerRaminoRound(ready, ready.ceremonyDealerId);
+        }
+      }, 1500);
+    }
+  };
+  session.ceremonyTimer = setTimeout(() => stepReveal(1), 700);
+}
+
+function finishServerRaminoRound(
+  session: RaminoTableSession,
+  winner: RaminoTablePlayer,
+  dopeyMultiplier: number,
+  titleKey:
+    | 'dopey_joker'
+    | 'dopey'
+    | 'joker_finish'
+    | 'streak_joker'
+    | 'streak'
+    | 'normal'
+    | 'bottom_dopey_joker'
+    | 'bottom_dopey'
+    | 'bottom_normal'
+    | 'timeout_win',
+  bottomCardStr?: string,
+  closingCard?: RaminoCard | null
+) {
+  const isJokerClosing =
+    titleKey !== 'timeout_win' &&
+    (titleKey === 'joker_finish' ||
+      titleKey === 'streak_joker' ||
+      titleKey === 'dopey_joker' ||
+      titleKey === 'bottom_dopey_joker' ||
+      Boolean(closingCard && (closingCard.isJoker || closingCard.rank === 'JOKER')));
+
+  for (const p of session.players) {
+    if (p.id === winner.id) {
+      p.winStreak += 1;
+    } else {
+      p.winStreak = 0;
+    }
+  }
+  const streakCount = winner.winStreak;
+
+  let effectiveDopeyMult = 1;
+  let effectiveStreakMult = 1;
+  let totalMultiplier = 1;
+  let resolvedTitleKey = titleKey;
+
+  if (titleKey === 'timeout_win') {
+    effectiveDopeyMult = 1;
+    effectiveStreakMult = 1;
+    totalMultiplier = 1;
+    resolvedTitleKey = 'timeout_win';
+  } else if (titleKey === 'dopey_joker' || titleKey === 'bottom_dopey_joker') {
+    effectiveDopeyMult = 3;
+    totalMultiplier = 3;
+  } else if (titleKey === 'dopey' || titleKey === 'bottom_dopey') {
+    effectiveDopeyMult = 2;
+    totalMultiplier = 2;
+  } else if (isJokerClosing) {
+    if (streakCount >= 3) {
+      effectiveDopeyMult = 2;
+      effectiveStreakMult = 3;
+      totalMultiplier = 3;
+      resolvedTitleKey = 'streak_joker';
+    } else {
+      effectiveDopeyMult = 2;
+      effectiveStreakMult = 1;
+      totalMultiplier = 2;
+      resolvedTitleKey = 'joker_finish';
+    }
+  } else {
+    effectiveStreakMult = streakCount >= 3 ? 2 : 1;
+    totalMultiplier = effectiveStreakMult;
+    resolvedTitleKey = titleKey === 'normal' && streakCount >= 3 ? 'streak' : titleKey;
+  }
+
+  const basePot = session.stake * session.players.length;
+  const loserExtraPenalty =
+    totalMultiplier > 1 ? Number((session.stake * (totalMultiplier - 1)).toFixed(2)) : 0;
+  const pot = Number(
+    (basePot + Math.max(0, session.players.length - 1) * loserExtraPenalty).toFixed(2)
+  );
+  const rake = Number((pot * 0.1).toFixed(2));
+  const winAmount = Number((pot - rake).toFixed(2));
+
+  // Enforce 2x (ዶፔይ / ሞንቴ) & 3x (ጎልደን) penalty directly on server for any disconnected human loser
+  if (loserExtraPenalty > 0) {
+    const activeOnlinePlayerIds = new Set<string>();
+    for (const [sock, meta] of raminoTableSockets.entries()) {
+      if (meta.roomCode === session.roomCode && sock.readyState === WebSocket.OPEN) {
+        activeOnlinePlayerIds.add(meta.playerId);
+      }
+    }
+    let anyServerDebit = false;
+    const winnerCleanPh = normalizeEthiopianPhone(winner.phone || '') || (winner.phone || '').trim();
+    for (const p of session.players) {
+      if (p.id === winner.id || p.isBot || activeOnlinePlayerIds.has(p.id)) continue;
+      const cleanPh = normalizeEthiopianPhone(p.phone || '') || (p.phone || '').trim();
+      if (winnerCleanPh && cleanPh === winnerCleanPh) continue;
+      if (cleanPh && playersByPhone.has(cleanPh)) {
+        const lp = playersByPhone.get(cleanPh)!;
+        const debitAmt = Math.min(lp.balance, loserExtraPenalty);
+        if (debitAmt > 0) {
+          lp.balance = Math.max(0, Number((lp.balance - debitAmt).toFixed(2)));
+          clampBalancesAfterDebit(lp);
+          lp.updatedAt = new Date().toLocaleString();
+          serverTransactions.unshift({
+            id: `gtx-pen-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            userId: lp.id,
+            userName: lp.name,
+            userPhone: lp.phone,
+            type: 'bet',
+            method: 'CONKER (Rummy)',
+            amount: debitAmt,
+            referenceNumber:
+              totalMultiplier >= 3
+                ? `CONKER (Rummy) Golden 3x Loss (-${debitAmt} ETB)`
+                : `CONKER (Rummy) Dopey 2x Loss (-${debitAmt} ETB)`,
+            status: 'approved',
+            timestamp: new Date().toLocaleString(),
+          });
+          anyServerDebit = true;
+        }
+      }
+    }
+    if (anyServerDebit) {
+      saveBotsToDisk();
+      broadcastRealtimeSync();
+    }
+  }
+
+  const showcase = srvExtractWinnerShowcaseGroups(session, winner, resolvedTitleKey, closingCard);
+
+  session.ceremonyDealerId = winner.id;
+  session.ceremonyDealerName = winner.name;
+  session.phase = 'finished';
+  session.nextRoundReadyIds = [];
+  session.winnerCelebration = {
+    roundKey: `${session.roomCode}_r${session.roundIndex}_${Date.now()}`,
+    show: true,
+    titleKey: resolvedTitleKey,
+    winnerId: winner.id,
+    winnerName: winner.name,
+    winnerPhone: winner.phone || '',
+    dopeyMultiplier: effectiveDopeyMult,
+    streakMultiplier: effectiveStreakMult,
+    totalMultiplier,
+    loserExtraPenalty,
+    streakCount,
+    pot,
+    rakeAmount: rake,
+    winAmount,
+    bottomCardStr,
+    winnerCards: showcase.winnerCards,
+    winnerGroups: showcase.winnerGroups,
+    winnerClosingCard: showcase.winnerClosingCard,
+  };
+  session.lastEvent = {
+    id: ++raminoEventSeq,
+    type: 'round_won',
+    actorId: winner.id,
+    actorName: winner.name,
+  };
+  broadcastRaminoTableState(session);
+}
+
+function findNextActiveRaminoTurnIdx(session: RaminoTableSession, fromIdx: number): number {
+  const len = session.players.length;
+  if (len === 0) return 0;
+  for (let offset = 1; offset <= len; offset++) {
+    const idx = (fromIdx + offset) % len;
+    if (!session.players[idx]?.isSuspended) return idx;
+  }
+  return 0;
+}
+
+function handleServerRaminoAction(
+  session: RaminoTableSession,
+  playerId: string,
+  action: string,
+  payload: Record<string, any> = {}
+): { ok: boolean; error?: string } {
+  const meIdx = session.players.findIndex((p) => p.id === playerId);
+
+  if (action === 'leave_table') {
+    if (meIdx === -1) return { ok: true };
+    const wasCurrentTurn = session.phase === 'game' && meIdx === session.currentTurnIdx;
+    const leaving = session.players[meIdx];
+    session.players.splice(meIdx, 1);
+
+    const privRoom = raminoPrivateRooms.get(session.roomCode);
+    if (privRoom) {
+      privRoom.players = privRoom.players.filter((p) => p.id !== playerId);
+      if (privRoom.players.length === 0) {
+        raminoPrivateRooms.delete(session.roomCode);
+      } else {
+        if (privRoom.hostId === playerId) {
+          privRoom.players[0].isHost = true;
+          privRoom.hostId = privRoom.players[0].id;
+          privRoom.hostName = privRoom.players[0].name;
+          if (session.players[0]) {
+            session.players[0].isHost = true;
+            session.hostId = session.players[0].id;
+            session.hostName = session.players[0].name;
+          }
+        }
+        broadcastPrivateRoomSnapshot(privRoom);
+      }
+    }
+
+    if (session.roomCode.startsWith('PUB_')) {
+      for (const [pubId, pubRm] of raminoPublicRooms.entries()) {
+        if (`PUB_${pubId.toUpperCase()}` === session.roomCode) {
+          pubRm.players = pubRm.players.filter((p) => p.id !== playerId);
+          pubRm.current = pubRm.players.length;
+          if (pubRm.players.length === 0) {
+            raminoPublicRooms.delete(pubId);
+          }
+          broadcastRaminoLobbySync();
+          break;
+        }
+      }
+    }
+
+    if (session.nextRoundReadyIds) {
+      session.nextRoundReadyIds = session.nextRoundReadyIds.filter((id) => id !== playerId);
+    }
+
+    for (const p of session.players) p.winStreak = 0;
+
+    if (session.players.length === 0) {
+      if (session.ceremonyTimer) clearTimeout(session.ceremonyTimer);
+      raminoTables.delete(session.roomCode);
+      return { ok: true };
+    }
+
+    if (session.phase === 'finished') {
+      if (session.players.length < 2) {
+        if (session.ceremonyTimer) clearTimeout(session.ceremonyTimer);
+        raminoTables.delete(session.roomCode);
+        broadcastRaminoTableClosed(
+          session.roomCode,
+          'not_enough_players',
+          `${leaving.name} ከጠረጴዛው ስለወጡ እና የተቀሩት ተጫዋቾች ከ2 በታች ስለሆኑ ክፍሉ ተዘግቷል።`
+        );
+        return { ok: true };
+      }
+      session.lastEvent = {
+        id: ++raminoEventSeq,
+        type: 'player_left',
+        actorId: leaving.id,
+        actorName: leaving.name,
+      };
+      const readyIds = session.nextRoundReadyIds || [];
+      if (readyIds.length >= session.players.length && session.players.every((p) => readyIds.includes(p.id))) {
+        session.nextRoundReadyIds = [];
+        session.privateRoundCount += 1;
+        const rawDealerId = session.winnerCelebration?.winnerId || session.ceremonyDealerId;
+        const dealerId = session.players.some((p) => p.id === rawDealerId)
+          ? rawDealerId
+          : session.players[0].id;
+        dealServerRaminoRound(session, dealerId);
+      } else {
+        broadcastRaminoTableState(session);
+      }
+      return { ok: true };
+    }
+
+    if (session.phase === 'game') {
+      const activeRemaining = session.players.filter((p) => !p.isSuspended);
+      if (activeRemaining.length < 2) {
+        const survivor = activeRemaining[0] || session.players[0];
+        const anySuspended = session.players.some((p) => p.isSuspended);
+        finishServerRaminoRound(session, survivor, 1, anySuspended ? 'timeout_win' : 'normal');
+      } else {
+        if (wasCurrentTurn) {
+          const prevIdx = Math.min(meIdx - 1 + session.players.length, session.players.length - 1);
+          session.currentTurnIdx = findNextActiveRaminoTurnIdx(session, prevIdx);
+          session.hasDrawn = false;
+          session.drawnFromDiscardCardId = null;
+          session.hasDiscarded = false;
+          session.turnSeconds = 120;
+        } else {
+          if (meIdx < session.currentTurnIdx) {
+            session.currentTurnIdx = Math.max(0, session.currentTurnIdx - 1);
+          }
+          if (session.currentTurnIdx >= session.players.length) session.currentTurnIdx = 0;
+          if (session.players[session.currentTurnIdx]?.isSuspended) {
+            session.currentTurnIdx = findNextActiveRaminoTurnIdx(session, session.currentTurnIdx);
+          }
+        }
+        session.lastEvent = {
+          id: ++raminoEventSeq,
+          type: 'player_left',
+          actorId: leaving.id,
+          actorName: leaving.name,
+        };
+        broadcastRaminoTableState(session);
+      }
+    } else {
+      session.lastEvent = {
+        id: ++raminoEventSeq,
+        type: 'player_left',
+        actorId: leaving.id,
+        actorName: leaving.name,
+      };
+      broadcastRaminoTableState(session);
+    }
+    return { ok: true };
+  }
+
+  if (meIdx === -1) return { ok: false, error: 'ተጫዋቹ በዚህ ጠረጴዛ ላይ አልተገኘም።' };
+  const me = session.players[meIdx];
+
+  if (action === 'start_game') {
+    if (session.phase !== 'waiting') return { ok: true };
+    if (session.isPrivate && session.players.length < 2) {
+      return { ok: false, error: 'በግል ክፍል ውስጥ ለመጀመር ቢያንስ 2 እውነተኛ ተጫዋቾች መግባት አለባቸው!' };
+    }
+    startServerRaminoCeremony(session);
+    return { ok: true };
+  }
+
+  if (action === 'postday_request') {
+    if (session.phase === 'game' || session.phase === 'ceremony' || session.phase === 'postday_pick') {
+      return { ok: false, error: 'ፖስት ዴይ የሚጠየቀው ጨዋታው ከመጀመሩ በፊት ብቻ ነው!' };
+    }
+    if (session.players.length < 2) {
+      return { ok: false, error: 'ፖስት ዴይ ለመጠየቅ ቢያንስ 2 ተጫዋቾች በክፍሉ ውስጥ መኖር አለባቸው!' };
+    }
+    if (session.privateRoundCount < 5) {
+      return { ok: false, error: 'ፖስት ዴይ ከ5 ዙር ጨዋታ በኋላ ብቻ ይሰራል።' };
+    }
+    const source: 'waiting' | 'winner' = session.phase === 'waiting' ? 'waiting' : 'winner';
+    session.postDayRequest = {
+      requestedById: me.id,
+      requestedByName: me.name,
+      source,
+      acceptedPlayerIds: [me.id],
+      allAccepted: session.players.length <= 1,
+    };
+    session.lastEvent = { id: ++raminoEventSeq, type: 'postday_request', actorId: me.id, actorName: me.name };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'postday_accept') {
+    const req = session.postDayRequest;
+    if (!req) return { ok: true };
+    if (!req.acceptedPlayerIds.includes(me.id)) {
+      req.acceptedPlayerIds.push(me.id);
+    }
+    if (req.acceptedPlayerIds.length >= session.players.length) {
+      req.allAccepted = true;
+      const src = req.source;
+      const prevDealerId = session.winnerCelebration?.winnerId || session.ceremonyDealerId;
+      const activeTurnPlayerId = null;
+
+      // Deal 1 unique-rank non-Joker card to each player and sort highest -> lowest for sequential seat picking
+      const cutDeck = buildServerRaminoDeck(1).filter((c) => !c.isJoker);
+      const usedRanks = new Set<string>();
+      const pickCut = () => {
+        for (const c of cutDeck) {
+          if (!usedRanks.has(c.rank)) {
+            usedRanks.add(c.rank);
+            return c;
+          }
+        }
+        return cutDeck[0];
+      };
+      const rawEntries: RaminoPostDayCutEntry[] = session.players.map((p) => ({
+        id: p.id,
+        name: p.name,
+        avatarLetter: p.avatarLetter,
+        avatarColor: p.avatarColor,
+        card: pickCut(),
+        rankOrder: 0,
+        pickedSeat: null,
+      }));
+      rawEntries.sort(
+        (a, b) => (RAMINO_CUT_RANK_ORDER[b.card.rank] || 0) - (RAMINO_CUT_RANK_ORDER[a.card.rank] || 0)
+      );
+      rawEntries.forEach((e, idx) => {
+        e.rankOrder = idx + 1;
+      });
+
+      if (session.ceremonyTimer) {
+        clearTimeout(session.ceremonyTimer);
+        session.ceremonyTimer = null;
+      }
+
+      session.postDayRequest = null;
+      session.phase = 'postday_pick';
+      session.postDaySeatPick = {
+        source: src,
+        revealedCount: 0,
+        entries: rawEntries,
+        currentPickerIdx: 0,
+        chosenSeats: Array.from({ length: session.players.length }, () => null),
+        prevDealerId,
+        activeTurnPlayerId,
+        completed: false,
+      };
+      session.lastEvent = { id: ++raminoEventSeq, type: 'postday_pick_started', actorName: me.name };
+      broadcastRaminoTableState(session);
+
+      const totalCut = rawEntries.length;
+      const stepPostDayReveal = (rev: number) => {
+        const cur = raminoTables.get(session.roomCode);
+        if (!cur || cur.phase !== 'postday_pick' || !cur.postDaySeatPick) return;
+        cur.postDaySeatPick.revealedCount = rev;
+        broadcastRaminoTableState(cur);
+        if (rev < totalCut) {
+          cur.ceremonyTimer = setTimeout(() => stepPostDayReveal(rev + 1), 650);
+        }
+      };
+      session.ceremonyTimer = setTimeout(() => stepPostDayReveal(1), 650);
+      return { ok: true };
+    }
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'postday_pick_seat') {
+    const pick = session.postDaySeatPick;
+    if (session.phase !== 'postday_pick' || !pick || pick.completed) {
+      return { ok: false, error: 'የወንበር መምረጫ ጊዜው አሁን አይደለም።' };
+    }
+    if (pick.revealedCount < pick.entries.length) {
+      return { ok: false, error: 'ካርዶቹ እስኪከፈቱ ይጠብቁ...' };
+    }
+    const activeEntry = pick.entries[pick.currentPickerIdx];
+    if (!activeEntry || activeEntry.id !== me.id) {
+      return { ok: false, error: 'የእርስዎ የወንበር መምረጫ ተራ አይደለም!' };
+    }
+    const seatIdx = Number(payload.seatIndex);
+    if (!Number.isInteger(seatIdx) || seatIdx < 0 || seatIdx >= pick.chosenSeats.length) {
+      return { ok: false, error: 'ትክክለኛ ወንበር ይምረጡ።' };
+    }
+    if (pick.chosenSeats[seatIdx] !== null) {
+      return { ok: false, error: 'ይህ ወንበር ቀድሞ ተይዟል!' };
+    }
+
+    pick.chosenSeats[seatIdx] = me.id;
+    activeEntry.pickedSeat = seatIdx;
+    pick.currentPickerIdx += 1;
+
+    // If only 1 seat & 1 player remain, automatically assign the last seat cleanly
+    if (pick.currentPickerIdx === pick.entries.length - 1) {
+      const lastEntry = pick.entries[pick.currentPickerIdx];
+      const remSeatIdx = pick.chosenSeats.findIndex((s) => s === null);
+      if (lastEntry && remSeatIdx !== -1) {
+        pick.chosenSeats[remSeatIdx] = lastEntry.id;
+        lastEntry.pickedSeat = remSeatIdx;
+        pick.currentPickerIdx = pick.entries.length;
+      }
+    }
+
+    if (pick.currentPickerIdx >= pick.entries.length) {
+      pick.completed = true;
+      const byId = new Map(session.players.map((p) => [p.id, p]));
+      const reordered: RaminoTablePlayer[] = [];
+      for (const pid of pick.chosenSeats) {
+        if (pid && byId.has(pid)) {
+          reordered.push(byId.get(pid)!);
+        }
+      }
+      if (reordered.length === session.players.length) {
+        session.players = reordered;
+        const privRoom = raminoPrivateRooms.get(session.roomCode);
+        if (privRoom) {
+          const pById = new Map(privRoom.players.map((p) => [p.id, p]));
+          const reorderedPriv = reordered.map((rp) => pById.get(rp.id)).filter(Boolean) as RaminoPrivatePlayerInfo[];
+          if (reorderedPriv.length === privRoom.players.length) {
+            privRoom.players = reorderedPriv;
+            broadcastPrivateRoomSnapshot(privRoom);
+          }
+        }
+      }
+      session.privateRoundCount = pick.source === 'waiting' ? 1 : 0;
+      session.lastEvent = { id: ++raminoEventSeq, type: 'postday_applied', actorName: me.name };
+      broadcastRaminoTableState(session);
+
+      const src = pick.source;
+      setTimeout(() => {
+        const cur = raminoTables.get(session.roomCode);
+        if (!cur) return;
+        cur.postDaySeatPick = null;
+        if (src === 'waiting') {
+          cur.phase = 'waiting';
+          broadcastRaminoTableState(cur);
+        } else {
+          // Seats reordered BEFORE starting the next round — return to winner/agreement phase
+          cur.phase = 'finished';
+          broadcastRaminoTableState(cur);
+        }
+      }, 1100);
+      return { ok: true };
+    }
+
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  const removePlayerForInsufficientBalance = (target: RaminoTablePlayer) => {
+    const tIdx = session.players.findIndex((p) => p.id === target.id);
+    if (tIdx !== -1) session.players.splice(tIdx, 1);
+    if (session.nextRoundReadyIds) {
+      session.nextRoundReadyIds = session.nextRoundReadyIds.filter((id) => id !== target.id);
+    }
+    const privRoom = raminoPrivateRooms.get(session.roomCode);
+    if (privRoom) {
+      privRoom.players = privRoom.players.filter((p) => p.id !== target.id);
+      if (privRoom.players.length === 0) {
+        raminoPrivateRooms.delete(session.roomCode);
+      } else {
+        if (privRoom.hostId === target.id) {
+          privRoom.players[0].isHost = true;
+          privRoom.hostId = privRoom.players[0].id;
+          privRoom.hostName = privRoom.players[0].name;
+          if (session.players[0]) {
+            session.players[0].isHost = true;
+            session.hostId = session.players[0].id;
+            session.hostName = session.players[0].name;
+          }
+        }
+        broadcastPrivateRoomSnapshot(privRoom);
+      }
+    }
+    const kickedPayload = JSON.stringify({
+      type: 'ramino:kicked_insufficient',
+      roomCode: session.roomCode,
+      stake: session.stake,
+      playerId: target.id,
+    });
+    for (const [sock, meta] of raminoTableSockets.entries()) {
+      if (meta.roomCode === session.roomCode && meta.playerId === target.id && sock.readyState === WebSocket.OPEN) {
+        try {
+          sock.send(kickedPayload);
+        } catch {}
+      }
+    }
+    if (session.players.length < 2) {
+      if (session.ceremonyTimer) clearTimeout(session.ceremonyTimer);
+      raminoTables.delete(session.roomCode);
+      broadcastRaminoTableClosed(
+        session.roomCode,
+        'not_enough_players',
+        `${target.name} በቂ ቀሪ ሂሳብ ስላለቀበት እና የተቀሩት ተጫዋቾች ከ2 በታች ስለሆኑ ጨዋታው ተጠናቋል።`
+      );
+      return;
+    }
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: 'player_insufficient_removed',
+      actorId: target.id,
+      actorName: target.name,
+    };
+    const readyIds = session.nextRoundReadyIds || [];
+    if (readyIds.length >= session.players.length && session.players.every((p) => readyIds.includes(p.id))) {
+      session.nextRoundReadyIds = [];
+      session.privateRoundCount += 1;
+      const rawDealerId = session.winnerCelebration?.winnerId || session.ceremonyDealerId;
+      const dealerId = session.players.some((p) => p.id === rawDealerId)
+        ? rawDealerId
+        : session.players[0].id;
+      dealServerRaminoRound(session, dealerId);
+    } else {
+      broadcastRaminoTableState(session);
+    }
+  };
+
+  if (action === 'insufficient_leave') {
+    removePlayerForInsufficientBalance(me);
+    return { ok: true };
+  }
+
+  if (action === 'next_round') {
+    if (session.phase !== 'finished') return { ok: false, error: 'ዙሩ ገና አላለቀም።' };
+    const reportedBal =
+      typeof payload.balance === 'number' && Number.isFinite(payload.balance)
+        ? payload.balance
+        : null;
+    let effectiveBalance = reportedBal;
+    if (effectiveBalance === null && me.phone) {
+      const cleanPh = normalizeEthiopianPhone(me.phone) || me.phone.trim();
+      const srvRec = cleanPh ? playersByPhone.get(cleanPh) : undefined;
+      if (srvRec) effectiveBalance = srvRec.balance;
+    }
+    if (effectiveBalance !== null && effectiveBalance < session.stake) {
+      removePlayerForInsufficientBalance(me);
+      return { ok: false, error: 'ለቀጣይ ዙር በቂ ቀሪ ሂሳብ ስለሌለዎት ከጨዋታው ወጥተዋል!' };
+    }
+    if (!session.nextRoundReadyIds) session.nextRoundReadyIds = [];
+    if (!session.nextRoundReadyIds.includes(me.id)) {
+      session.nextRoundReadyIds.push(me.id);
+    }
+    if (
+      session.players.length >= 2 &&
+      session.players.every((p) => session.nextRoundReadyIds!.includes(p.id))
+    ) {
+      session.nextRoundReadyIds = [];
+      session.privateRoundCount += 1;
+      const rawDealerId = session.winnerCelebration?.winnerId || session.ceremonyDealerId;
+      const dealerId = session.players.some((p) => p.id === rawDealerId)
+        ? rawDealerId
+        : session.players[0].id;
+      dealServerRaminoRound(session, dealerId);
+    } else {
+      session.lastEvent = {
+        id: ++raminoEventSeq,
+        type: 'next_round_agreed',
+        actorId: me.id,
+        actorName: me.name,
+      };
+      broadcastRaminoTableState(session);
+    }
+    return { ok: true };
+  }
+
+  if (session.phase !== 'game') return { ok: false, error: 'ጨዋታው አሁን በሂደት ላይ አይደለም።' };
+  if (me.isSuspended) return { ok: false, error: 'ጊዜዎ ስላለቀ በዚህ ዙር ታግደዋል፤ ጨዋታውን በመከታተል ላይ ነዎት።' };
+  if (session.currentTurnIdx !== meIdx) return { ok: false, error: 'ተራዎ አይደለም!' };
+
+  const allowSameRankDopey = false;
+
+  if (action === 'draw_deck') {
+    if (session.hasDrawn) return { ok: false, error: 'አስቀድመው ካርታ ስበዋል።' };
+    if (session.deck.length === 0) {
+      if (!srvReshuffleDiscardIntoDeck(session)) return { ok: false, error: 'መደቡ ባዶ ሆኗል።' };
+    }
+    const drawn = session.deck.shift()!;
+    me.hand.push(drawn);
+    if (session.deck.length === 0) {
+      srvReshuffleDiscardIntoDeck(session);
+    }
+    session.hasDrawn = true;
+    session.drawnFromDiscardCardId = null;
+    session.lastEvent = { id: ++raminoEventSeq, type: 'draw_deck', actorId: me.id, actorName: me.name };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'draw_discard') {
+    if (session.hasDrawn) return { ok: false, error: 'አስቀድመው ካርታ ስበዋል።' };
+    if (session.discardPile.length === 0) return { ok: false, error: 'መጣያው ባዶ ነው።' };
+    const topPeek = session.discardPile[session.discardPile.length - 1];
+    if (srvIsLockedDiscardJoker(topPeek)) {
+      return {
+        ok: false,
+        error: '🔒 በጨዋታ የተጣለ ጆከር ታስሯል! ማንም አይጠቀመውም — ከመሳቢያው ይሳቡ!',
+      };
+    }
+    const top = session.discardPile.pop()!;
+    me.hand.push(top);
+    session.hasDrawn = true;
+    session.drawnFromDiscardCardId = top.id;
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: 'draw_discard',
+      actorId: me.id,
+      actorName: me.name,
+      detail: `${top.rank}${top.suit}`,
+    };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'return_discard') {
+    if (!session.drawnFromDiscardCardId || session.hasDiscarded) {
+      return { ok: false, error: 'መመለስ የሚቻል ካርታ የለም።' };
+    }
+    const idx = me.hand.findIndex((c) => c.id === session.drawnFromDiscardCardId);
+    if (idx === -1) return { ok: false, error: 'ካርታው በእጅዎ ላይ አልተገኘም።' };
+    const [ret] = me.hand.splice(idx, 1);
+    session.discardPile.push(ret);
+    session.hasDrawn = false;
+    session.drawnFromDiscardCardId = null;
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: 'return_discard',
+      actorId: me.id,
+      actorName: me.name,
+      detail: `${ret.rank}${ret.suit}`,
+    };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'bottom_win') {
+    if (me.hasMelded) {
+      return { ok: false, error: 'የወረደ ተጫዋች የተረገጠውን ካርድ መጠቀም አይችልም!' };
+    }
+    if (session.hasDrawn || me.hand.length === 0) {
+      return { ok: false, error: 'የታችኛው ካርድ አሁን አይቻልም።' };
+    }
+    const bc = session.bottomCard;
+    const isBottomJoker = Boolean(bc.isJoker || bc.rank === 'JOKER');
+
+    const partWithout = srvPartitionValidMelds(me.hand);
+    const dopeyWithout = srvCheckDopey(me.hand, undefined, allowSameRankDopey);
+    if (dopeyWithout.isDopey && !isBottomJoker) {
+      return { ok: false, error: 'የታችኛው ካርድ ለመጨረስ ብቻ ያስፈልጋል።' };
+    }
+    if (
+      !dopeyWithout.isDopey &&
+      partWithout.remaining.length === 0 &&
+      partWithout.melds.length > 0 &&
+      partWithout.totalPoints >= 41
+    ) {
+      return { ok: false, error: 'የታችኛው ካርድ ለመጨረስ ብቻ ያስፈልጋል።' };
+    }
+
+    const holds13DopeyWithBottomJoker =
+      isBottomJoker &&
+      me.hand.length === 13 &&
+      srvIsExact13CardDopey(me.hand, allowSameRankDopey);
+    const dopeyViaBottom =
+      holds13DopeyWithBottomJoker ||
+      (me.hand.length === 12 && srvIsExact13CardDopey([...me.hand, bc], allowSameRankDopey)) ||
+      (me.hand.length === 13 &&
+        me.hand.some((_, dropIdx) =>
+          srvIsExact13CardDopey([...me.hand.filter((__, i) => i !== dropIdx), bc], allowSameRankDopey)
+        ));
+    const meldDropIndices: number[] = [];
+    if (me.hand.length >= 12) {
+      me.hand.forEach((_, dropIdx) => {
+        const sub = [...me.hand.filter((__, i) => i !== dropIdx), bc];
+        const p = srvPartitionValidMelds(sub);
+        if (p.remaining.length === 0 && p.melds.length > 0 && p.totalPoints >= 41) {
+          meldDropIndices.push(dropIdx);
+        }
+      });
+    }
+    const meldReady = meldDropIndices.length > 0;
+
+    if (!dopeyViaBottom && !meldReady) {
+      return { ok: false, error: 'የታችኛው ካርድ ማሸነፊያ (1 መዝጊያ ካርታ ጨምሮ) ገና አልተሟላም!' };
+    }
+    const mult = dopeyViaBottom ? (isBottomJoker ? 3 : 2) : 1;
+    const titleKey = dopeyViaBottom
+      ? isBottomJoker
+        ? 'bottom_dopey_joker'
+        : 'bottom_dopey'
+      : 'bottom_normal';
+    let bottomClosingCard: RaminoCard = bc;
+    if (!dopeyViaBottom && meldReady) {
+      const nonJokerDropIdx = meldDropIndices.find(
+        (idx) => !me.hand[idx]?.isJoker && me.hand[idx]?.rank !== 'JOKER'
+      );
+      const chosenDropIdx = nonJokerDropIdx !== undefined ? nonJokerDropIdx : meldDropIndices[0];
+      const [dropped] = me.hand.splice(chosenDropIdx, 1);
+      me.hand.push(bc);
+      if (dropped) {
+        bottomClosingCard = dropped;
+        session.discardPile.push(dropped);
+      }
+    }
+    finishServerRaminoRound(session, me, mult, titleKey, `${bc.rank}${bc.suit}`, bottomClosingCard);
+    return { ok: true };
+  }
+
+  if (action === 'dopey_win') {
+    if (me.hasMelded) return { ok: false, error: 'ቀድመው ወርደዋል።' };
+    let closingCard: RaminoCard | null = null;
+    let isJokerFinished = false;
+    const reqClosingId = payload?.closingCardId ? String(payload.closingCardId) : null;
+    const dopeyCheck = srvCheckDopey(me.hand, undefined, allowSameRankDopey);
+
+    if (me.hand.length === 14 && reqClosingId) {
+      const reqIdx = me.hand.findIndex((c) => c.id === reqClosingId);
+      if (reqIdx !== -1) {
+        const reqCard = me.hand[reqIdx];
+        const reqIsJoker = Boolean(reqCard.isJoker || reqCard.rank === 'JOKER');
+        const rem13 = me.hand.filter((_, i) => i !== reqIdx);
+        // Never downgrade Golden (3x) to 2x Dopey if dropping a Joker also closes exact 13-card Dopey
+        if (srvIsExact13CardDopey(rem13, allowSameRankDopey) && (!dopeyCheck.isJokerFinished || reqIsJoker)) {
+          const [dropped] = me.hand.splice(reqIdx, 1);
+          closingCard = dropped;
+          isJokerFinished = reqIsJoker;
+          session.discardPile.push(dropped);
+        }
+      }
+    }
+
+    if (!closingCard) {
+      const dopey = dopeyCheck;
+      if (!dopey.isDopey) return { ok: false, error: 'ዶፔይ ገና አልተሟላም!' };
+      isJokerFinished = dopey.isJokerFinished;
+      if (me.hand.length === 14) {
+        const dropIdx = dopey.isJokerFinished
+          ? me.hand.findIndex(
+              (c, idx) =>
+                (c.isJoker || c.rank === 'JOKER') &&
+                srvIsExact13CardDopey(me.hand.filter((_, i) => i !== idx), allowSameRankDopey)
+            )
+          : (() => {
+              const prefIdx = me.hand.findIndex(
+                (c, idx) =>
+                  c.id !== session.drawnFromDiscardCardId &&
+                  srvIsExact13CardDopey(me.hand.filter((_, i) => i !== idx), allowSameRankDopey)
+              );
+              if (prefIdx !== -1) return prefIdx;
+              return me.hand.findIndex((_, idx) =>
+                srvIsExact13CardDopey(me.hand.filter((_, i) => i !== idx), allowSameRankDopey)
+              );
+            })();
+        if (dropIdx !== -1) {
+          const [dropped] = me.hand.splice(dropIdx, 1);
+          closingCard = dropped;
+          session.discardPile.push(dropped);
+        }
+      }
+    }
+
+    session.drawnFromDiscardCardId = null;
+    const mult = isJokerFinished ? 3 : 2;
+    finishServerRaminoRound(
+      session,
+      me,
+      mult,
+      isJokerFinished ? 'dopey_joker' : 'dopey',
+      undefined,
+      closingCard
+    );
+    return { ok: true };
+  }
+
+  if (action === 'meld') {
+    const reqIds: string[] = Array.isArray(payload.cardIds) ? payload.cardIds : [];
+    const selectedCards = me.hand.filter((c) => reqIds.includes(c.id));
+    let newGroups: { type: 'set' | 'run'; cards: RaminoCard[]; points: number }[] = [];
+    if (selectedCards.length >= 3) {
+      if (srvIsValidSet(selectedCards)) {
+        newGroups = [{ type: 'set', cards: selectedCards, points: srvGetGroupPoints(selectedCards) }];
+      } else if (srvIsValidRun(selectedCards)) {
+        const orderedSel = srvNormalizeRunCardsOrder(selectedCards, true);
+        newGroups = [{ type: 'run', cards: orderedSel, points: srvGetGroupPoints(orderedSel) }];
+      } else {
+        const handPos = new Map(me.hand.map((c, idx) => [c.id, idx]));
+        newGroups = srvPartitionValidMelds(selectedCards).melds.map((m) => {
+          if (m.type !== 'run') return m;
+          const inHandOrder = [...m.cards].sort(
+            (a, b) => (handPos.get(a.id) ?? 0) - (handPos.get(b.id) ?? 0)
+          );
+          return {
+            ...m,
+            cards: srvNormalizeRunCardsOrder(inHandOrder, true),
+          };
+        });
+      }
+    } else {
+      newGroups = srvPartitionValidMelds(me.hand).melds.map((m) => ({
+        ...m,
+        cards: m.type === 'run' ? srvNormalizeRunCardsOrder(m.cards, false) : m.cards,
+      }));
+    }
+    if (newGroups.length === 0) return { ok: false, error: 'ትክክለኛ ትሪስ፣ ኳትሪስ ወይም ቺንኩዌ / ኪንቴ አልተገኘም!' };
+    const meldedIds = new Set(newGroups.flatMap((g) => g.cards.map((c) => c.id)));
+    if (me.hand.length - meldedIds.size <= 0) {
+      return {
+        ok: false,
+        error: '🚫 ለመጨረስ 1 መዝጊያ ካርታ (መጣያ) በእጅዎ መቅረት የግድ ነው! ከኳትሪስ/ቡድን 1 ካርታ ነክተው ይለዩ።',
+      };
+    }
+    const totalPts = newGroups.reduce((s, g) => s + g.points, 0);
+    const meldedCount = newGroups.reduce((s, g) => s + g.cards.length, 0);
+    const isFinishing = meldedCount >= me.hand.length - 1;
+    if (!me.hasMelded && totalPts < 41) {
+      return { ok: false, error: `ለመውረድ ቢያንስ 41 ነጥብ ያስፈልጋል (${totalPts}/41)!` };
+    }
+    if (!session.hasDrawn && !session.drawnFromDiscardCardId && !isFinishing) {
+      return { ok: false, error: 'መጀመሪያ ካርታ ይሳቡ!' };
+    }
+
+    session.meldTurnCounter += 1;
+    const nextSeq = session.meldTurnCounter;
+    const ownerColor =
+      me.avatarColor.replace('bg-', 'border-') || 'border-amber-400';
+
+    const addedMelds: RaminoMeldGroup[] = newGroups.map((g, idx) => ({
+      id: `meld_${Date.now()}_${idx}`,
+      type: g.type,
+      rank: g.cards.find((c) => !c.isJoker)?.rank,
+      suit: g.cards.find((c) => !c.isJoker)?.suit,
+      cards: g.cards,
+      ownerId: me.id,
+      ownerColor,
+      meldTurnSeq: nextSeq,
+    }));
+
+    me.hand = me.hand.filter((c) => !meldedIds.has(c.id));
+    me.hasMelded = true;
+    session.drawnFromDiscardCardId = null;
+
+    const { remainingMelds, badgesToAdd } = srvPartitionCollapsedFourSuitSets(session.tableMelds, nextSeq);
+    session.tableMelds = [...remainingMelds, ...addedMelds];
+    if (badgesToAdd.length > 0) session.closedSetBadges.push(...badgesToAdd);
+
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: 'meld',
+      actorId: me.id,
+      actorName: me.name,
+      detail: String(totalPts),
+    };
+
+    if (me.hand.length === 0) {
+      finishServerRaminoRound(session, me, 1, 'normal');
+      return { ok: true };
+    }
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'layoff_card') {
+    if (!me.hasMelded) return { ok: false, error: 'ሳትወርድ ገቢ አይቻልም!' };
+    if (me.hand.length <= 1) {
+      return {
+        ok: false,
+        error: '🚫 የመጨረሻው 1 ካርታ መዝጊያ ስለሆነ ወደ መጣያው መጣል የግድ ነው!',
+      };
+    }
+    const meldId = String(payload.meldId || '');
+    const cardId = String(payload.cardId || '');
+    const cardIdx = Number(payload.cardIdx ?? 0);
+    const targetMeld = session.tableMelds.find((m) => m.id === meldId);
+    const selCard = me.hand.find((c) => c.id === cardId);
+    if (!targetMeld || !selCard) return { ok: false, error: 'ቡድን ወይም ካርታ አልተገኘም።' };
+
+    const taggedCard: RaminoCard = { ...selCard, laidOffById: me.id };
+    let updatedCards: RaminoCard[] | null = null;
+    if (taggedCard.isJoker || taggedCard.rank === 'JOKER') {
+      if (targetMeld.cards.some((c) => c.isJoker || c.rank === 'JOKER')) {
+        return { ok: false, error: 'በአንድ ትሪስ / ኳትሪስ / ቺንኩዌ ከ 1 በላይ ጆከር መጨመር አይቻልም!' };
+      }
+      if (targetMeld.type === 'set') {
+        if (targetMeld.cards.length >= 4) return { ok: false, error: 'ይህ ትሪስ 4 ካርድ ሞልቷል።' };
+        updatedCards = [...targetMeld.cards, taggedCard];
+      } else {
+        updatedCards = srvInsertCardIntoRunMeld(targetMeld.cards, taggedCard, cardIdx);
+      }
+    } else if (targetMeld.type === 'set') {
+      const candidate = [...targetMeld.cards, taggedCard];
+      if (srvIsValidSet(candidate)) updatedCards = candidate;
+    } else {
+      updatedCards = srvInsertCardIntoRunMeld(targetMeld.cards, taggedCard, cardIdx);
+    }
+
+    if (!updatedCards) return { ok: false, error: 'ይህ ካርድ ከቡድኑ ጋር አይገጥምም!' };
+    targetMeld.cards = updatedCards;
+    me.hand = me.hand.filter((c) => c.id !== cardId);
+    session.drawnFromDiscardCardId = null;
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: 'layoff',
+      actorId: me.id,
+      actorName: me.name,
+      detail: `${selCard.rank}${selCard.suit}`,
+    };
+    if (me.hand.length === 0) {
+      finishServerRaminoRound(session, me, 1, 'normal');
+      return { ok: true };
+    }
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'swap_joker') {
+    if (!me.hasMelded) return { ok: false, error: 'ሳትወርድ ገቢ አይቻልም!' };
+    const meldId = String(payload.meldId || '');
+    const cardIdx = Number(payload.cardIdx ?? 0);
+    const preferredCardId = payload.cardId ? String(payload.cardId) : null;
+    const targetMeld = session.tableMelds.find((m) => m.id === meldId);
+    if (!targetMeld) return { ok: false, error: 'ቡድኑ አልተገኘም።' };
+    const targetCard = targetMeld.cards[cardIdx];
+    if (!targetCard || !targetCard.isJoker) return { ok: false, error: 'የተመረጠው ካርታ ጆከር አይደለም።' };
+
+    const info = srvGetTableMeldJokerInfo(targetMeld, cardIdx);
+    const nonJokers = targetMeld.cards.filter((c) => !c.isJoker);
+    const reqRank = info?.rank || targetMeld.rank || 'J';
+
+    const matchIdx = me.hand.findIndex((c) => {
+      if (preferredCardId && c.id !== preferredCardId) return false;
+      if (c.isJoker || c.rank !== reqRank) return false;
+      if (targetMeld.type === 'run' && info?.suit) return c.suit === info.suit;
+      return !nonJokers.some((n) => n.suit === c.suit);
+    });
+    if (matchIdx === -1) return { ok: false, error: 'ትክክለኛው መቀየሪያ ካርድ በእጅዎ ላይ የለም!' };
+
+    const natural = me.hand[matchIdx];
+    const { laidOffById: _stripLayoff, ...cleanJoker } = targetCard;
+    void _stripLayoff;
+    me.hand.splice(matchIdx, 1, cleanJoker);
+    targetMeld.cards[cardIdx] = { ...natural, laidOffById: me.id };
+    session.drawnFromDiscardCardId = null;
+    session.lastEvent = { id: ++raminoEventSeq, type: 'swap_joker', actorId: me.id, actorName: me.name };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  if (action === 'discard') {
+    if (!session.hasDrawn) return { ok: false, error: 'ከመጣልዎ በፊት መጀመሪያ ካርታ ይሳቡ!' };
+    const cardId = String(payload.cardId || '');
+    const cardIdx = me.hand.findIndex((c) => c.id === cardId);
+    if (cardIdx === -1) return { ok: false, error: 'ካርታው በእጅዎ ላይ አልተገኘም።' };
+    const cardToDiscard = me.hand[cardIdx];
+    const nextHand = me.hand.filter((c) => c.id !== cardId);
+    const closesDopey = !me.hasMelded && nextHand.length === 13 && srvIsExact13CardDopey(nextHand, allowSameRankDopey);
+
+    const isJoker = cardToDiscard.isJoker || cardToDiscard.rank === 'JOKER';
+    const closesDopeyWithJoker = closesDopey && isJoker;
+    const canDiscardPickupCloseDopey = closesDopey && cardToDiscard.id !== session.drawnFromDiscardCardId;
+
+    if (
+      !me.hasMelded &&
+      session.drawnFromDiscardCardId !== null &&
+      !closesDopeyWithJoker &&
+      !canDiscardPickupCloseDopey &&
+      nextHand.length > 0
+    ) {
+      return { ok: false, error: 'ከተጣለ ካርታ ስለወሰዱ ግድ መውረድ ወይም "መልስ" መጫን አለብዎት!' };
+    }
+
+    const isLastCard = me.hand.length === 1;
+    const allMatch = me.hand.every((c) => srvDoesCardMatchTableMelds(c, session.tableMelds));
+    const matchesTable = srvDoesCardMatchTableMelds(cardToDiscard, session.tableMelds);
+
+    if (matchesTable && !isJoker && !isLastCard && !allMatch && !closesDopey) {
+      return { ok: false, error: 'በጠረጴዛው ላይ ካለ ቡድን ጋር የሚገጥም ካርድ መጣል አይቻልም!' };
+    }
+
+    const discardedRecord: RaminoCard =
+      isJoker && nextHand.length > 0 && !closesDopeyWithJoker
+        ? { ...cardToDiscard, lockedInDiscard: true }
+        : cardToDiscard;
+    me.hand = nextHand;
+    session.discardPile.push(discardedRecord);
+    session.hasDrawn = false;
+    session.drawnFromDiscardCardId = null;
+
+    // IMPORTANT: Discarding a normal (non-Joker) card while holding 13-card Dopey (5 pairs + 1 Tris)
+    // does NOT auto-end the round — it lets the player stay on 5 pairs + 1 Tris and wait for a Joker to win Golden (3x)!
+    // Only Joker discard closing Dopey (3x), emptying hand (0 cards), or explicit "dopey_win" ends the round.
+    if (nextHand.length === 0 || closesDopeyWithJoker) {
+      if (closesDopeyWithJoker) {
+        finishServerRaminoRound(session, me, 3, 'dopey_joker', undefined, cardToDiscard);
+      } else {
+        const isJokerFinish = Boolean(cardToDiscard.isJoker || cardToDiscard.rank === 'JOKER');
+        finishServerRaminoRound(
+          session,
+          me,
+          isJokerFinish ? 2 : 1,
+          isJokerFinish ? 'joker_finish' : 'normal',
+          undefined,
+          cardToDiscard
+        );
+      }
+      return { ok: true };
+    }
+
+    if (session.deck.length === 0) {
+      srvReshuffleDiscardIntoDeck(session);
+    }
+
+    session.currentTurnIdx = findNextActiveRaminoTurnIdx(session, session.currentTurnIdx);
+    session.turnSeconds = 120;
+    session.hasDiscarded = false;
+    session.lastEvent = {
+      id: ++raminoEventSeq,
+      type: discardedRecord.lockedInDiscard ? 'discard_joker_locked' : 'discard',
+      actorId: me.id,
+      actorName: me.name,
+      detail: `${cardToDiscard.rank}${cardToDiscard.suit}`,
+    };
+    broadcastRaminoTableState(session);
+    return { ok: true };
+  }
+
+  return { ok: false, error: 'Unknown action' };
+}
+
+function startRaminoServerLoop() {
+  setInterval(() => {
+    // 1. Tick public lobby open rooms
+    if (raminoPublicRooms.size > 0) {
+      let lobbyChanged = false;
+      for (const [id, rm] of raminoPublicRooms.entries()) {
+        if (rm.timeRemaining <= 1) {
+          raminoPublicRooms.delete(id);
+          const waitingTableCode = `PUB_${id.toUpperCase()}`;
+          const waitingTbl = raminoTables.get(waitingTableCode);
+          if (waitingTbl && waitingTbl.phase === 'waiting') {
+            raminoTables.delete(waitingTableCode);
+            broadcastRaminoTableClosed(
+              waitingTableCode,
+              'expired',
+              '⏰ የክፍሉ መጠበቂያ ሰዓት ስላለቀ ተዘግቷል፤ ከዋሌትዎ ምንም አልተቆረጠም!'
+            );
+          }
+          lobbyChanged = true;
+        } else {
+          rm.timeRemaining -= 1;
+          lobbyChanged = true;
+        }
+      }
+      if (lobbyChanged) broadcastRaminoLobbySync();
+    }
+
+    // 2. Tick active multiplayer Ramino tables
+    for (const session of raminoTables.values()) {
+      if (session.phase !== 'game') continue;
+      if (session.turnSeconds > 0) {
+        session.turnSeconds -= 1;
+        if (session.turnSeconds === 30 || session.turnSeconds % 5 === 0 || session.turnSeconds <= 10) {
+          broadcastRaminoTableState(session);
+        }
+      }
+      if (session.turnSeconds === 0) {
+        const timedOutPlayer = session.players[session.currentTurnIdx];
+        if (!timedOutPlayer) continue;
+        const timedOutIdx = session.currentTurnIdx;
+
+        // Suspend ONLY the timed-out player so they remain seated as a spectator watching the live game
+        timedOutPlayer.isSuspended = true;
+        timedOutPlayer.winStreak = 0;
+        // Move all remaining cards from the suspended player's hand to the discard pile
+        if (timedOutPlayer.hand.length > 0) {
+          session.discardPile.push(
+            ...timedOutPlayer.hand.map((c) =>
+              c.isJoker || c.rank === 'JOKER' ? { ...c, lockedInDiscard: true } : c
+            )
+          );
+          timedOutPlayer.hand = [];
+        }
+
+        const activeSurvivors = session.players.filter((p) => !p.isSuspended);
+        session.lastEvent = {
+          id: ++raminoEventSeq,
+          type: 'player_suspended',
+          actorId: timedOutPlayer.id,
+          actorName: timedOutPlayer.name,
+        };
+
+        if (activeSurvivors.length >= 2) {
+          session.currentTurnIdx = findNextActiveRaminoTurnIdx(session, timedOutIdx);
+          session.hasDrawn = false;
+          session.drawnFromDiscardCardId = null;
+          session.hasDiscarded = false;
+          session.turnSeconds = 120;
+          broadcastRaminoTableState(session);
+        } else {
+          const survivor = activeSurvivors[0] || session.players.find((p) => p.id !== timedOutPlayer.id);
+          if (survivor) {
+            finishServerRaminoRound(session, survivor, 1, 'timeout_win');
+          }
+        }
+      }
+    }
+  }, 1000);
+}
+
+// Active Game Presence Tracking for Accurate Real-Time Player Counts
+type TrackedGameKey = 'hub' | 'fast' | 'regular' | 'keno' | 'ramino';
+const activeGamePresence = new Map<string, { game: TrackedGameKey; lastSeen: number }>();
+
+const pruneStaleGamePresence = () => {
+  const cutoff = Date.now() - 25000;
+  for (const [cid, info] of activeGamePresence.entries()) {
+    if (info.lastSeen < cutoff) {
+      activeGamePresence.delete(cid);
+    }
+  }
+};
+
+// Track ramino voice peers in module scope (strictly untappable: E2EE participants only)
+const raminoVoicePeers = new Map<
+  WebSocket,
+  { roomCode: string; peerId: string; playerId?: string; playerName: string; isMuted?: boolean }
+>();
+
+function computeLiveGameCounts() {
+  pruneStaleGamePresence();
+  const presenceByGame: Record<TrackedGameKey, Set<string>> = {
+    hub: new Set(),
+    fast: new Set(),
+    regular: new Set(),
+    keno: new Set(),
+    ramino: new Set(),
+  };
+
+  for (const [cid, info] of activeGamePresence.entries()) {
+    presenceByGame[info.game]?.add(cid);
+  }
+
+  const fastPlayers = new Set<string>(presenceByGame.fast);
+  for (const stk of FAST_STAKE_TIERS) {
+    const lMap = fastLockedCartelasByStake[stk];
+    if (lMap) {
+      for (const item of lMap.values()) {
+        fastPlayers.add(item.clientId || item.ownerPhone);
+      }
+    }
+  }
+
+  const regularPlayers = new Set<string>(presenceByGame.regular);
+  for (const item of regularRoomLockedCartelas.values()) {
+    regularPlayers.add(item.clientId || item.ownerPhone);
+  }
+
+  const raminoPlayers = new Set<string>(presenceByGame.ramino);
+  for (const meta of raminoVoicePeers.values()) {
+    raminoPlayers.add(`voice:${meta.roomCode}:${meta.playerName}`);
+  }
+  for (const room of raminoPrivateRooms.values()) {
+    for (const p of room.players) {
+      raminoPlayers.add(`room:${room.code}:${p.id}`);
+    }
+  }
+  for (const tbl of raminoTables.values()) {
+    for (const p of tbl.players) {
+      raminoPlayers.add(`table:${tbl.roomCode}:${p.id}`);
+    }
+  }
+
+  return {
+    fast: fastPlayers.size,
+    regular: regularPlayers.size,
+    keno: presenceByGame.keno.size,
+    ramino: raminoPlayers.size,
+    updatedAt: Date.now(),
+  };
+}
+
+app.post('/api/games/presence', (req, res) => {
+  const clientId = String(req.body?.clientId || '').trim();
+  const game = String(req.body?.game || 'hub').trim() as TrackedGameKey;
+  if (clientId && ['hub', 'fast', 'regular', 'keno', 'ramino'].includes(game)) {
+    activeGamePresence.set(clientId, { game, lastSeen: Date.now() });
+  }
+  res.json({ ok: true, counts: computeLiveGameCounts() });
+});
+
+app.get('/api/games/live-counts', (_req, res) => {
+  res.json({ ok: true, counts: computeLiveGameCounts() });
+});
+
+// Unified Wallet Bet/Win Persistence across Keno & Ramino
+app.post('/api/wallet/game-tx', (req, res) => {
+  const phone = String(req.body?.phone || '').trim();
+  const name = String(req.body?.name || 'Player').trim() || 'Player';
+  const delta = Number(req.body?.delta);
+  const game = String(req.body?.game || 'game');
+  const reason = String(req.body?.reason || '').trim();
+  if (!phone || !Number.isFinite(delta)) {
+    return res.status(400).json({ ok: false, error: 'Invalid wallet update' });
+  }
+  const player = ensurePlayerRecord(phone, name);
+  player.balance = Math.max(0, Number((player.balance + delta).toFixed(2)));
+  if (delta > 0 && !/refund|revert|cancel/i.test(reason)) {
+    unlockAllWithdrawableAfterWin(player);
+  } else {
+    clampBalancesAfterDebit(player);
+  }
+  player.updatedAt = new Date().toLocaleString();
+  if (game === 'keno') {
+    if (delta < 0) {
+      kenoAdminConfig.totalBetsCount += 1;
+      kenoAdminConfig.totalWagered += Math.abs(delta);
+    } else if (delta > 0) {
+      kenoAdminConfig.totalPaidOut += delta;
+    }
+  }
+  let createdTx: ServerTransactionRecord | null = null;
+  if (delta !== 0) {
+    const methodLabel =
+      game === 'keno' ? 'Fast Keno' : game === 'ramino' ? 'CONKER (Rummy)' : game;
+    const txType: 'bet' | 'win' = delta < 0 ? 'bet' : 'win';
+    createdTx = {
+      id: `gtx-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      userId: player.id,
+      userName: player.name,
+      userPhone: player.phone,
+      type: txType,
+      method: methodLabel,
+      amount: Math.abs(Number(delta.toFixed(2))),
+      referenceNumber:
+        reason ||
+        (game === 'keno'
+          ? txType === 'bet'
+            ? 'Keno Bet'
+            : 'Keno Win'
+          : game === 'ramino'
+          ? txType === 'bet'
+            ? 'CONKER (Rummy) Entry'
+            : 'CONKER (Rummy) Win'
+          : 'Game Tx'),
+      status: 'approved',
+      timestamp: new Date().toLocaleString(),
+    };
+    serverTransactions.unshift(createdTx);
+    if (serverTransactions.length > 600) {
+      serverTransactions.length = 600;
+    }
+  }
+  saveBotsToDisk();
+  broadcastRealtimeSync();
+  res.json({
+    ok: true,
+    balance: player.balance,
+    withdrawableBalance: getWithdrawableBalance(player),
+    nonWithdrawableBonus: getNonWithdrawableBonus(player),
+    phone: player.phone,
+    accountToken: createSignedPlayerToken(player),
+    transaction: createdTx,
+  });
+});
+
+// Synchronized Fast Keno Live Endpoints
+app.get('/api/keno/live-state', (_req, res) => {
+  res.json({ ok: true, state: serializeKenoLiveState() });
+});
+
+app.post('/api/keno/tickets', (req, res) => {
+  const playerId = String(req.body?.playerId || 'guest').trim();
+  const handle = String(req.body?.handle || 'Player').trim() || 'Player';
+  const numbersRaw = Array.isArray(req.body?.numbers) ? req.body.numbers : [];
+  const numbers = numbersRaw
+    .map((n: unknown) => Number(n))
+    .filter((n: number) => Number.isInteger(n) && n >= 1 && n <= 80)
+    .slice(0, 10);
+  const bet = Math.max(1, Number(req.body?.bet || 2));
+
+  if (kenoLiveState.phase !== 'betting') {
+    return res.status(400).json({ ok: false, error: 'Draw in progress, wait for next round' });
+  }
+  if (numbers.length === 0) {
+    return res.status(400).json({ ok: false, error: 'Select at least 1 number' });
+  }
+
+  const maskedHandle =
+    handle.length >= 2 ? `${handle[0]}***${handle[handle.length - 1]}` : `${handle}***`;
+
+  const ticket: ServerKenoTicket = {
+    id: `kt_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+    handle: maskedHandle,
+    playerId,
+    numbers: [...numbers].sort((a, b) => a - b),
+    bet,
+    status: 'Waiting',
+    timestamp: Date.now(),
+  };
+  kenoLiveState.liveTickets.unshift(ticket);
+  if (kenoLiveState.liveTickets.length > 80) kenoLiveState.liveTickets.length = 80;
+  broadcastKenoLiveState();
+  res.json({ ok: true, ticket, state: serializeKenoLiveState() });
+});
+
+// Keno Admin Controls API
+app.get('/api/keno/admin/state', (_req, res) => {
+  const counts = computeLiveGameCounts();
+  res.json({
+    ok: true,
+    ...kenoAdminConfig,
+    activePlayers: counts.keno,
+  });
+});
+
+app.post('/api/keno/admin/control', (req, res) => {
+  const { action, countdownSec, speed } = req.body as {
+    action?: 'toggle_pause' | 'reset_round' | 'update_settings';
+    countdownSec?: number;
+    speed?: 'normal' | 'fast' | 'turbo';
+  };
+  if (action === 'toggle_pause') {
+    kenoAdminConfig.isPaused = !kenoAdminConfig.isPaused;
+  } else if (action === 'reset_round') {
+    kenoAdminConfig.resetToken += 1;
+    kenoAdminConfig.isPaused = false;
+    kenoLiveState.phase = 'betting';
+    kenoLiveState.countdownSeconds = kenoAdminConfig.defaultCountdownSec;
+    kenoLiveState.cooldownSeconds = 0;
+    kenoLiveState.drawnBalls = [];
+    kenoLiveState.currentRevealedIndex = -1;
+    kenoLiveState.liveTickets = [];
+    kenoLiveState.lastStepAt = Date.now();
+  }
+  if (typeof countdownSec === 'number' && countdownSec >= 10 && countdownSec <= 180) {
+    kenoAdminConfig.defaultCountdownSec = Math.round(countdownSec);
+  }
+  if (speed && ['normal', 'fast', 'turbo'].includes(speed)) {
+    kenoAdminConfig.speed = speed;
+  }
+  const payload = JSON.stringify({
+    type: 'keno:admin:sync',
+    ...kenoAdminConfig,
+  });
+  for (const client of wsClients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payload);
+      } catch {}
+    }
+  }
+  broadcastKenoLiveState();
+  res.json({ ok: true, ...kenoAdminConfig });
+});
+
+// Ramino Admin Rooms Inspection & Control API (voice audio & access keys NEVER exposed — untappable E2EE)
+app.get('/api/ramino/admin/rooms', (_req, res) => {
+  const rooms = Array.from(raminoPrivateRooms.values()).map((r) => {
+    const voicePeers: { peerId: string; playerName: string }[] = [];
+    for (const meta of raminoVoicePeers.values()) {
+      if (meta.roomCode === r.code) {
+        voicePeers.push({ peerId: meta.peerId, playerName: meta.playerName });
+      }
+    }
+    const { voiceAccessKey: _hiddenVoiceKey, ...safeRoom } = r;
+    void _hiddenVoiceKey;
+    return {
+      ...safeRoom,
+      voiceEncrypted: true,
+      voiceCount: voicePeers.length,
+      voicePeers,
+    };
+  });
+
+  for (const meta of raminoVoicePeers.values()) {
+    if (!rooms.some((r) => r.code === meta.roomCode)) {
+      rooms.push({
+        code: meta.roomCode,
+        hostId: meta.peerId,
+        hostName: meta.playerName,
+        maxPlayers: 4,
+        stake: 30,
+        players: [
+          {
+            id: meta.peerId,
+            name: meta.playerName,
+            avatarLetter: meta.playerName[0]?.toUpperCase() || 'P',
+            avatarColor: 'bg-amber-400',
+            isHost: true,
+            joinedAt: Date.now(),
+          },
+        ],
+        status: 'started',
+        createdAt: Date.now(),
+        voiceEncrypted: true,
+        voiceCount: 1,
+        voicePeers: [{ peerId: meta.peerId, playerName: meta.playerName }],
+      });
+    }
+  }
+
+  res.json({
+    ok: true,
+    rooms,
+    totalOnline: computeLiveGameCounts().ramino,
+  });
+});
+
+app.post('/api/ramino/admin/rooms/:code/control', (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  const action = String(req.body?.action || '').trim() as 'force_start' | 'reset' | 'close';
+  const room = raminoPrivateRooms.get(code);
+  const tbl = raminoTables.get(code);
+  if (action === 'close') {
+    if (room) raminoPrivateRooms.delete(code);
+    if (tbl) {
+      if (tbl.ceremonyTimer) clearTimeout(tbl.ceremonyTimer);
+      raminoTables.delete(code);
+    }
+  } else if (action === 'force_start') {
+    if (room) room.status = 'started';
+    if (tbl && tbl.phase === 'waiting' && tbl.players.length >= 2) {
+      startServerRaminoCeremony(tbl);
+    }
+  } else if (action === 'reset' && room) {
+    room.status = 'waiting';
+    if (tbl) {
+      if (tbl.ceremonyTimer) clearTimeout(tbl.ceremonyTimer);
+      tbl.phase = 'waiting';
+      broadcastRaminoTableState(tbl);
+    }
+  }
+
+  const ctrlPayload = JSON.stringify({
+    type: 'ramino:admin:control',
+    roomCode: code,
+    action,
+  });
+  for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+    if (meta.roomCode === code && peerWs.readyState === WebSocket.OPEN) {
+      try {
+        peerWs.send(ctrlPayload);
+      } catch {}
+    }
+  }
+  res.json({ ok: true, code, action });
+});
+
+// Ramino Public Open Rooms Lobby API
+app.get('/api/ramino/rooms', (_req, res) => {
+  res.json({ ok: true, rooms: serializePublicRoomsList() });
+});
+
+app.post('/api/ramino/rooms', (req, res) => {
+  const creatorId = String(req.body?.creatorId || 'guest').trim();
+  const creatorPhone = String(req.body?.creatorPhone || '').trim();
+  const creatorName = String(req.body?.creatorName || 'Player').trim() || 'Player';
+  const rawSeats = Number(req.body?.maxPlayers || 3);
+  const max = ([2, 3, 4, 5].includes(rawSeats) ? rawSeats : 3) as 2 | 3 | 4 | 5;
+  const stake = Math.max(10, Number(req.body?.stake || 30));
+  const duration = RAMINO_SEAT_DURATION_MAP[max] || 180;
+  const roomNum = Math.floor(1000 + Math.random() * 9000);
+  const id = `r_${Date.now()}_${roomNum}`;
+
+  const room: RaminoPublicRoomRecord = {
+    id,
+    name: `#${roomNum}`,
+    creatorId,
+    creatorPhone,
+    creator: creatorName,
+    avatarLetter: creatorName[0]?.toUpperCase() || 'P',
+    avatarColor: 'bg-amber-400',
+    stake,
+    max,
+    current: 1,
+    duration,
+    timeRemaining: duration,
+    isDemo: false,
+    players: [
+      {
+        id: creatorId,
+        name: creatorName,
+        phone: creatorPhone,
+        avatarLetter: creatorName[0]?.toUpperCase() || 'P',
+        avatarColor: 'bg-amber-400',
+        isHost: true,
+        joinedAt: Date.now(),
+      },
+    ],
+    createdAt: Date.now(),
+  };
+  raminoPublicRooms.set(id, room);
+
+  // Create backing human multiplayer table
+  const tableCode = `PUB_${id.toUpperCase()}`;
+  raminoTables.set(tableCode, {
+    roomCode: tableCode,
+    isPrivate: false,
+    hostId: creatorId,
+    hostName: creatorName,
+    maxPlayers: max,
+    stake,
+    phase: 'waiting',
+    roundIndex: 0,
+    privateRoundCount: 1,
+    reshuffleCount: 0,
+    players: room.players.map((p, idx) => ({
+      ...p,
+      isBot: false,
+      avatarColor: RAMINO_SEAT_AVATAR_COLORS[idx % RAMINO_SEAT_AVATAR_COLORS.length],
+      hand: [],
+      hasMelded: false,
+      winStreak: 0,
+      isDealer: false,
+    })),
+    cutParticipants: [],
+    ceremonyRevealedCount: 0,
+    ceremonyDealerId: creatorId,
+    ceremonyDealerName: creatorName,
+    deck: [],
+    bottomCard: {
+      id: 'placeholder_10c',
+      rank: '10',
+      suit: '♣',
+      suitName: 'clubs',
+      color: 'black',
+      value: 10,
+      points: 10,
+      isJoker: false,
+    },
+    discardPile: [],
+    tableMelds: [],
+    closedSetBadges: [],
+    meldTurnCounter: 0,
+    currentTurnIdx: 0,
+    hasDrawn: false,
+    drawnFromDiscardCardId: null,
+    hasDiscarded: false,
+    turnSeconds: 120,
+    winnerCelebration: null,
+    postDayRequest: null,
+    postDaySeatPick: null,
+    lastEvent: null,
+  });
+
+  broadcastRaminoLobbySync();
+  res.json({ ok: true, room, tableCode, rooms: serializePublicRoomsList() });
+});
+
+app.post('/api/ramino/rooms/:id/cancel', (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const room = raminoPublicRooms.get(id);
+  const tableCode = `PUB_${id.toUpperCase()}`;
+  if (room) {
+    raminoPublicRooms.delete(id);
+    const tbl = raminoTables.get(tableCode);
+    if (tbl) {
+      if (tbl.ceremonyTimer) clearTimeout(tbl.ceremonyTimer);
+      raminoTables.delete(tableCode);
+      broadcastRaminoTableClosed(tableCode, 'cancelled', 'ክፍሉ በፈጣሪው ተሰርዟል።');
+    }
+    broadcastRaminoLobbySync();
+  }
+  res.json({ ok: true, rooms: serializePublicRoomsList() });
+});
+
+app.post('/api/ramino/rooms/:id/join', (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const playerId = String(req.body?.playerId || '').trim();
+  const playerPhone = String(req.body?.playerPhone || '').trim();
+  const playerName = String(req.body?.playerName || 'Player').trim() || 'Player';
+  const room = raminoPublicRooms.get(id);
+  if (!room) {
+    return res.status(404).json({ ok: false, error: 'ክፍሉ አልተገኘም' });
+  }
+  const pid = playerId || `p_${playerName}_${Date.now()}`;
+  const tableCode = `PUB_${id.toUpperCase()}`;
+
+  if (!room.players.some((p) => p.id === pid)) {
+    if (room.players.length >= room.max) {
+      return res.status(400).json({ ok: false, error: 'ክፍሉ ሞልቷል!' });
+    }
+    const nextColor = RAMINO_SEAT_AVATAR_COLORS[room.players.length % RAMINO_SEAT_AVATAR_COLORS.length];
+    room.players.push({
+      id: pid,
+      name: playerName,
+      phone: playerPhone,
+      avatarLetter: playerName[0]?.toUpperCase() || 'P',
+      avatarColor: nextColor,
+      isHost: false,
+      joinedAt: Date.now(),
+    });
+    room.current = room.players.length;
+  }
+
+  let tbl = raminoTables.get(tableCode);
+  if (!tbl) {
+    tbl = {
+      roomCode: tableCode,
+      isPrivate: false,
+      hostId: room.creatorId,
+      hostName: room.creator,
+      maxPlayers: room.max,
+      stake: room.stake,
+      phase: 'waiting',
+      roundIndex: 0,
+      privateRoundCount: 1,
+      reshuffleCount: 0,
+      players: room.players.map((p, idx) => ({
+        ...p,
+        isBot: false,
+        avatarColor: RAMINO_SEAT_AVATAR_COLORS[idx % RAMINO_SEAT_AVATAR_COLORS.length],
+        hand: [],
+        hasMelded: false,
+        winStreak: 0,
+        isDealer: false,
+      })),
+      cutParticipants: [],
+      ceremonyRevealedCount: 0,
+      ceremonyDealerId: room.creatorId,
+      ceremonyDealerName: room.creator,
+      deck: [],
+      bottomCard: {
+        id: 'placeholder_10c',
+        rank: '10',
+        suit: '♣',
+        suitName: 'clubs',
+        color: 'black',
+        value: 10,
+        points: 10,
+        isJoker: false,
+      },
+      discardPile: [],
+      tableMelds: [],
+      closedSetBadges: [],
+      meldTurnCounter: 0,
+      currentTurnIdx: 0,
+      hasDrawn: false,
+      drawnFromDiscardCardId: null,
+      hasDiscarded: false,
+      turnSeconds: 120,
+      winnerCelebration: null,
+      postDayRequest: null,
+      postDaySeatPick: null,
+      lastEvent: null,
+    };
+    raminoTables.set(tableCode, tbl);
+  } else if (!tbl.players.some((p) => p.id === pid)) {
+    tbl.players.push({
+      id: pid,
+      name: playerName,
+      phone: playerPhone,
+      avatarLetter: playerName[0]?.toUpperCase() || 'P',
+      avatarColor: RAMINO_SEAT_AVATAR_COLORS[tbl.players.length % RAMINO_SEAT_AVATAR_COLORS.length],
+      isHost: false,
+      isBot: false,
+      joinedAt: Date.now(),
+      hand: [],
+      hasMelded: false,
+      winStreak: 0,
+      isDealer: false,
+    });
+  }
+
+  if (tbl.players.length >= room.max && tbl.phase === 'waiting') {
+    raminoPublicRooms.delete(id);
+    startServerRaminoCeremony(tbl);
+  } else {
+    broadcastRaminoTableState(tbl);
+  }
+
+  broadcastRaminoLobbySync();
+  res.json({
+    ok: true,
+    room,
+    tableCode,
+    table: serializeRaminoTableForPlayer(tbl, pid),
+  });
+});
+
+// Ramino Private Room Endpoints (Human-Only — Strictly Zero Computer Bots)
+app.post('/api/ramino/private-rooms', (req, res) => {
+  try {
+    const rawCode = String(req.body?.code || '').trim().toUpperCase();
+    const hostId = String(req.body?.hostId || req.body?.playerId || '').trim() || `host_${Date.now()}`;
+    const hostPhone = String(req.body?.hostPhone || '').trim();
+    const hostName = String(req.body?.hostName || 'Player').trim() || 'Player';
+    const rawSeats = Number(req.body?.maxPlayers || 3);
+    const maxPlayers = ([2, 3, 4, 5].includes(rawSeats) ? rawSeats : 3) as 2 | 3 | 4 | 5;
+    const stake = Math.max(10, Number(req.body?.stake || 30));
+    if (!rawCode) {
+      return res.status(400).json({ ok: false, error: 'Room code is required' });
+    }
+
+    const existing = raminoPrivateRooms.get(rawCode);
+    if (existing) {
+      existing.maxPlayers = maxPlayers;
+      existing.stake = stake;
+      existing.hostName = hostName;
+      existing.hostId = hostId;
+      if (!existing.players.some((p) => p.id === hostId)) {
+        const idx = existing.players.length;
+        existing.players.unshift({
+          id: hostId,
+          name: hostName,
+          phone: hostPhone,
+          avatarLetter: hostName[0]?.toUpperCase() || 'H',
+          avatarColor: RAMINO_SEAT_AVATAR_COLORS[idx % RAMINO_SEAT_AVATAR_COLORS.length],
+          isHost: true,
+          joinedAt: Date.now(),
+        });
+      }
+      const tbl = createOrSyncRaminoTableFromPrivateRoom(existing);
+      broadcastPrivateRoomSnapshot(existing);
+      broadcastRaminoTableState(tbl);
+      return res.json({ ok: true, room: existing, table: serializeRaminoTableForPlayer(tbl, hostId) });
+    }
+
+    const room: RaminoPrivateRoomRecord = {
+      code: rawCode,
+      hostId,
+      hostName,
+      maxPlayers,
+      stake,
+      players: [
+        {
+          id: hostId,
+          name: hostName,
+          phone: hostPhone,
+          avatarLetter: hostName[0]?.toUpperCase() || 'H',
+          avatarColor: 'bg-amber-400',
+          isHost: true,
+          joinedAt: Date.now(),
+        },
+      ],
+      status: 'waiting',
+      voiceAccessKey: crypto.randomBytes(24).toString('hex'),
+      createdAt: Date.now(),
+    };
+    raminoPrivateRooms.set(rawCode, room);
+    const tbl = createOrSyncRaminoTableFromPrivateRoom(room);
+    broadcastPrivateRoomSnapshot(room);
+    broadcastRaminoTableState(tbl);
+    res.json({ ok: true, room, table: serializeRaminoTableForPlayer(tbl, hostId) });
+  } catch (err) {
+    console.error('Create ramino private room error:', err);
+    res.status(500).json({ ok: false, error: 'Failed to create private room' });
+  }
+});
+
+app.get('/api/ramino/private-rooms/:code', (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  const room = raminoPrivateRooms.get(code);
+  if (!room) {
+    return res.status(404).json({ ok: false, error: 'ክፍሉ አልተገኘም' });
+  }
+  const { voiceAccessKey: _hiddenVoiceKey, ...publicPreview } = room;
+  void _hiddenVoiceKey;
+  res.json({ ok: true, room: publicPreview });
+});
+
+app.post('/api/ramino/private-rooms/:code/join', (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  const playerId = String(req.body?.playerId || '').trim() || `guest_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  const playerPhone = String(req.body?.playerPhone || '').trim();
+  const playerName = String(req.body?.playerName || 'Friend').trim() || 'Friend';
+  const room = raminoPrivateRooms.get(code);
+  if (!room) {
+    return res.status(404).json({ ok: false, error: 'በዚህ ኮድ የተፈጠረ ክፍል አልተገኘም!' });
+  }
+  const alreadyJoined = room.players.some((p) => p.id === playerId);
+  if (!alreadyJoined) {
+    if (room.players.length >= room.maxPlayers) {
+      return res.status(400).json({ ok: false, error: 'ክፍሉ ሞልቷል!' });
+    }
+    const idx = room.players.length;
+    room.players.push({
+      id: playerId,
+      name: playerName,
+      phone: playerPhone,
+      avatarLetter: playerName[0]?.toUpperCase() || 'F',
+      avatarColor: RAMINO_SEAT_AVATAR_COLORS[idx % RAMINO_SEAT_AVATAR_COLORS.length],
+      isHost: false,
+      joinedAt: Date.now(),
+    });
+  }
+  const tbl = createOrSyncRaminoTableFromPrivateRoom(room);
+  if (tbl.phase === 'waiting' && room.players.length >= room.maxPlayers) {
+    startServerRaminoCeremony(tbl);
+  } else {
+    broadcastPrivateRoomSnapshot(room);
+    broadcastRaminoTableState(tbl);
+  }
+  res.json({ ok: true, room, table: serializeRaminoTableForPlayer(tbl, playerId) });
+});
+
+app.post('/api/ramino/private-rooms/:code/start', (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  const playerId = String(req.body?.playerId || '').trim();
+  const room = raminoPrivateRooms.get(code);
+  if (!room) {
+    return res.status(404).json({ ok: false, error: 'ክፍሉ አልተገኘም' });
+  }
+  const tbl = createOrSyncRaminoTableFromPrivateRoom(room);
+  if (tbl.players.length >= 2 && tbl.phase === 'waiting') {
+    startServerRaminoCeremony(tbl);
+  } else {
+    broadcastPrivateRoomSnapshot(room);
+    broadcastRaminoTableState(tbl);
+  }
+  res.json({
+    ok: true,
+    room,
+    waitingForFriends: tbl.phase === 'waiting',
+    table: serializeRaminoTableForPlayer(tbl, playerId || room.hostId),
+  });
+});
+
+app.get('/api/ramino/active-session', (req, res) => {
+  const playerId = String(req.query?.playerId || '').trim();
+  if (!playerId) {
+    return res.json({ ok: true, table: null });
+  }
+  for (const tbl of raminoTables.values()) {
+    if (
+      (tbl.phase === 'game' || tbl.phase === 'ceremony') &&
+      tbl.turnSeconds > 0 &&
+      tbl.players.some((p) => p.id === playerId)
+    ) {
+      return res.json({ ok: true, table: serializeRaminoTableForPlayer(tbl, playerId) });
+    }
+  }
+  res.json({ ok: true, table: null });
+});
+
+app.get('/api/ramino/tables/:code/state', (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  const playerId = String(req.query?.playerId || '').trim();
+  const tbl = raminoTables.get(code);
+  if (!tbl) {
+    return res.status(404).json({ ok: false, error: 'Table not found' });
+  }
+  res.json({ ok: true, table: serializeRaminoTableForPlayer(tbl, playerId) });
+});
+
+app.post('/api/ramino/tables/:code/action', (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  const playerId = String(req.body?.playerId || '').trim();
+  const action = String(req.body?.action || '').trim();
+  const tbl = raminoTables.get(code);
+  if (!tbl) {
+    return res.status(404).json({ ok: false, error: 'ጠረጴዛው አልተገኘም።' });
+  }
+  const result = handleServerRaminoAction(tbl, playerId, action, req.body || {});
+  if (!result.ok) {
+    return res.status(400).json({ ok: false, error: result.error, table: serializeRaminoTableForPlayer(tbl, playerId) });
+  }
+  res.json({ ok: true, table: serializeRaminoTableForPlayer(tbl, playerId) });
+});
+
+// Game Visibility (Hide/Show Games & Soon status from Home Hub)
+app.get('/api/games/visibility', (_req, res) => {
+  res.json({ ok: true, visibility: persistedGameVisibility });
+});
+
+app.post('/api/games/visibility', (req, res) => {
+  const gameKey = String(req.body?.game || '').trim() as GameVisibilityKey;
+  const validKeys: GameVisibilityKey[] = ['fast', 'regular', 'keno', 'ramino'];
+  if (req.body?.visibility && typeof req.body.visibility === 'object') {
+    for (const k of validKeys) {
+      const entry = req.body.visibility[k];
+      if (entry && typeof entry.visible === 'boolean') {
+        persistedGameVisibility[k] = {
+          visible: entry.visible,
+          comingSoon: typeof entry.comingSoon === 'boolean' ? entry.comingSoon : persistedGameVisibility[k]?.comingSoon,
+        };
+      }
+    }
+  } else if (validKeys.includes(gameKey)) {
+    const prev = persistedGameVisibility[gameKey] || { visible: true };
+    persistedGameVisibility[gameKey] = {
+      visible: typeof req.body?.visible === 'boolean' ? req.body.visible : prev.visible,
+      comingSoon: typeof req.body?.comingSoon === 'boolean' ? req.body.comingSoon : prev.comingSoon,
+    };
+  }
+  saveBotsToDisk();
+  const payload = JSON.stringify({ type: 'games:visibility:sync', visibility: persistedGameVisibility });
+  for (const wsClient of wsClients) {
+    if (wsClient.readyState === WebSocket.OPEN) {
+      try {
+        wsClient.send(payload);
+      } catch {}
+    }
+  }
+  res.json({ ok: true, visibility: persistedGameVisibility });
+});
+
+// Home Hub Ads & Banners (Admin Ad Creator - Synced Live Across All Connected Devices)
+app.get('/api/home-ads', (_req, res) => {
+  res.json({
+    ok: true,
+    homeAdsEnabled: persistedHomeAdsEnabled,
+    heroBanners: persistedHomeHeroAds,
+    ads: persistedHomeHeroAds,
+  });
+});
+
+app.post('/api/home-ads', (req, res) => {
+  let changed = false;
+  if (typeof req.body?.homeAdsEnabled === 'boolean') {
+    persistedHomeAdsEnabled = req.body.homeAdsEnabled;
+    changed = true;
+  }
+  const incomingAds = Array.isArray(req.body?.heroBanners)
+    ? req.body.heroBanners
+    : Array.isArray(req.body?.ads)
+    ? req.body.ads
+    : null;
+  if (incomingAds) {
+    const sanitized = (incomingAds as Record<string, unknown>[])
+      .slice(0, 25)
+      .map((b, idx) => ({
+        id: String(b?.id || `ad_${Date.now()}_${idx}`),
+        title: String(b?.title || '').trim(),
+        subtitle: String(b?.subtitle || '').trim(),
+        badgeText: String(b?.badgeText || 'SUN GAMES').trim(),
+        accentColor: (['blue', 'emerald', 'amber', 'rose'].includes(String(b?.accentColor))
+          ? String(b?.accentColor)
+          : 'emerald') as 'blue' | 'emerald' | 'amber' | 'rose',
+        imageUrl: b?.imageUrl ? String(b.imageUrl) : undefined,
+        targetGame: (['fast', 'regular', 'keno', 'ramino', 'none'].includes(String(b?.targetGame))
+          ? String(b?.targetGame)
+          : 'fast') as 'fast' | 'regular' | 'keno' | 'ramino' | 'none',
+        ctaText: b?.ctaText ? String(b.ctaText).trim() : 'አሁን ይጫወቱ →',
+        isActive: b?.isActive !== false,
+        translations:
+          b?.translations && typeof b.translations === 'object'
+            ? (b.translations as Record<string, { title?: string; subtitle?: string; badgeText?: string; ctaText?: string }>)
+            : undefined,
+      }));
+    persistedHomeHeroAds = sanitized;
+    for (const stk of FAST_STAKE_TIERS) {
+      if (fastRoomsByStake[stk]) fastRoomsByStake[stk].heroBanners = [];
+    }
+    if (regularLiveRoomState) regularLiveRoomState.heroBanners = [];
+    changed = true;
+  }
+  if (changed) {
+    homeHeroAdsVersion += 1;
+    saveBotsToDisk();
+    const payload = JSON.stringify({
+      type: 'home:ads:sync',
+      homeAdsEnabled: persistedHomeAdsEnabled,
+      heroBanners: persistedHomeHeroAds,
+      ads: persistedHomeHeroAds,
+      homeHeroAdsVersion,
+    });
+    for (const wsClient of wsClients) {
+      safeWsSend(wsClient, payload);
+    }
+    for (const sseRes of sseClients) {
+      safeSseWrite(sseRes, payload);
+    }
+    broadcastRealtimeSync('both');
+  }
+  res.json({
+    ok: true,
+    homeAdsEnabled: persistedHomeAdsEnabled,
+    heroBanners: persistedHomeHeroAds,
+    ads: persistedHomeHeroAds,
+  });
+});
+
+// Non-ZIP 2-Part Full Standalone Ramino Export (Part 1: Server & Setup, Part 2: Complete ModernRaminoGame.tsx)
+app.get('/api/ramino/export/part1', (_req, res) => {
+  const part1 = [
+    '// ============================================================================',
+    '// CONKER RAMINO STANDALONE — PART 1 OF 2 (SERVER, CONFIG & SETUP — NO ZIP)',
+    '// ============================================================================',
+    '// Save the files below into your standalone Node + Vite + React project:',
+    '//   1) package.json',
+    '//   2) vite.config.ts',
+    '//   3) index.html',
+    '//   4) src/index.css',
+    '//   5) src/main.tsx',
+    '//   6) src/types/bingo.ts',
+    '//   7) src/utils/realtimeRoomClient.ts',
+    '//   8) src/App.tsx',
+    '//   9) server.ts',
+    '// And save Part 2 (/api/ramino/export/part2) as: src/components/ModernRaminoGame.tsx',
+    '',
+    '/* -------------------- 1. package.json --------------------',
+    '{',
+    '  "name": "conker-ramino-standalone",',
+    '  "private": true,',
+    '  "version": "1.0.0",',
+    '  "type": "module",',
+    '  "scripts": {',
+    '    "dev": "tsx server.ts",',
+    '    "build": "vite build",',
+    '    "start": "NODE_ENV=production tsx server.ts"',
+    '  },',
+    '  "dependencies": {',
+    '    "express": "^4.21.2",',
+    '    "lucide-react": "^0.475.0",',
+    '    "react": "^19.0.0",',
+    '    "react-dom": "^19.0.0",',
+    '    "ws": "^8.18.0"',
+    '  },',
+    '  "devDependencies": {',
+    '    "@tailwindcss/vite": "^4.0.0",',
+    '    "@types/express": "^5.0.0",',
+    '    "@types/react": "^19.0.0",',
+    '    "@types/react-dom": "^19.0.0",',
+    '    "@types/ws": "^8.5.14",',
+    '    "tailwindcss": "^4.0.0",',
+    '    "tsx": "^4.19.2",',
+    '    "typescript": "~5.8.2",',
+    '    "vite": "^6.2.0"',
+    '  }',
+    '}',
+    '-------------------- */',
+    '',
+    '/* -------------------- 2. vite.config.ts --------------------',
+    "import { defineConfig } from 'vite';",
+    "import react from '@vitejs/plugin-react';",
+    "import tailwindcss from '@tailwindcss/vite';",
+    'export default defineConfig({ plugins: [react(), tailwindcss()] });',
+    '-------------------- */',
+    '',
+    '/* -------------------- 3. index.html --------------------',
+    '<!doctype html>',
+    '<html lang="am">',
+    '  <head>',
+    '    <meta charset="UTF-8" />',
+    '    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />',
+    '    <title>ራሚኖ | CONKER</title>',
+    '  </head>',
+    '  <body class="bg-[#060911] text-white">',
+    '    <div id="root"></div>',
+    '    <script type="module" src="/src/main.tsx"></script>',
+    '  </body>',
+    '</html>',
+    '-------------------- */',
+    '',
+    '/* -------------------- 4. src/index.css --------------------',
+    '@import "tailwindcss";',
+    '-------------------- */',
+    '',
+    '/* -------------------- 5. src/main.tsx --------------------',
+    "import { StrictMode } from 'react';",
+    "import { createRoot } from 'react-dom/client';",
+    "import App from './App';",
+    "import './index.css';",
+    "createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);",
+    '-------------------- */',
+    '',
+    '// -------------------- 6. src/types/bingo.ts --------------------',
+    "export type Language = 'am' | 'ti' | 'om' | 'en';",
+    'export interface UserAccount {',
+    '  id: string; name: string; phone: string; passwordHash: string;',
+    '  balance: number; bonusBalance: number; referralCode: string;',
+    '  referredCount: number; referralEarnings: number;',
+    '  isBlocked: boolean; isAdmin: boolean; joinedAt: string;',
+    '}',
+    '',
+    '// -------------------- 7. src/utils/realtimeRoomClient.ts --------------------',
+    'export function buildApiUrl(path: string): string { return path; }',
+    '',
+    '// -------------------- 8. src/App.tsx --------------------',
+    "/* import React, { useState } from 'react';",
+    "import { ModernRaminoGame } from './components/ModernRaminoGame';",
+    "import { Language, UserAccount } from './types/bingo';",
+    'export default function App() {',
+    "  const [language, setLanguage] = useState<Language>('am');",
+    "  const [users, setUsers] = useState<UserAccount[]>([{ id: 'p1', name: 'Player', phone: '0900000000', passwordHash: '', balance: 500, bonusBalance: 0, referralCode: 'RAMINO', referredCount: 0, referralEarnings: 0, isBlocked: false, isAdmin: false, joinedAt: '2026-01-01' }]);",
+    '  return <ModernRaminoGame language={language} onChangeLanguage={setLanguage} isDark={true} sharedUsers={users} onUpdateSharedUsers={setUsers} />;',
+    '} */',
+    '',
+    '// -------------------- 9. server.ts (Complete Standalone Ramino Express + WebRTC Voice Server) --------------------',
+    "import express from 'express';",
+    "import http from 'http';",
+    "import path from 'path';",
+    "import { WebSocketServer, WebSocket } from 'ws';",
+    '',
+    'const app = express();',
+    'app.use(express.json());',
+    '',
+    'interface RaminoPrivateRoomRecord {',
+    '  code: string; hostName: string; maxPlayers: 2 | 3 | 4 | 5; stake: number;',
+    "  players: { name: string; isHost: boolean; joinedAt: number }[];",
+    "  status: 'waiting' | 'started'; createdAt: number;",
+    '}',
+    'const raminoPrivateRooms = new Map<string, RaminoPrivateRoomRecord>();',
+    'const raminoVoicePeers = new Map<WebSocket, { roomCode: string; peerId: string; playerName: string; isAdminMonitor?: boolean }>();',
+    'const playerBalances = new Map<string, number>();',
+    '',
+    "app.post('/api/wallet/game-tx', (req, res) => {",
+    "  const phone = String(req.body?.phone || 'default').trim();",
+    '  const delta = Number(req.body?.delta || 0);',
+    '  const prev = playerBalances.get(phone) ?? 500;',
+    '  const next = Math.max(0, Number((prev + delta).toFixed(2)));',
+    '  playerBalances.set(phone, next);',
+    '  res.json({ ok: true, balance: next });',
+    '});',
+    '',
+    "app.post('/api/ramino/private-rooms', (req, res) => {",
+    "  const code = String(req.body?.code || '').trim().toUpperCase();",
+    "  const hostName = String(req.body?.hostName || 'Player').trim() || 'Player';",
+    '  const rawSeats = Number(req.body?.maxPlayers || 3);',
+    '  const maxPlayers = ([2, 3, 4, 5].includes(rawSeats) ? rawSeats : 3) as 2 | 3 | 4 | 5;',
+    '  const stake = Math.max(10, Number(req.body?.stake || 30));',
+    "  if (!code) return res.status(400).json({ ok: false, error: 'Room code required' });",
+    "  const room: RaminoPrivateRoomRecord = raminoPrivateRooms.get(code) || { code, hostName, maxPlayers, stake, players: [{ name: hostName, isHost: true, joinedAt: Date.now() }], status: 'waiting', createdAt: Date.now() };",
+    '  room.maxPlayers = maxPlayers; room.stake = stake;',
+    '  raminoPrivateRooms.set(code, room);',
+    '  res.json({ ok: true, room });',
+    '});',
+    '',
+    "app.get('/api/ramino/private-rooms/:code', (req, res) => {",
+    "  const room = raminoPrivateRooms.get(String(req.params.code || '').trim().toUpperCase());",
+    "  if (!room) return res.status(404).json({ ok: false, error: 'Room not found' });",
+    '  res.json({ ok: true, room });',
+    '});',
+    '',
+    "app.post('/api/ramino/private-rooms/:code/join', (req, res) => {",
+    "  const room = raminoPrivateRooms.get(String(req.params.code || '').trim().toUpperCase());",
+    "  if (!room) return res.status(404).json({ ok: false, error: 'Room not found' });",
+    "  const playerName = String(req.body?.playerName || 'Friend').trim() || 'Friend';",
+    '  if (!room.players.some((p) => p.name.toLowerCase() === playerName.toLowerCase())) {',
+    "    if (room.players.length >= room.maxPlayers) return res.status(400).json({ ok: false, error: 'Room full' });",
+    '    room.players.push({ name: playerName, isHost: false, joinedAt: Date.now() });',
+    '  }',
+    '  res.json({ ok: true, room });',
+    '});',
+    '',
+    "app.post('/api/ramino/private-rooms/:code/start', (req, res) => {",
+    "  const room = raminoPrivateRooms.get(String(req.params.code || '').trim().toUpperCase());",
+    "  if (!room) return res.status(404).json({ ok: false, error: 'Room not found' });",
+    "  room.status = 'started';",
+    '  res.json({ ok: true, room });',
+    '});',
+    '',
+    'async function boot() {',
+    '  const httpServer = http.createServer(app);',
+    "  const wss = new WebSocketServer({ server: httpServer, path: '/ws/bingo' });",
+    '  const leaveVoice = (ws: WebSocket) => {',
+    '    const info = raminoVoicePeers.get(ws); if (!info) return;',
+    '    raminoVoicePeers.delete(ws); if (info.isAdminMonitor) return;',
+    "    const msg = JSON.stringify({ type: 'ramino:voice:peer-left', roomCode: info.roomCode, peerId: info.peerId, playerName: info.playerName });",
+    '    for (const [peerWs, meta] of raminoVoicePeers.entries()) {',
+    '      if (meta.roomCode === info.roomCode && peerWs.readyState === WebSocket.OPEN) peerWs.send(msg);',
+    '    }',
+    '  };',
+    "  wss.on('connection', (ws) => {",
+    "    ws.on('message', (raw) => {",
+    '      try {',
+    "        const msg = JSON.parse(String(raw || '{}'));",
+    "        if (msg.type === 'ramino:voice:join') {",
+    '          leaveVoice(ws);',
+    "          const roomCode = String(msg.roomCode || '').trim().toUpperCase();",
+    "          const peerId = String(msg.peerId || '');",
+    "          const playerName = String(msg.playerName || 'Player');",
+    '          const isAdminMonitor = Boolean(msg.isAdminMonitor);',
+    '          if (!roomCode || !peerId) return;',
+    '          const existing: { peerId: string; playerName: string }[] = [];',
+    "          const joined = JSON.stringify({ type: 'ramino:voice:peer-joined', roomCode, peerId, playerName });",
+    '          for (const [pWs, meta] of raminoVoicePeers.entries()) {',
+    '            if (meta.roomCode === roomCode && pWs !== ws) {',
+    '              if (!meta.isAdminMonitor) existing.push({ peerId: meta.peerId, playerName: meta.playerName });',
+    '              if (!isAdminMonitor && pWs.readyState === WebSocket.OPEN) pWs.send(joined);',
+    '            }',
+    '          }',
+    '          raminoVoicePeers.set(ws, { roomCode, peerId, playerName, isAdminMonitor });',
+    "          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ramino:voice:peers', roomCode, peers: existing }));",
+    "        } else if (msg.type === 'ramino:voice:signal') {",
+    '          const sender = raminoVoicePeers.get(ws); if (!sender) return;',
+    "          const fwd = JSON.stringify({ type: 'ramino:voice:signal', roomCode: sender.roomCode, fromPeerId: sender.peerId, fromName: sender.playerName, signal: msg.signal });",
+    '          for (const [pWs, meta] of raminoVoicePeers.entries()) {',
+    '            if (meta.roomCode === sender.roomCode && meta.peerId === msg.targetPeerId && pWs.readyState === WebSocket.OPEN) pWs.send(fwd);',
+    '          }',
+    "        } else if (msg.type === 'ramino:voice:speaking') {",
+    '          const sender = raminoVoicePeers.get(ws); if (!sender) return;',
+    "          const fwd = JSON.stringify({ type: 'ramino:voice:speaking', roomCode: sender.roomCode, peerId: sender.peerId, playerName: sender.playerName, speaking: Boolean(msg.speaking) });",
+    '          for (const [pWs, meta] of raminoVoicePeers.entries()) {',
+    '            if (meta.roomCode === sender.roomCode && pWs !== ws && pWs.readyState === WebSocket.OPEN) pWs.send(fwd);',
+    '          }',
+    "        } else if (msg.type === 'ramino:postday:request' || msg.type === 'ramino:postday:accept') {",
+    '          const sender = raminoVoicePeers.get(ws); if (!sender) return;',
+    '          const fwd = JSON.stringify({ type: msg.type, roomCode: sender.roomCode, fromName: msg.fromName || sender.playerName });',
+    '          for (const [pWs, meta] of raminoVoicePeers.entries()) {',
+    '            if (meta.roomCode === sender.roomCode && pWs !== ws && pWs.readyState === WebSocket.OPEN) pWs.send(fwd);',
+    '          }',
+    "        } else if (msg.type === 'ramino:voice:leave') { leaveVoice(ws); }",
+    '      } catch {}',
+    '    });',
+    "    ws.on('close', () => leaveVoice(ws));",
+    '  });',
+    "  if (process.env.NODE_ENV === 'production') {",
+    "    app.use(express.static(path.join(process.cwd(), 'dist')));",
+    '  } else {',
+    "    const { createServer: createViteServer } = await import('vite');",
+    "    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });",
+    '    app.use(vite.middlewares);',
+    '  }',
+    '  httpServer.listen(Number(process.env.PORT) || 3000, () => console.log("Ramino Standalone running on port 3000"));',
+    '}',
+    'boot();',
+  ].join('\n');
+
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="ramino-part1-server-setup.ts"');
+  res.send(part1);
+});
+
+app.get('/api/ramino/export/part2', (_req, res) => {
+  try {
+    const filePath = path.join(process.cwd(), 'src', 'components', 'ModernRaminoGame.tsx');
+    const code = fs.readFileSync(filePath, 'utf-8');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="ramino-part2-ModernRaminoGame.tsx"');
+    res.send(code);
+  } catch (err) {
+    res.status(500).send('Failed to read ModernRaminoGame.tsx');
+  }
+});
+
+async function startServer() {
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception (kept alive):', err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled Rejection (kept alive):', reason);
+  });
+
+  const isRender = Boolean(process.env.RENDER) || Boolean(process.env.RENDER_EXTERNAL_URL);
+  const PORT = isRender ? Number(process.env.PORT) || 3000 : 3000;
+
+  // Automatically restore persistent PostgreSQL / disk state and bots BEFORE opening HTTP traffic
+  await hydratePersistedStateAndBots();
+  startKenoServerLoop();
+  startRaminoServerLoop();
+
+  const gracefulFlushAndExit = async () => {
+    try {
+      saveBotsToDisk();
+      await Promise.race([
+        flushPostgresQueue(),
+        new Promise((resolve) => setTimeout(resolve, 3500)),
+      ]);
+      if (pgPool) {
+        await pgPool.end().catch(() => {});
+      }
+    } catch {}
+    process.exit(0);
+  };
+  process.once('SIGTERM', () => {
+    void gracefulFlushAndExit();
+  });
+  process.once('SIGINT', () => {
+    void gracefulFlushAndExit();
+  });
+
+  // Render.com Free Tier Keep-Alive / Wake-Up Self-Ping (runs every 4 minutes, drains body cleanly)
+  setInterval(() => {
+    const urls = [
+      process.env.RENDER_EXTERNAL_URL,
+      'https://sun-bingo-faap.onrender.com',
+      SHARED_APP_URL,
+      lastKnownLiveHost,
+    ].filter(Boolean) as string[];
+
+    for (const url of urls) {
+      if (url && !url.includes('localhost') && !url.includes('127.0.0.1')) {
+        fetch(`${url.replace(/\/$/, '')}/api/cron`, { signal: AbortSignal.timeout(8000) })
+          .then((r) => r.body?.cancel().catch(() => {}))
+          .catch(() => {});
+        break;
+      }
+    }
+  }, 4 * 60 * 1000);
+
+  const httpServer = http.createServer(app);
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: '/ws/bingo',
+    perMessageDeflate: false,
+    maxPayload: 512 * 1024,
+  });
+
+  const leaveRaminoVoiceRoom = (socket: WebSocket) => {
+    const info = raminoVoicePeers.get(socket);
+    if (!info) return;
+    raminoVoicePeers.delete(socket);
+    const payload = JSON.stringify({
+      type: 'ramino:voice:peer-left',
+      roomCode: info.roomCode,
+      peerId: info.peerId,
+      playerName: info.playerName,
+    });
+    for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+      if (meta.roomCode === info.roomCode && peerWs.readyState === WebSocket.OPEN) {
+        safeWsSend(peerWs, payload);
+      }
+    }
+  };
+
+  // WebSocket Ping/Pong heartbeat every 25s to prune dead mobile sockets and prevent memory/socket leaks
+  setInterval(() => {
+    for (const wsClient of wsClients) {
+      if (!wsAliveSet.has(wsClient)) {
+        wsClients.delete(wsClient);
+        raminoTableSockets.delete(wsClient);
+        leaveRaminoVoiceRoom(wsClient);
+        try {
+          wsClient.terminate();
+        } catch {}
+        continue;
+      }
+      wsAliveSet.delete(wsClient);
+      try {
+        wsClient.ping();
+      } catch {
+        wsClients.delete(wsClient);
+      }
+    }
+  }, 25000);
+
+  wss.on('connection', (ws) => {
+    wsClients.add(ws);
+    wsAliveSet.add(ws);
+    ws.on('pong', () => {
+      wsAliveSet.add(ws);
+    });
+    // Immediately send current authoritative state on connection
+    try {
+      const { roomsObj, lockedObj } = serializeFastRoomsSnapshot();
+      safeWsSend(
+        ws,
+        JSON.stringify({
+          type: 'room:sync',
+          changedMode: 'both',
+          fastRoom: fastRoomsByStake[10],
+          fastLockedCartelas: lockedObj[10] || [],
+          fastRoomsByStake: roomsObj,
+          fastLockedCartelasByStake: lockedObj,
+          regularRoom: regularLiveRoomState,
+          regularLockedCartelas: Array.from(regularRoomLockedCartelas.values()),
+          transactions: serverTransactions,
+          players: Array.from(playersByPhone.values()),
+          bankAccounts: persistedBankAccounts,
+          homeAdsEnabled: persistedHomeAdsEnabled,
+          homeHeroAds: persistedHomeHeroAds,
+          homeHeroAdsVersion,
+          requireDepositApproval: adminPinConfig.requireDepositApproval,
+          depositBonusEnabled: adminPinConfig.depositBonusEnabled !== false,
+          depositBonusPercent: adminPinConfig.depositBonusPercent,
+          timestamp: Date.now(),
+        })
+      );
+      safeWsSend(
+        ws,
+        JSON.stringify({
+          type: 'keno:state:sync',
+          state: serializeKenoLiveState(),
+        })
+      );
+      safeWsSend(
+        ws,
+        JSON.stringify({
+          type: 'ramino:lobby:sync',
+          rooms: serializePublicRoomsList(),
+          timestamp: Date.now(),
+        })
+      );
+    } catch {
+      // ignore
+    }
+    broadcastRealtimeSync();
+
+    ws.on('message', (raw) => {
+      wsAliveSet.add(ws);
+      try {
+        const msg = JSON.parse(String(raw));
+        if (!msg || typeof msg.type !== 'string') return;
+
+        if (msg.type === 'ramino:table:join') {
+          const roomCode = String(msg.roomCode || '').trim().toUpperCase();
+          const playerId = String(msg.playerId || '').trim();
+          if (roomCode && playerId) {
+            raminoTableSockets.set(ws, { roomCode, playerId });
+            const tbl = raminoTables.get(roomCode);
+            if (tbl && ws.readyState === WebSocket.OPEN) {
+              safeWsSend(
+                ws,
+                JSON.stringify({
+                  type: 'ramino:table:sync',
+                  table: serializeRaminoTableForPlayer(tbl, playerId),
+                })
+              );
+            }
+          }
+        } else if (msg.type === 'ramino:table:leave') {
+          raminoTableSockets.delete(ws);
+        } else if (msg.type === 'ramino:game:action') {
+          const bound = raminoTableSockets.get(ws);
+          const roomCode = String(msg.roomCode || bound?.roomCode || '').trim().toUpperCase();
+          const playerId = String(msg.playerId || bound?.playerId || '').trim();
+          const action = String(msg.action || '').trim();
+          const tbl = raminoTables.get(roomCode);
+          if (tbl && playerId && action) {
+            const resAction = handleServerRaminoAction(tbl, playerId, action, msg.payload || {});
+            if (!resAction.ok && ws.readyState === WebSocket.OPEN) {
+              safeWsSend(
+                ws,
+                JSON.stringify({
+                  type: 'ramino:action:error',
+                  roomCode,
+                  error: resAction.error || 'Action failed',
+                })
+              );
+            }
+          }
+        } else if (msg.type === 'ramino:voice:join') {
+          const roomCode = String(msg.roomCode || '').trim().toUpperCase();
+          const peerId = String(msg.peerId || '').trim();
+          const playerId = String(msg.playerId || '').trim();
+          const playerName = String(msg.playerName || 'Player').trim() || 'Player';
+          const isMuted = msg.isMuted !== false;
+          const providedVoiceKey = String(msg.voiceAccessKey || '').trim();
+
+          // Block ALL external/admin eavesdropping to keep Private Room voice untappable
+          if (msg.isAdminMonitor) {
+            if (ws.readyState === WebSocket.OPEN) {
+              safeWsSend(ws, JSON.stringify({ type: 'ramino:voice:error', roomCode, error: 'Private voice is E2E encrypted' }));
+            }
+            return;
+          }
+          if (!roomCode || !peerId) return;
+
+          const existingSameSocket = raminoVoicePeers.get(ws);
+          const isSameActivePeerOnSocket = Boolean(
+            existingSameSocket &&
+              existingSameSocket.roomCode === roomCode &&
+              existingSameSocket.peerId === peerId
+          );
+          if (existingSameSocket && !isSameActivePeerOnSocket) {
+            leaveRaminoVoiceRoom(ws);
+          }
+
+          const activeRoom = raminoPrivateRooms.get(roomCode);
+          const activeTable = raminoTables.get(roomCode);
+          const expectedKey = activeTable?.voiceAccessKey || activeRoom?.voiceAccessKey;
+          if (expectedKey && providedVoiceKey !== expectedKey) {
+            const isMember =
+              Boolean(playerId && activeRoom?.players.some((p) => p.id === playerId)) ||
+              Boolean(playerId && activeTable?.players.some((p) => p.id === playerId));
+            if (!isMember) {
+              if (ws.readyState === WebSocket.OPEN) {
+                safeWsSend(ws, JSON.stringify({ type: 'ramino:voice:error', roomCode, error: 'Unauthorized voice room access' }));
+              }
+              return;
+            }
+          }
+
+          const existingPeers: { peerId: string; playerName: string; isMuted: boolean }[] = [];
+          const staleReplacedPeers: { peerId: string; playerName: string }[] = [];
+          const joinedNotify = JSON.stringify({
+            type: 'ramino:voice:peer-joined',
+            roomCode,
+            peerId,
+            playerName,
+            isMuted,
+          });
+          for (const [peerWs, meta] of Array.from(raminoVoicePeers.entries())) {
+            if (peerWs === ws) continue;
+            if (meta.roomCode === roomCode && playerId && meta.playerId === playerId && peerWs !== ws) {
+              raminoVoicePeers.delete(peerWs);
+              staleReplacedPeers.push({ peerId: meta.peerId, playerName: meta.playerName });
+              continue;
+            }
+            if (meta.roomCode === roomCode && peerWs.readyState === WebSocket.OPEN) {
+              existingPeers.push({ peerId: meta.peerId, playerName: meta.playerName, isMuted: meta.isMuted !== false });
+              if (!isSameActivePeerOnSocket) {
+                safeWsSend(peerWs, joinedNotify);
+              }
+            }
+          }
+          if (staleReplacedPeers.length > 0) {
+            for (const stale of staleReplacedPeers) {
+              const leftPayload = JSON.stringify({
+                type: 'ramino:voice:peer-left',
+                roomCode,
+                peerId: stale.peerId,
+                playerName: stale.playerName,
+              });
+              for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+                if (peerWs !== ws && meta.roomCode === roomCode && peerWs.readyState === WebSocket.OPEN) {
+                  safeWsSend(peerWs, leftPayload);
+                }
+              }
+            }
+          }
+          raminoVoicePeers.set(ws, { roomCode, peerId, playerId, playerName, isMuted });
+          safeWsSend(
+            ws,
+            JSON.stringify({
+              type: 'ramino:voice:peers',
+              roomCode,
+              peers: existingPeers,
+              voiceAccessKey: expectedKey || undefined,
+            })
+          );
+        } else if (msg.type === 'ramino:voice:signal') {
+          const sender = raminoVoicePeers.get(ws);
+          if (!sender) {
+            const msgRoom = String(msg.roomCode || '').trim().toUpperCase();
+            if (msgRoom && ws.readyState === WebSocket.OPEN) {
+              safeWsSend(ws, JSON.stringify({ type: 'ramino:voice:error', roomCode: msgRoom, error: 'rejoin_required' }));
+            }
+            return;
+          }
+          const toPeerId = String(msg.toPeerId || '').trim();
+          if (!toPeerId || !msg.signal) return;
+          const fwd = JSON.stringify({
+            type: 'ramino:voice:signal',
+            roomCode: sender.roomCode,
+            fromPeerId: sender.peerId,
+            playerName: sender.playerName,
+            signal: msg.signal,
+          });
+          for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+            if (
+              meta.roomCode === sender.roomCode &&
+              meta.peerId === toPeerId &&
+              peerWs.readyState === WebSocket.OPEN
+            ) {
+              safeWsSend(peerWs, fwd);
+            }
+          }
+        } else if (msg.type === 'ramino:voice:audio') {
+          const sender = raminoVoicePeers.get(ws);
+          if (!sender) {
+            const msgRoom = String(msg.roomCode || '').trim().toUpperCase();
+            if (msgRoom && ws.readyState === WebSocket.OPEN) {
+              safeWsSend(ws, JSON.stringify({ type: 'ramino:voice:error', roomCode: msgRoom, error: 'rejoin_required' }));
+            }
+            return;
+          }
+          const encMode = msg.enc === 'xor' ? 'xor' : 'aes';
+          if (
+            typeof msg.data !== 'string' ||
+            msg.data.length === 0 ||
+            msg.data.length > 64000 ||
+            (encMode === 'aes' && typeof msg.iv !== 'string')
+          ) {
+            return;
+          }
+          const audioFwd = JSON.stringify({
+            type: 'ramino:voice:audio',
+            roomCode: sender.roomCode,
+            fromPeerId: sender.peerId,
+            playerName: sender.playerName,
+            enc: encMode,
+            iv: typeof msg.iv === 'string' ? msg.iv : '',
+            data: msg.data,
+          });
+          for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+            if (
+              peerWs !== ws &&
+              meta.roomCode === sender.roomCode &&
+              peerWs.readyState === WebSocket.OPEN
+            ) {
+              safeWsSend(peerWs, audioFwd);
+            }
+          }
+        } else if (msg.type === 'ramino:voice:mic-state') {
+          const sender = raminoVoicePeers.get(ws);
+          if (!sender) {
+            const msgRoom = String(msg.roomCode || '').trim().toUpperCase();
+            if (msgRoom && ws.readyState === WebSocket.OPEN) {
+              safeWsSend(ws, JSON.stringify({ type: 'ramino:voice:error', roomCode: msgRoom, error: 'rejoin_required' }));
+            }
+            return;
+          }
+          sender.isMuted = Boolean(msg.isMuted);
+          const statePayload = JSON.stringify({
+            type: 'ramino:voice:mic-state',
+            roomCode: sender.roomCode,
+            peerId: sender.peerId,
+            playerName: sender.playerName,
+            isMuted: sender.isMuted,
+          });
+          for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+            if (
+              peerWs !== ws &&
+              meta.roomCode === sender.roomCode &&
+              peerWs.readyState === WebSocket.OPEN
+            ) {
+              safeWsSend(peerWs, statePayload);
+            }
+          }
+        } else if (msg.type === 'ramino:voice:speaking') {
+          const sender = raminoVoicePeers.get(ws);
+          if (!sender) return;
+          const spk = JSON.stringify({
+            type: 'ramino:voice:speaking',
+            roomCode: sender.roomCode,
+            peerId: sender.peerId,
+            playerName: sender.playerName,
+            isSpeaking: Boolean(msg.isSpeaking ?? msg.speaking),
+          });
+          for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+            if (
+              peerWs !== ws &&
+              meta.roomCode === sender.roomCode &&
+              peerWs.readyState === WebSocket.OPEN
+            ) {
+              safeWsSend(peerWs, spk);
+            }
+          }
+        } else if (msg.type === 'ramino:postday:request' || msg.type === 'ramino:postday:accept') {
+          const sender = raminoVoicePeers.get(ws);
+          const roomCode = sender?.roomCode || String(msg.roomCode || '').trim().toUpperCase();
+          if (!roomCode) return;
+          const payload = JSON.stringify({
+            type: msg.type,
+            roomCode,
+            peerId: sender?.peerId || '',
+            playerName: sender?.playerName || String(msg.playerName || 'Player'),
+            source: msg.source || 'header',
+          });
+          for (const [peerWs, meta] of raminoVoicePeers.entries()) {
+            if (
+              peerWs !== ws &&
+              meta.roomCode === roomCode &&
+              peerWs.readyState === WebSocket.OPEN
+            ) {
+              safeWsSend(peerWs, payload);
+            }
+          }
+        } else if (msg.type === 'ramino:voice:leave') {
+          leaveRaminoVoiceRoom(ws);
+        }
+      } catch {
+        // ignore non-JSON frames
+      }
+    });
+
+    ws.on('close', () => {
+      raminoTableSockets.delete(ws);
+      leaveRaminoVoiceRoom(ws);
+      wsClients.delete(ws);
+      broadcastRealtimeSync();
+    });
+
+    ws.on('error', () => {
+      raminoTableSockets.delete(ws);
+      leaveRaminoVoiceRoom(ws);
+      wsClients.delete(ws);
+    });
+  });
+
+  const distPath = fs.existsSync(path.join(__dirname, 'dist', 'index.html'))
+    ? path.join(__dirname, 'dist')
+    : path.join(process.cwd(), 'dist');
+  const hasBuiltDist = fs.existsSync(path.join(distPath, 'index.html'));
+  const isProduction =
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.RENDER) ||
+    Boolean(process.env.RENDER_EXTERNAL_URL);
+
+  app.get('/robots.txt', (req, res) => {
+    const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+    const host = req.get('x-forwarded-host') || req.get('host') || 'sun-bingo-faap.onrender.com';
+    const base = host.includes('localhost') ? `${proto}://${host}` : `https://${host}`;
+    res.type('text/plain').send(`User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: ${base}/sitemap.xml\n`);
+  });
+
+  app.get('/sitemap.xml', (req, res) => {
+    const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+    const host = req.get('x-forwarded-host') || req.get('host') || 'sun-bingo-faap.onrender.com';
+    const base = host.includes('localhost') ? `${proto}://${host}` : `https://${host}`;
+    res.type('application/xml').send(
+      `<?xml version="1.0" encoding="UTF-8"?>\n` +
+      `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+      `  <url>\n` +
+      `    <loc>${base}/</loc>\n` +
+      `    <changefreq>daily</changefreq>\n` +
+      `    <priority>1.0</priority>\n` +
+      `  </url>\n` +
+      `</urlset>\n`
+    );
+  });
+
+  if (isProduction && hasBuiltDist) {
+    app.use(
+      '/assets',
+      express.static(path.join(distPath, 'assets'), {
+        maxAge: '365d',
+        immutable: true,
+        etag: true,
+      })
+    );
+    app.use(
+      express.static(distPath, {
+        maxAge: '1h',
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('index.html')) {
+            res.setHeader('Cache-Control', 'no-cache');
+          }
+        },
+      })
+    );
+    app.get('*', (_req, res) => {
+      const indexPath = path.join(distPath, 'index.html');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.sendFile(indexPath);
+    });
+  } else if (!isProduction) {
+    // In dev mode (AI Studio preview), lazily import Vite so production bundle never depends on Vite dev server
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true, hmr: false },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.get('*', (_req, res) => {
+      res.status(500).send('Production build not found. Please run npm run build.');
+    });
+  }
+
+  // Global Express error handler to prevent raw ENOENT stack traces
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('Server error:', err);
+    if (!res.headersSent) {
+      res.status(500).send('Internal Server Error. Please refresh.');
+    }
+  });
+
+  // Bind port 3000
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`Ezi Bingo Real-Time Multiplayer & Telegram Server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();

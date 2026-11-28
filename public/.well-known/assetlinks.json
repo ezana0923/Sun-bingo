@@ -1,0 +1,27 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.ezibingo.pro",
+      "sha256_cert_fingerprints": [
+        "0C:2F:13:0A:26:86:AE:9C:D2:1D:5C:EA:FD:63:9D:E4:F8:CC:58:B2:1C:14:E3:FA:C6:76:15:73:B2:9F:38:2B"
+      ]
+    }
+  },
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.ezibingo.app",
+      "sha256_cert_fingerprints": [
+        "0C:2F:13:0A:26:86:AE:9C:D2:1D:5C:EA:FD:63:9D:E4:F8:CC:58:B2:1C:14:E3:FA:C6:76:15:73:B2:9F:38:2B",
+        "C0:EC:05:21:92:03:79:4C:99:FF:0A:7E:CC:35:7F:00:B9:E3:68:D3:6B:F2:0B:F5:4A:FA:B0:7C:EE:40:36:0F"
+      ]
+    }
+  }
+]
